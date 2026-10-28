@@ -74,7 +74,7 @@ agentty now diagnoses this instead of looping. The usual causes:
 - **The spec is missing `/v1`.** Most local servers only serve under `/v1`. A bare `localhost:8080` gets the `/v1` prefix automatically, but a partial path like `localhost:8080/api` is honoured verbatim and will 404. Use the picker (`^P` → Custom host) so the derived path shows in the connect toast, or check with `AGENTTY_LOG=wire=trace`.
 - **The model id doesn't match the server.** `llama-server` serves exactly what its `/v1/models` reports (often the GGUF filename). If a recalled id isn't listed, agentty refuses with *“model X isn't served by this host — pick one (^/)”* — open `^/` and pick a listed model.
 - **A chat-template rejection.** Some models (gemma, gpt-oss) reject agentty's system prompt/tools with a streamed error. agentty surfaces the server's actual message; run `AGENTTY_LOG=wire=trace` to see the exact request and rejection.
-- **Slow, not stuck.** A big model can process the prompt silently for minutes; the phase chip reads *“processing…”* and the timeout is 10 minutes for local endpoints. That's expected — `Esc` cancels if you don't want to wait.
+- **Slow, not stuck.** A big model can process the prompt silently for minutes; the phase chip reads *“processing…”* and the idle timeout is 10 minutes for local endpoints. A long reply can keep streaming as long as it needs. That's expected — `Esc` cancels if you don't want to wait.
 
 See [Providers › Custom hosts](/docs/providers#custom-hosts) for the full model.
 

@@ -205,9 +205,10 @@ to the model as a tool error it can react to.
   argument — the model routes better.
 - **Return text the model can use.** Structured, labelled output ("words: 5")
   reads better than a bare number.
-- **Don't flood the tool list.** agentty ships native tools + at most 16 MCP
-  tools per turn (ranked), with a broker for the long tail — but a lean server
-  is still easier for the model to use. See the [tool budget](/docs/plugins#the-tool-budget).
+- **Write tool names and descriptions people would search for.** A big server's
+  tools may be on demand, found by the model with `tool_search`, which matches
+  names, descriptions and argument names. Say what the tool does in plain
+  words. See [how tools load](/docs/plugins#how-tools-load).
 - **Log to stderr, never stdout.** stdout is the JSON-RPC channel; a stray
   `print` there corrupts the protocol. (agentty captures stderr to
   `~/.agentty/stderr.log`.)

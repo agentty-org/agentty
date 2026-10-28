@@ -65,23 +65,27 @@ Key robustness rules:
   the copy) — no reference into swappable cache memory escapes, so a
   concurrent reload can't dangle a reader (the UAF crash).
 
-## The tool budget
+## Tool loading (#98)
 
-Providers cap how many tools a request may carry (and OAuth/first-party
-paths reject some client-defined tools entirely — the mcp_search_tools
-400 already handled). Beyond that, a very large tool set bloats every
-request. So the model exposes a **budget**:
+The catalog is never trimmed: every enabled tool resolves by name. What one
+request carries is `tools::plan` (`tool_plan.hpp`, pure):
 
-- `kToolBudget` — soft cap on total wire tools (native + enabled MCP),
-  configurable via `$AGENTTY_MCP_TOOL_BUDGET` (default 100; `0` lifts the
-  cap; unparsable values keep the default).
-- The projection trims *MCP* tools past the budget (native tools always
-  ship; they're the core toolset), lowest-priority first, and records how
-  many were trimmed.
-- `PluginModel::over_budget()` / `trimmed_count()` drive a **warning in
-  the picker** ("N tools over the budget of M — K MCP tools were dropped
-  from this session; disable some to make room"), so the user sees exactly
-  what happened and can act.
+- natives, pins and tools the thread already loaded always ride;
+- the rest load while plugin schemas fit `Limits::schema_share` (10%) of
+  the window and `Limits::max_tools` (128 on OpenAI/Gemini, none on
+  Anthropic; `$AGENTTY_MCP_TOOL_BUDGET` overrides);
+- everything else is on demand behind `tool_search`. Anthropic gets every
+  tool with `defer_loading` and `tool_search` answers with `tool_reference`
+  blocks; other wires leave on-demand tools out.
+
+The loaded set is read back from the transcript (`plan::loaded_in`), so it
+survives restart, fork and resume with no new state. `tools::tool_loading`
+holds the setting slot, the `tool_search` ToolDef and `annotate()`, which
+fills `PluginModel::loaded_count` / `on_demand_count` / `ToolState::on_demand`
+for the picker by running the same planner.
+
+Anthropic's subscription endpoint 400s any tool named `mcp_` + letter, so
+broker tools use the `mcp__server__tool` shape (`mcp__resources__read`).
 
 ## Layering
 

@@ -116,7 +116,7 @@ jq -r 'select(.ev=="reasoning") | .text' events.jsonl
 
 ## Command palette and slash names
 
-Type `/` at the start of the composer for a menu of everything you can run by name: built-in actions (`/new`, `/compact`, `/model`, `/rename`, `/fork`, `/rewind`, `/review`, `/threads`, `/settings`, `/login`, `/quit`), your own commands, skills and MCP prompts. See [Slash Commands](/docs/slash-commands).
+Type `/` at the start of the composer for a menu of everything you can run by name: built-in actions (`/new`, `/compact`, `/model`, `/rename`, `/fork`, `/rewind`, `/review`, `/threads`, `/settings`, `/tools`, `/login`, `/quit`), your own commands, skills and MCP prompts. See [Slash Commands](/docs/slash-commands).
 
 `^K` opens the fuzzy command palette with the full action set:
 

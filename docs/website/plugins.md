@@ -42,6 +42,8 @@ Open the command palette with [[Ctrl+K]] and choose **Plugins**. The picker list
 | [[↑]] [[↓]] | move between rows |
 | [[a]] | **add** a plugin inline (spec formats below) |
 | [[Enter]] | on a server: **enable / disable** · on a tool sub-row: **toggle that tool** · on an untrusted project server: **approve** it (*trust & enable*) |
+| [[→]] / [[←]] | show / hide a server's tools. Servers start collapsed, so a 75-tool server is one row. [[←]] on a tool goes back to its server. |
+| [[p]] | on a tool sub-row: **pin** it (always loaded) or unpin it. See [how tools load](#how-tools-load). |
 | [[d]] | **remove** the server — press once to arm (row turns ⚠ *press d again to remove*), again to confirm |
 | [[esc]] | close |
 
@@ -133,7 +135,7 @@ Use `"type": "sse"` for a Server-Sent-Events endpoint. HTTP/SSE servers spawn no
 | `trustAnnotations` | all | default `false` — a server's read-only tool *hints* can't silently weaken your [permission checks](/docs/sandboxing); set `true` only for a server you trust to self-declare effects. |
 | `tools.include` | all | allow-list: advertise only these tools (omit to advertise all). |
 | `tools.exclude` | all | deny-list: hide these tools (applied after `include`). The picker's per-tool toggle edits this set. |
-| `tools.pin` | all | keep these tools in every turn regardless of the 16-tool ranking (see [the tool budget](#the-tool-budget)). |
+| `tools.pin` | all | always load these tools, never on demand (see [how tools load](#how-tools-load)). [[p]] in the picker edits this set. |
 | `timeoutMs` | all | per-call deadline (default 30 s; override globally with `AGENTTY_MCP_TIMEOUT_MS`). |
 | `connectTimeoutMs` | all | handshake / connect deadline. |
 | `maxOutputChars` | all | cap a tool's output before it enters context. |
@@ -146,9 +148,25 @@ A **project** `mcp.json` can arrive inside a repo you cloned, and an stdio serve
 
 `AGENTTY_MCP_ALLOW_PROJECT=1` is the blanket alternative — it trusts every server in a project config at once (fine for a repo you fully control, not for a fresh clone).
 
-## The tool budget
+## How tools load
 
-A model chooses worse when it's handed hundreds of tool schemas. agentty sends **all native and pinned tools plus at most 16 MCP tools**, ranked for the current request. The always-available `mcp_search_tools` / `mcp_call` broker exposes the long tail on demand, so a big plugin (Playwright alone has dozens of tools) never floods every turn. Use `pin` (in a server's `tools.pin`) to force an important tool into every turn regardless of ranking.
+Every enabled plugin tool is always **callable**. What changes is whether its schema is sent with every request (**loaded**) or found by the model when it needs it (**on demand**).
+
+- **Always loaded:** agentty's own tools, pinned tools (`tools.pin`), and any tool the conversation has already used or found.
+- **Loaded if it fits:** the other plugin tools, while their schemas take up to 10% of the model's context and the provider's limit allows (OpenAI-style providers take at most 128 tools per request).
+- **On demand:** the rest. The model gets a `tool_search` tool, finds what it needs by describing the task (any language, typos are fine, or `select:<name>`), and a found tool stays loaded for the rest of the conversation.
+
+On Anthropic, on-demand tools use the API's own deferred loading, so finding one doesn't break the prompt cache. Elsewhere a found tool is added to the end of the tool list, which keeps the cached part of the request the same.
+
+Choose how this works in **Settings → General → MCP tool loading**:
+
+| Mode | What loads |
+|---|---|
+| `auto` (default) | everything that fits, the rest on demand |
+| `all` | every plugin tool, up to the provider's limit |
+| `on demand` | only pinned and used tools; the model searches for the rest |
+
+The Plugins picker (also `/tools`) shows how many tools are loaded and on demand and what they cost, and each server row says how many of its tools are on demand. `AGENTTY_MCP_TOOL_BUDGET` caps how many tools load per request (`0` = no cap); it never hides a tool.
 
 ## Safety
 

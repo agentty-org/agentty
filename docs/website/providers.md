@@ -103,6 +103,8 @@ The `#name` is a local tag only — it never reaches the wire — but it shows o
 
 Custom hosts you add are **saved** — they reappear in the `^P` picker every session (`Del` on a row removes one, two-press). A local host committed without a key is saved too, so you never re-type it.
 
+**Routing gateways keep a conversation on one backend.** Every request to an OpenAI-compatible host carries an `x-session-id` header with the thread's id. Gateways that route between backends (Bifrost, OpenRouter, LiteLLM) use it to send each turn of a thread where the last one went, so a fallback chain isn't walked again every turn and the backend's prompt cache stays warm. Titles, compaction and subagents send their thread's id too. A host that doesn't know the header ignores it.
+
 ### Adding one from the TUI
 
 You don't need the CLI, and you don't need to hunt for a menu. Open `^P` and **just type the endpoint**:
@@ -222,7 +224,7 @@ agentty --provider ollama -m qwen2.5-coder
 
 ### Slow first token is normal
 
-A large local model (20-30B on consumer hardware) processes the prompt in **complete silence** before its first token — that can take minutes on a long prompt. agentty knows this: on a local provider the phase chip reads **“processing…”** (not “Streaming”) until the first byte arrives, and the idle/stall timeouts are stretched to 10 minutes for plaintext endpoints (vs 90 s for hosted APIs), so a slow model is never mistaken for a hang. `Esc` still cancels instantly.
+A large local model (20-30B on consumer hardware) processes the prompt in **complete silence** before its first token — that can take minutes on a long prompt. agentty knows this: on a local provider the phase chip reads **“processing…”** (not “Streaming”) until the first byte arrives, and the idle timeout is stretched to 10 minutes for plaintext endpoints (vs 90 s for hosted APIs), so a slow model is never mistaken for a hang. There is no limit on how long a local reply can stream; hosted APIs stop at 30 minutes. `Esc` still cancels instantly.
 
 ### When a local model won't respond
 

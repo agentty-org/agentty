@@ -40,6 +40,7 @@ Each tool gets a purpose-built widget: diffs render as diffs with a real line-nu
 | `git_commit` | Write | Stage files and create a commit. |
 | `remember / forget` | Pure | Persist or remove durable facts across sessions. |
 | `wipe_memory` | Pure | Clear every remembered fact in a scope (confirm-gated). |
+| `tool_search` | Pure | Find and load plugin tools that aren't loaded yet. Only present when some are on demand; a found tool stays loaded for the conversation. See [how tools load](/docs/plugins#how-tools-load). |
 
 :::note
 The **effect class** determines which permission profile auto-runs the tool. *Pure* and *Read* tools run automatically in **Ask** and **Write**; *Write*, *Shell*, and *Network* are gated by [your profile](/docs/profiles). The **Minimal** profile prompts on *every* class, reads included.

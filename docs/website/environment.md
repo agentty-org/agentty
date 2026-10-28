@@ -129,7 +129,7 @@ by meaning turns on by itself. `agentty diagnostics` shows what is in use.
 | `AGENTTY_MCP_CONFIG` | Path to the MCP server config. Otherwise `~/.agentty` then `./.agentty`. |
 | `AGENTTY_MCP_ALLOW_PROJECT` | Allow a project-local `.agentty/mcp.json` to add servers. Off by default — a repo you clone should not silently gain tool servers. |
 | `AGENTTY_MCP_TIMEOUT_MS` · `AGENTTY_MCP_CONNECT_TIMEOUT_MS` | Per-call and initial-connect timeouts for MCP servers. |
-| `AGENTTY_MCP_TOOL_BUDGET` | Soft cap on total tools on the wire (native + enabled MCP), default 100. Past it, MCP tools are trimmed and the picker warns. `0` disables the cap; unparsable values keep the default. |
+| `AGENTTY_MCP_TOOL_BUDGET` | Cap on how many tools one request loads (native + plugin). Past it, plugin tools are on demand behind `tool_search`, never hidden. Default: the provider's limit (128 on OpenAI-style providers, none on Anthropic). `0` disables the cap; unparsable values keep the default. |
 | `AGENTTY_MCP_CLIENT_ID` | OAuth client id for MCP servers that require one. |
 | `AGENTTY_SUBAGENT_MAX_SECONDS` | Wall-clock ceiling for one `task` subagent run, default 900 (15 min). Bounds the case the turn cap cannot: a backend that keeps a stream technically alive without finishing it, where the per-stream budget alone allowed hours. On expiry the subagent stops and reports what it has, flagged incomplete. Values outside 1–86399 keep the default. For `agentty run`, `--timeout` overrides it. |
 | `AGENTTY_ACP_AGENTS` | Path to the ACP agent config (same precedence chain as MCP). |

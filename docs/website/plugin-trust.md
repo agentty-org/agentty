@@ -121,7 +121,7 @@ Because the risk is lower and already mediated, agentty's response is **transpar
 
 ## Related
 
-- [Plugins](/docs/plugins) — adding, managing, and the tool budget.
+- [Plugins](/docs/plugins) — adding, managing, and how tools load.
 - [Subagents](/docs/subagents) — the task tool and agent personas.
 - [MCP](/docs/mcp) — the protocol and consuming/serving MCP.
 - [Sandboxing](/docs/sandboxing) — the gate on the *other* execution path, `bash`.

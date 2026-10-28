@@ -50,7 +50,7 @@ Type `/` at the start of the composer. A menu opens right above the composer and
 
 The menu lists everything you can run by name, in this order:
 
-- built-in actions: `/new`, `/compact`, `/model`, `/rename <title>`, `/fork`, `/rewind`, `/review`, `/threads`, `/settings`, `/login`, `/quit`
+- built-in actions: `/new`, `/compact`, `/model`, `/rename <title>`, `/fork`, `/rewind`, `/review`, `/threads`, `/settings`, `/tools`, `/login`, `/quit`
 - your commands (this page)
 - [skills](/docs/skills): `/name task` loads the skill and runs the task with it
 - MCP server prompts: `/name args`, filled in from the prompt's arguments

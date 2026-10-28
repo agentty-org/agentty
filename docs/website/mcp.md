@@ -47,7 +47,8 @@ The reverse of serving is **consuming** — agentty adds tools to a thread by co
 
 - **Provenance naming.** External tools get stable, namespaced names such as `mcp__playwright__browser_click`; they can never collide with or impersonate native tools.
 - **Live catalog.** `tools/list_changed` is honoured live, including removals and schema replacements.
-- **Tool budget / brokering.** To keep provider requests fast and tool choice accurate, agentty sends all native and pinned tools plus at most 16 MCP tools ranked for the current request. The always-available `mcp_search_tools` and `mcp_call` broker exposes the long tail without injecting hundreds of schemas into every turn.
+- **Tool loading.** Every enabled tool is callable. Tools that fit the context budget are sent with each request; the rest are found by the model with `tool_search` and stay loaded once found. On Anthropic they use deferred loading, so the prompt cache holds. See [how tools load](/docs/plugins#how-tools-load).
+- **Resources and prompts.** When a server exposes them, the model gets `mcp__resources__read` and `mcp__prompts__get` (formerly `mcp_read_resource` / `mcp_get_prompt`; the old names still work).
 
 ```json
 {
