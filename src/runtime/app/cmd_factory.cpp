@@ -1316,7 +1316,7 @@ Cmd launch_stream(Model& m) {
             }
         };
 
-        std::unordered_set<std::string> loaded_tools;   // filled on the normal path
+        tools::plan::Loaded loaded_tools;   // filled on the normal path
         if (compacting) {
             // We stripped the `[1m]` marker from req.model above, so the wire
             // window is the model's BASE (200K), not the 1M the parent picked.
@@ -1449,7 +1449,8 @@ Cmd launch_stream(Model& m) {
                 }
                 tr.loaded = std::move(loaded_tools);
                 tr.limits = tools::tool_loading::limits_for(
-                    sel_now, static_cast<std::size_t>(context_max > 0 ? context_max : 0));
+                    sel_now, static_cast<std::size_t>(context_max > 0 ? context_max : 0), req.model);
+                tr.server_instructions = mcp::mcp_server_instructions();
                 tr.mode   = tools::tool_loading::current();
                 const auto plan = tools::tool_loading::plan_into(tr, req.tools);
                 AGT_LOG(Model, Debug, "tools.plan",

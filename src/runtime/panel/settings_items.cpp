@@ -345,9 +345,10 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading,
         } else {
             // What this server contributes right now: how many tools, how
             // many of those the model sees without searching, what's off.
-            std::size_t on_demand = 0, pinned = 0;
+            std::size_t on_demand = 0, pinned = 0, skipped = 0;
             for (const auto& t : s.tools) {
                 if (!t.enabled) continue;
+                if (!t.skipped.empty()) { ++skipped; continue; }
                 if (t.on_demand) ++on_demand;
                 if (t.pinned) ++pinned;
             }
@@ -357,8 +358,9 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading,
             if (on_demand > 0) d += ", " + std::to_string(on_demand) + " on demand";
             if (pinned > 0)    d += ", " + std::to_string(pinned) + " pinned";
             if (off > 0)       d += ", " + std::to_string(off) + " off";
+            if (skipped > 0)   d += ", " + std::to_string(skipped) + " skipped";
             i.secondary = scope_tag + d;
-            i.status    = Item::Status::Ok;
+            i.status    = skipped > 0 ? Item::Status::Bad : Item::Status::Ok;
         }
         // Enter toggles the WHOLE plugin on/off (reversible). Remove is the
         // deliberate `d` key — destructive actions aren't the default Enter.
@@ -387,14 +389,19 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading,
             ti.primary   = t.name;
             if (!subtree_inactive && t.enabled) {
                 // Pinned beats on-demand: a pin always loads.
-                if (t.pinned)
+                if (!t.skipped.empty())
+                    ti.secondary = "skipped: bad schema";
+                else if (t.pinned)
                     ti.secondary = "pinned";
                 else if (t.on_demand)
                     ti.secondary = "on demand";
             }
-            // The tool's own description, under the focused row, so you can
-            // tell op_12 from op_13 before you switch one off.
-            ti.detail    = t.description;
+            // The tool's description, under the focused row, so you can
+            // tell op_12 from op_13 before you switch one off. A skipped
+            // tool shows WHY instead.
+            ti.detail    = t.skipped.empty() ? t.description
+                                             : "left out of requests: " + t.skipped;
+            if (!t.skipped.empty()) ti.status = Item::Status::Bad;
             ti.action    = Action::ToggleTool;
             ti.arg       = s.name;
             ti.arg2      = t.name;

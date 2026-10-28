@@ -6,10 +6,12 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "agentty/domain/catalog.hpp"
 #include "agentty/io/persistence.hpp"
+#include "agentty/mcp/client.hpp"
 #include "agentty/provider/selection.hpp"
 #include "agentty/tool/subagent.hpp"
 #include "agentty/util/snapshot.hpp"
@@ -44,7 +46,7 @@ ExecResult run_search(const nlohmann::json& args) {
     std::vector<ToolDef> searchable;
     searchable.reserve(cat->size());
     for (const auto& t : *cat)
-        if (t.origin != ToolOrigin::Native && t.advertise && !withheld_by_policy(t)
+        if (t.origin != ToolOrigin::Native && t.advertise && t.skipped.empty() && !withheld_by_policy(t)
             && t.name.value != plan::kSearchToolName)
             searchable.push_back(t);
     const auto hits = plan::search(searchable, query, k);
@@ -132,9 +134,13 @@ const ToolDef& search_tool() {
     return def;
 }
 
-plan::Limits limits_for(const provider::Selection& sel, std::size_t context_window) {
+plan::Limits limits_for(const provider::Selection& sel, std::size_t context_window,
+                        std::string_view model) {
     plan::Limits l;
     l.context_window = context_window;
+    // Small local models don't search for tools reliably; give them what
+    // fits instead. The same family list that hides footgun tools from them.
+    l.search_capable = model.empty() || !is_weak_model(model);
     if (sel.kind == provider::Kind::Anthropic) {
         // Anthropic takes deferred tools (up to 10,000) and expands
         // tool_reference blocks itself. Measured on the subscription
@@ -160,36 +166,68 @@ plan::Limits limits_for(const provider::Selection& sel, std::size_t context_wind
 plan::Plan plan_into(const Request& r, std::vector<provider::ToolSpec>& out) {
     // The planner works on a flat catalog. Build it from the caller's pool
     // (already filtered by policy and per-caller rules) plus tool_search.
+    // A tool whose schema would fail the whole request never goes out.
     std::vector<ToolDef> flat;
     flat.reserve(r.pool.size());
-    for (const auto* t : r.pool)
-        if (t && t->name.value != plan::kSearchToolName) flat.push_back(*t);
+    std::string skipped_note;
+    for (const auto* t : r.pool) {
+        if (!t || t->name.value == plan::kSearchToolName) continue;
+        if (!t->skipped.empty()) {
+            // Say so, so the model can explain a missing tool instead of
+            // guessing (Claude Code does the same).
+            if (skipped_note.size() < 1'500)
+                skipped_note += "\n- " + t->origin_id + "/" + (t->origin_tool.empty() ? t->name.value : t->origin_tool)
+                              + ": " + t->skipped;
+            continue;
+        }
+        flat.push_back(*t);
+    }
     ToolDef search = search_tool();
-    auto p = plan::make_plan(flat, r.loaded, &search, r.mode, r.limits);
+    // A model that can't search well gets everything it can take up front,
+    // the way Claude Code and Codex gate tool search on the model.
+    const plan::Loading mode = r.limits.search_capable ? r.mode : plan::Loading::All;
+    auto p = plan::make_plan(flat, r.loaded, &search, mode, r.limits);
+    // Skipped tools are named for the model so it can explain a missing
+    // tool: on tool_search when it's there, else on the first plugin tool.
+    bool skipped_said = false;
     if (p.search) {
-        // Say what can be found, by server, so the model knows to search
-        // instead of saying a capability is missing. Sorted and stable, so
-        // the bytes only change when the set of servers does.
+        // Say what can be found, by server, with the server's own
+        // instructions, so the model knows WHEN to search instead of saying a
+        // capability is missing. Sorted and stable, so the bytes only change
+        // when the servers do.
         std::map<std::string, std::size_t> by_server;
         std::unordered_set<const ToolDef*> loaded_now;
         for (const auto& w : p.wire)
             if (w.tool && !w.deferred) loaded_now.insert(w.tool);
         for (const auto& t : flat)
             if (t.advertise && !loaded_now.contains(&t)) ++by_server[t.origin_id];
+        std::map<std::string, std::string> notes;
+        for (auto& [srv, text] : r.server_instructions) notes[srv] = text;
         std::string list;
         for (const auto& [srv, n] : by_server) {
             if (srv.empty()) continue;
-            if (!list.empty()) list += ", ";
-            list += srv + " (" + std::to_string(n) + ")";
+            list += "\n- " + srv + " (" + std::to_string(n) + (n == 1 ? " tool)" : " tools)");
+            if (auto it = notes.find(srv); it != notes.end()) list += ": " + it->second;
         }
         if (!list.empty())
-            search.description += " Searchable now: " + list + ".";
+            search.description += "\n\nServers with tools to find:" + list;
+        if (!skipped_note.empty()) {
+            search.description += "\n\nLeft out because their input schema is invalid (the "
+                                  "server needs fixing):" + skipped_note;
+            skipped_said = true;
+        }
         for (auto& w : p.wire)
             if (w.tool && w.tool->name.value == plan::kSearchToolName) w.tool = &search;
     }
     for (const auto& w : p.wire) {
         const auto& t = *w.tool;
-        out.push_back({t.name.value, t.description, t.input_schema,
+        std::string desc = t.description;
+        if (!skipped_said && !skipped_note.empty() && t.origin == ToolOrigin::Mcp) {
+            desc += "\n\n(agentty: some plugin tools were left out because their input schema "
+                    "is invalid:" + skipped_note + ")";
+            skipped_said = true;
+        }
+        out.push_back({t.name.value, std::move(desc), t.input_schema,
                        t.eager_input_streaming, w.deferred});
     }
     // The Placement pointers point into `flat`; don't hand them back.
@@ -218,39 +256,35 @@ void annotate(mcp::PluginModel& m) {
     Request r;
     for (const auto& t : *cat)
         if (!withheld_by_policy(t)) r.pool.push_back(&t);
-    r.limits = limits_for(provider::active(), window);
+    std::string model_id;
+    if (const auto cfg = subagent::current(); cfg.installed) model_id = cfg.model;
+    r.limits = limits_for(provider::active(), window, model_id);
     r.mode = mode;
     std::vector<provider::ToolSpec> specs;
     const auto p = plan_into(r, specs);
 
-    // Which (server, bare tool) pairs ride the wire. Matched through the
-    // ToolDef's own origin rather than by rebuilding the wire name, which is
-    // sanitised (a server called "my.srv" is mcp__my_srv__...).
+    // Which (server, tool) pairs ride the wire, keyed by the ToolDef's own
+    // origin: the wire name may be shortened and hashed, the origin isn't.
     std::unordered_set<std::string> on_wire_names;
     for (const auto& s : specs)
         if (!s.defer_loading) on_wire_names.insert(s.name);
-    std::unordered_set<std::string> on_wire;   // "server\0bare"
+    std::unordered_set<std::string> on_wire;          // "server\0tool"
+    std::unordered_map<std::string, std::string> skipped;
     for (const auto& t : *cat) {
-        if (t.origin != ToolOrigin::Mcp || !on_wire_names.contains(t.name.value)) continue;
-        const auto sep = t.name.value.rfind("__");
-        const std::string bare = sep == std::string::npos ? t.name.value
-                                                          : t.name.value.substr(sep + 2);
-        on_wire.insert(t.origin_id + '\0' + bare);
+        if (t.origin != ToolOrigin::Mcp || t.origin_tool.empty()) continue;
+        const std::string key = t.origin_id + '\0' + t.origin_tool;
+        if (!t.skipped.empty()) skipped[key] = t.skipped;
+        else if (on_wire_names.contains(t.name.value)) on_wire.insert(key);
     }
-    // The wire name maps punctuation to '_' (canonical_mcp_name), so the
-    // pane's raw bare name is sanitised the same way before comparing.
-    auto sanitize = [](std::string s) {
-        for (auto& c : s)
-            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') c = '_';
-        return s;
-    };
     m.loaded_count = 0;
     m.on_demand_count = 0;
     for (auto& srv : m.servers) {
         if (srv.disabled || !srv.connected || srv.passthrough) continue;
         for (auto& t : srv.tools) {
             if (!t.enabled) continue;
-            t.on_demand = !on_wire.contains(srv.name + '\0' + sanitize(t.name));
+            const std::string key = srv.name + '\0' + t.name;
+            if (auto it = skipped.find(key); it != skipped.end()) { t.skipped = it->second; continue; }
+            t.on_demand = !on_wire.contains(key);
             (t.on_demand ? m.on_demand_count : m.loaded_count) += 1;
         }
     }

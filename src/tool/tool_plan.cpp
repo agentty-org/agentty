@@ -42,8 +42,15 @@ bool always_loaded(const ToolDef& t) {
 
 } // namespace
 
+void Loaded::touch(std::string_view name) {
+    std::string n{name};
+    if (!names.insert(n).second)
+        order.erase(std::find(order.begin(), order.end(), n));
+    order.push_back(std::move(n));
+}
+
 Plan make_plan(const std::vector<ToolDef>& catalog,
-               const std::unordered_set<std::string>& loaded,
+               const Loaded& loaded,
                const ToolDef* search, Loading mode, const Limits& limits) {
     Plan out;
     const std::size_t window = limits.context_window ? limits.context_window : 128'000;
@@ -65,18 +72,9 @@ Plan make_plan(const std::vector<ToolDef>& catalog,
         if (catalog[i].origin != ToolOrigin::Native) plugin_tokens += cost;
     };
 
-    // 1. Must-load: natives, pins, and what this thread already loaded.
-    for (std::size_t i = 0; i < catalog.size(); ++i) {
-        const auto& t = catalog[i];
-        if (!t.advertise) continue;
-        if (always_loaded(t) || loaded.contains(t.name.value)) take(i);
-    }
-
-    // 2. The rest, by mode. Catalog order is the fill order, so the same
-    //    catalog and the same loaded set always give the same wire.
-    std::size_t rest = 0;
+    // 1. Must-load: natives and pins.
     for (std::size_t i = 0; i < catalog.size(); ++i)
-        if (catalog[i].advertise && !load[i]) ++rest;
+        if (catalog[i].advertise && always_loaded(catalog[i])) take(i);
 
     // With a hard cap, the fill can't know in advance whether something will
     // be left over, so it stops one short when anything was or would be:
@@ -87,9 +85,34 @@ Plan make_plan(const std::vector<ToolDef>& catalog,
         const std::size_t reserve = ((skipped || left_after_this > 0) && search) ? 1 : 0;
         return count + 1 + reserve <= cap;
     };
+    auto unloaded = [&] {
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < catalog.size(); ++i)
+            if (catalog[i].advertise && !load[i]) ++n;
+        return n;
+    };
 
+    // 2. What this thread already used, newest first: past the schema budget
+    //    but never past the cap. A long thread can touch more tools than the
+    //    cap allows; the oldest go back on demand.
+    if (!loaded.order.empty()) {
+        std::unordered_map<std::string_view, std::size_t> by_name;
+        for (std::size_t i = 0; i < catalog.size(); ++i)
+            if (catalog[i].advertise && !load[i]) by_name.emplace(catalog[i].name.value, i);
+        std::size_t remaining = unloaded();
+        for (auto n = loaded.order.rbegin(); n != loaded.order.rend(); ++n) {
+            const auto it = by_name.find(*n);
+            if (it == by_name.end() || load[it->second]) continue;
+            --remaining;
+            if (fits_cap(remaining)) take(it->second);
+            else skipped = true;
+        }
+    }
+
+    // 3. The rest, by mode. Catalog order is the fill order, so the same
+    //    catalog and the same loaded set always give the same wire.
     if (mode != Loading::OnDemand) {
-        std::size_t remaining = rest;
+        std::size_t remaining = unloaded();
         for (std::size_t i = 0; i < catalog.size(); ++i) {
             const auto& t = catalog[i];
             if (!t.advertise || load[i]) continue;
@@ -105,7 +128,7 @@ Plan make_plan(const std::vector<ToolDef>& catalog,
         }
     }
 
-    // 3. Emit in catalog order.
+    // 4. Emit in catalog order.
     for (std::size_t i = 0; i < catalog.size(); ++i) {
         const auto& t = catalog[i];
         if (!t.advertise) continue;
@@ -219,9 +242,10 @@ std::vector<Hit> search(const std::vector<ToolDef>& catalog,
             for (const auto& t : catalog) {
                 if (t.origin == ToolOrigin::Native) continue;
                 const std::string_view full = t.name.value;
-                const auto sep = full.rfind("__");
-                const std::string_view bare =
-                    sep == std::string_view::npos ? full : full.substr(sep + 2);
+                // The wire name may be shortened; the server's own name isn't.
+                const std::string_view bare = !t.origin_tool.empty() ? std::string_view{t.origin_tool}
+                    : (full.rfind("__") == std::string_view::npos ? full
+                                                                   : full.substr(full.rfind("__") + 2));
                 if (!name.empty() && (full == name || bare == name)) {
                     out.push_back({&t, 1.0});
                     break;
@@ -247,6 +271,7 @@ std::vector<Hit> search(const std::vector<ToolDef>& catalog,
             }
         };
         add(t.name.value, 3.0);
+        if (!t.origin_tool.empty()) add(t.origin_tool, 3.0);   // unshortened
         add(t.origin_id, 1.5);
         add(t.description, 1.0);
         if (t.input_schema.is_object() && t.input_schema.contains("properties")
@@ -333,16 +358,16 @@ std::vector<Hit> search(const std::vector<ToolDef>& catalog,
 
 // ── Thread state ─────────────────────────────────────────────────────────
 
-std::unordered_set<std::string> loaded_in(const Thread& thread) {
+Loaded loaded_in(const Thread& thread) {
     return loaded_in(thread.messages);
 }
 
-std::unordered_set<std::string> loaded_in(const std::vector<Message>& messages) {
-    std::unordered_set<std::string> out;
+Loaded loaded_in(const std::vector<Message>& messages) {
+    Loaded out;
     for (const auto& m : messages) {
         for (const auto& tc : m.tool_calls) {
             if (tc.name.value != kSearchToolName) {
-                out.insert(tc.name.value);
+                out.touch(tc.name.value);
                 continue;
             }
             // tool_search: its result names what it loaded, one per line.
@@ -356,7 +381,7 @@ std::unordered_set<std::string> loaded_in(const std::vector<Message>& messages) 
                     line.remove_prefix(kLoadedMarker.size());
                     if (const auto sp = line.find(' '); sp != std::string_view::npos)
                         line = line.substr(0, sp);
-                    if (!line.empty()) out.insert(std::string{line});
+                    if (!line.empty()) out.touch(line);
                 }
                 if (nl == std::string_view::npos) break;
                 text.remove_prefix(nl + 1);

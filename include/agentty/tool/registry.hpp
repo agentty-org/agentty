@@ -267,6 +267,16 @@ struct ToolDef {
     // other tool keeps the default and nothing changes.
     bool advertise = true;
 
+    // Non-empty: this tool's schema would make a provider reject the WHOLE
+    // request (bad parameter name, invalid JSON Schema), so it never goes on
+    // the wire. It stays in the catalog so the reason can be shown and the
+    // rest of its server keeps working. See tool/schema.hpp.
+    std::string skipped;
+    // MCP: the tool's own name on its server (origin_id is the server). The
+    // wire name may be shortened and hashed to fit providers; this is the
+    // name the user and the server know it by.
+    std::string origin_tool;
+
     // Anthropic's fine-grained tool streaming flag (GA on Claude 4.6, gated by
     // beta `fine-grained-tool-streaming-2025-05-14` on older models). When set,
     // the API streams `input_json_delta` events token-by-token as the model

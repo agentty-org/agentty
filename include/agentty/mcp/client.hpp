@@ -49,6 +49,10 @@ namespace agentty::mcp {
 // once. The authoritative view the settings picker renders.
 [[nodiscard]] PluginModel plugin_model();
 
+// Each connected server's handshake `instructions` (what its tools are for,
+// when to use them), by server name. Capped per server; empty ones omitted.
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> mcp_server_instructions();
+
 // Opaque, reference-counted handle keeping all connected MCP servers alive
 // for the lifetime of the process. The ToolDef execute() closures returned by
 // mcp_tools() capture a copy of this (a shared_ptr), so the connections —

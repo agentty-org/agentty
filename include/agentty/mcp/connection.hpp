@@ -74,6 +74,7 @@ public:
     [[nodiscard]] std::string_view origin() const noexcept override { return origin_; }
 
     [[nodiscard]] std::vector<::mcp::Tool> list() const override;
+    [[nodiscard]] std::string instructions() const override;
     [[nodiscard]] ::mcp::cap::Result execute(const ::mcp::cap::Request& req) override;
 
     [[nodiscard]] std::vector<::mcp::Resource> resources() const override;

@@ -32,8 +32,10 @@
 #include "agentty/mcp/http_server.hpp"
 #include "agentty/scope/scope.hpp"
 #include "agentty/config/inventory.hpp"   // kMcpLayout — the one declaration
+#include "agentty/dirs/dirs.hpp"
 #include "agentty/io/http.hpp"
 #include "agentty/tool/plugin.hpp"
+#include "agentty/tool/schema.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/tool/util/utf8.hpp"
 #include "agentty/util/dbglog.hpp"
@@ -49,6 +51,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -640,14 +643,60 @@ std::string short_prompt_name(std::string_view exposed) {
     return std::string{exposed.substr(0, split)} + ":" + std::string{exposed.substr(split + 2)};
 }
 
+// A result past the tool's limit is saved to a file and replaced by a
+// preview plus the path, so the model can `read` the rest with offset/limit
+// instead of losing the middle to a head+tail cut (Claude Code does this at
+// 25k tokens). Content-named, so the same result reuses one file.
+std::string spill_if_large(std::string text, std::size_t limit, std::string_view route) {
+    if (limit == 0 || text.size() <= limit) return text;
+    std::error_code ec;
+    // Under the project's own .agentty/ (self-gitignored): inside the
+    // workspace, so read, grep and the sandboxed shell can all reach it.
+    // Falls back to the user cache when there's no project dir.
+    fs::path dir;
+    if (auto p = ::agentty::dirs::resolve(::agentty::dirs::Spec{
+            .root = ::agentty::dirs::Root::Project, .leaf = "tool-results"}))
+        dir = p->path;
+    else
+        dir = ::agentty::util::user_cache_dir() / "tool-results";
+    fs::create_directories(dir, ec);
+    char name[48];
+    std::snprintf(name, sizeof(name), "mcp-%016llx.txt",
+                  static_cast<unsigned long long>(std::hash<std::string>{}(text)));
+    const fs::path file = dir / name;
+    bool saved = false;
+    if (!ec) {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        if (out.write(text.data(), static_cast<std::streamsize>(text.size()))) saved = true;
+    }
+    if (saved) tools::util::allow_read_root(::agentty::IoAccess::grant(), file);
+    constexpr std::size_t kHead = 6'000, kTail = 2'000;
+    const std::size_t head = tools::util::safe_utf8_cut(text, kHead);
+    std::string tail = text.substr(text.size() - std::min(kTail, text.size() - head));
+    std::string out = "<persisted-output>\n";
+    out += "The result from " + std::string{route} + " is " + std::to_string(text.size() / 1024)
+         + " KB, over this tool's " + std::to_string(limit / 1024) + " KB limit. ";
+    out += saved ? "The full result is saved to: " + file.string()
+                       + "\nUse the read tool on that path with offset/limit for the rest.\n\n"
+                 : "It could not be saved, so only a preview follows.\n\n";
+    out += "--- first " + std::to_string(head / 1024) + " KB ---\n" + text.substr(0, head)
+         + "\n...\n--- last " + std::to_string(tail.size() / 1024 + 1) + " KB ---\n" + tail
+         + "\n</persisted-output>";
+    return out;
+}
+
 // Synthesize a ToolDef that routes through the shared registry by EXPOSED name.
 tools::ToolDef make_tool(PoolHandle pool, const ::mcp::Tool& t,
-                         const ServerPolicy& policy) {
+                         const ServerPolicy& policy,
+                         std::unordered_set<std::string>& taken_names) {
     tools::ToolDef def;
     const std::string exposed = t.name;
-    def.name = ToolName{canonical_mcp_name(exposed)};
+    // A name every provider takes: [A-Za-z0-9_-], at most 64, unique, stable.
+    def.name = ToolName{tools::schema::wire_name(mcp_origin_id(exposed), mcp_bare_name(exposed),
+                                                 taken_names)};
     def.origin = tools::ToolOrigin::Mcp;
     def.origin_id = mcp_origin_id(exposed);
+    def.origin_tool = mcp_bare_name(exposed);
 
     std::string desc = t.description.has_value() ? *t.description : std::string{};
     // Trust boundary: the DESCRIPTION rides in the tool list of every turn's
@@ -665,18 +714,35 @@ tools::ToolDef make_tool(PoolHandle pool, const ::mcp::Tool& t,
 
     json schema = ::mcp::to_json(t.inputSchema);
     if (!schema.is_object()) schema = json::object();
-    if (!schema.contains("type")) schema["type"] = "object";
-    if (!schema.contains("properties")) schema["properties"] = json::object();
-    def.input_schema = std::move(schema);
+    // A schema a provider would reject fails the WHOLE request, for every
+    // tool. Check first: a broken tool is kept out of requests (with the
+    // reason) and the rest of the server keeps working.
+    if (auto why = tools::schema::check(schema); !why.empty()) {
+        def.skipped = why;
+        def.advertise = false;
+        def.input_schema = json{{"type", "object"}, {"properties", json::object()}};
+    } else {
+        // Fix what is only spelling: root unions, $ref, type arrays, size.
+        auto n = tools::schema::normalize(std::move(schema));
+        def.input_schema = std::move(n.schema);
+        if (!n.note.empty()) def.description += " " + n.note;
+    }
 
     def.effects = effects_for(t, policy.trust_annotations);
     def.scheduling_effects = def.effects;
-    def.max_output_chars = std::clamp(policy.max_output_chars, 2'000, 100'000);
+    // A tool may declare a bigger limit (Claude Code's convention), e.g. a DB
+    // schema dump that is big by nature. Past the limit the result is saved to
+    // a file and the model gets the path (see spill below), not a lossy cut.
+    int limit = std::clamp(policy.max_output_chars, 2'000, 100'000);
+    if (auto m = t.meta.find("anthropic/maxResultSizeChars");
+        m != t.meta.end() && m->is_number_integer())
+        limit = std::clamp(static_cast<int>(m->get<long long>()), 2'000, 500'000);
+    def.max_output_chars = 0;   // the closure applies the limit itself, with spill
     def.always_expose = policy.pin.contains(mcp_bare_name(exposed));
     def.output_truncation = tools::OutputTruncation::HeadTail;
 
-    def.execute = [pool, exposed](const maya::unlocked&, const json& args,
-                                  const tools::CallContext& ctx) -> tools::ExecResult {
+    def.execute = [pool, exposed, limit](const maya::unlocked&, const json& args,
+                                         const tools::CallContext& ctx) -> tools::ExecResult {
         try {
             ::mcp::cap::Result r;
             // Registry dispatch resolves a provider through its own
@@ -695,7 +761,8 @@ tools::ToolDef make_tool(PoolHandle pool, const ::mcp::Tool& t,
                                    : tools::util::to_valid_utf8(
                                          tools::util::strip_terminal_controls(r.text))));
             std::string text = render_result(r);
-            return tools::ToolOutput{text.empty() ? "(no output)" : text, std::nullopt};
+            if (text.empty()) text = "(no output)";
+            return tools::ToolOutput{spill_if_large(std::move(text), static_cast<std::size_t>(limit), exposed), std::nullopt};
         } catch (const std::exception& e) {
             return std::unexpected(tools::ToolError::subprocess(
                 std::string{"MCP call failed: "} + e.what()));
@@ -1091,14 +1158,23 @@ std::vector<tools::ToolDef> project_tools(PoolHandle pool) {
         if (!cs.pin.empty()) live_pins[sname] = cs.pin;
 
     {
-        for (auto& t : pool->registry.tools()) {
+        // Names are handed out across the whole pool so two servers' long
+        // names never collide, and never with a native tool.
+        std::unordered_set<std::string> taken;
+        for (const auto& n : tools::native_registry()) taken.insert(n.name.value);
+        // Sorted, so the hash suffix a clash gets doesn't depend on the order
+        // servers answered in.
+        auto listed = pool->registry.tools();
+        std::sort(listed.begin(), listed.end(),
+                  [](const ::mcp::Tool& a, const ::mcp::Tool& b) { return a.name < b.name; });
+        for (auto& t : listed) {
             const auto origin = mcp_origin_id(t.name);
             if (!tool_enabled(pool, t.name, live_excl)) continue;
             const auto policy_it = pool->policies.find(origin);
             const ServerPolicy fallback;
             const auto& policy = policy_it == pool->policies.end()
                 ? fallback : policy_it->second;
-            auto def = make_tool(pool, t, policy);
+            auto def = make_tool(pool, t, policy, taken);
             if (auto lp = live_pins.find(origin);
                 lp != live_pins.end() && lp->second.contains(mcp_bare_name(t.name)))
                 def.always_expose = true;
@@ -1483,6 +1559,32 @@ std::vector<std::string> mcp_server_tools(const std::string& server) {
         if (mcp_origin_id(t.name) == server)
             out.push_back(mcp_bare_name(t.name));
     }
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>> mcp_server_instructions() {
+    // Bounded: a server's instructions ride the tool_search description on
+    // every request, so one verbose server can't eat the context (Codex caps
+    // the whole list; this caps each one).
+    constexpr std::size_t kPerServer = 600;
+    std::vector<std::pair<std::string, std::string>> out;
+    auto pool = current_pool();
+    if (!pool) return out;
+    for (const auto& p : pool->registry.providers()) {
+        if (!p) continue;
+        std::string text = p->instructions();
+        if (text.empty()) continue;
+        std::string_view o = p->origin();
+        if (o.starts_with("mcp:")) o.remove_prefix(4);
+        text = tools::util::to_valid_utf8(tools::util::strip_terminal_controls(std::move(text)));
+        for (auto& c : text) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+        if (text.size() > kPerServer) {
+            text.resize(tools::util::safe_utf8_cut(text, kPerServer));
+            text += "\xe2\x80\xa6";
+        }
+        out.emplace_back(std::string{o}, std::move(text));
+    }
+    std::sort(out.begin(), out.end());
     return out;
 }
 

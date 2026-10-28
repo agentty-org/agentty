@@ -249,7 +249,10 @@ Element settings_list_panel(const Model& m) {
                 || !rows[static_cast<std::size_t>(i + 1)].indented;
             const char* elbow = last ? "\xe2\x94\x94\xe2\x94\x80 "   // └─
                                      : "\xe2\x94\x9c\xe2\x94\x80 ";  // ├─
-            const char* box   = it.on ? "\xe2\x97\x89" : "\xe2\x97\x8b"; // ◉ / ○
+            // ⚠ for a tool left out for a bad schema, so it isn't mistaken for on.
+            const bool bad    = it.status == se::Item::Status::Bad;
+            const char* box   = bad ? "\xe2\x9a\xa0"
+                                    : (it.on ? "\xe2\x97\x89" : "\xe2\x97\x8b"); // ⚠ / ◉ / ○
             row.badge       = std::string("  ") + elbow + box;
             // Connector + box are structural — dim; the tool NAME carries the
             // on/off emphasis. But when the tool is INACTIVE (its plugin is
@@ -278,6 +281,8 @@ Element settings_list_panel(const Model& m) {
         // Pinned reads as a state, not a footnote: the accent colour, like
         // other \"this is set\" marks in the panes.
         if (it.indented && it.pinned && !it.inactive) row.trailing_style = fg_of(highlight);
+        if (it.indented && it.status == se::Item::Status::Bad)
+            row.trailing_style = fg_of(warn);
         // Info rows (no Enter action) carry PROSE in `secondary` — "press
         // `a` to add one, or agentty plugin add <name>…". As a trailing
         // cell that prose right-aligns and fights the leading for one row's

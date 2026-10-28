@@ -49,7 +49,7 @@ std::vector<ToolDef> catalog(int mcp_tools) {
 }
 
 std::vector<provider::ToolSpec> plan_for(const std::vector<ToolDef>& cat, provider::Kind kind,
-                                         tp::Loading mode, std::unordered_set<std::string> loaded = {}) {
+                                         tp::Loading mode, tp::Loaded loaded = {}) {
     provider::Selection sel;
     sel.kind = kind;
     tl::Request r;
@@ -80,7 +80,7 @@ TEST_CASE("tool loading wire: Anthropic defers, OpenAI omits (#98)") {
     CHECK(o.size() == 3 + 1);                    // natives + tool_search
     CHECK(o.back().name == "tool_search");
     // The search tool names what it can find.
-    CHECK(o.back().description.find("srv (200)") != std::string::npos);
+    CHECK(o.back().description.find("srv (200 tools)") != std::string::npos);
 }
 
 TEST_CASE("tool loading wire: OpenAI never gets more than 128 tools") {

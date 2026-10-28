@@ -1361,7 +1361,8 @@ provider::StreamResult run_one_completion(Thread& thread,
         tr.loaded = tools::plan::loaded_in(req.messages);
         tr.limits = tools::tool_loading::limits_for(
             req.selection ? *req.selection : provider::active(),
-            static_cast<std::size_t>(req.context_window > 0 ? req.context_window : 0));
+            static_cast<std::size_t>(req.context_window > 0 ? req.context_window : 0), req.model);
+        tr.server_instructions = mcp::mcp_server_instructions();
         tr.mode   = tools::tool_loading::current();
         (void)tools::tool_loading::plan_into(tr, req.tools);
     }

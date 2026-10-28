@@ -147,6 +147,26 @@ TEST_CASE("tool plan: thread-loaded and pinned tools always ride") {
     CHECK(p.search);
 }
 
+TEST_CASE("tool plan: a long thread's loaded tools never push past the hard cap") {
+    // 45 natives + 300 MCP tools, and the thread has used 200 of them.
+    auto cat = reporter_catalog();
+    for (int i = 75; i < 300; ++i)
+        cat.push_back(ext("binary_ninja", "op_" + std::to_string(i), "more"));
+    tp::Loaded used;
+    for (std::size_t i = 45; i < 245; ++i) used.touch(cat[i].name.value);
+    const auto s = search_tool();
+    tp::Limits lim{.max_tools = 128, .context_window = 1'000'000};
+    for (auto mode : {tp::Loading::Auto, tp::Loading::All, tp::Loading::OnDemand}) {
+        const auto p = tp::make_plan(cat, used, &s, mode, lim);
+        CHECK(p.wire.size() <= 128);
+        CHECK(p.search);   // what got dropped stays findable
+        // The most recently used tools are the ones kept.
+        bool newest = false;
+        for (const auto& w : p.wire) newest |= w.tool == &cat[244];
+        CHECK(newest);
+    }
+}
+
 TEST_CASE("tool plan: Anthropic defers instead of dropping, and keeps the cache order") {
     const auto cat = reporter_catalog();
     const auto s = search_tool();

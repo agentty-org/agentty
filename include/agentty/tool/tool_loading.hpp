@@ -28,9 +28,11 @@ void install(plan::Loading l);
 [[nodiscard]] const ToolDef& search_tool();
 
 // What a provider + model can take. `anthropic` picks deferred references;
-// `context_window` 0 = unknown.
+// `context_window` 0 = unknown. `model` decides whether on-demand loading is
+// used at all: a small model that won't search gets everything that fits.
 [[nodiscard]] plan::Limits limits_for(const provider::Selection& sel,
-                                      std::size_t context_window);
+                                      std::size_t context_window,
+                                      std::string_view model = {});
 
 // The one entry point every request builder uses: plan the tools for this
 // turn and append them to `out` as wire specs.
@@ -42,9 +44,12 @@ void install(plan::Loading l);
 // caller keeps the Catalog that `pool` points into alive for the call.
 struct Request {
     std::vector<const ToolDef*> pool;          // the tools this caller may use
-    std::unordered_set<std::string> loaded;
+    plan::Loaded loaded;
     plan::Limits limits;
     plan::Loading mode = plan::Loading::Auto;
+    // Each server's handshake instructions, shown in tool_search's
+    // description next to that server (mcp::mcp_server_instructions()).
+    std::vector<std::pair<std::string, std::string>> server_instructions;
 };
 plan::Plan plan_into(const Request& r, std::vector<provider::ToolSpec>& out);
 

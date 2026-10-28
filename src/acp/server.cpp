@@ -2914,7 +2914,8 @@ StopReason AgentServer::stream_completion(Io io, const Cap& cap, const std::stri
         tr.loaded = tools::plan::loaded_in(req.messages);
         tr.limits = tools::tool_loading::limits_for(
             provider::active(),
-            static_cast<std::size_t>(std::max(0, catalog_context_window_for(req.model))));
+            static_cast<std::size_t>(std::max(0, catalog_context_window_for(req.model))), req.model);
+        tr.server_instructions = mcp::mcp_server_instructions();
         tr.mode   = tools::tool_loading::current();
         (void)tools::tool_loading::plan_into(tr, req.tools);
     }

@@ -154,6 +154,7 @@ set(AGENTTY_TOOL_SOURCES
     src/tool/registry.cpp
     src/tool/tool_plan.cpp
     src/tool/tool_loading.cpp
+    src/tool/schema.cpp
     src/tool/write_lanes.cpp
     src/tool/web_search_policy.cpp
     src/tool/web_search_plan.cpp

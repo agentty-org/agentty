@@ -23,6 +23,9 @@ struct ToolState {
     bool        enabled = true;  // NOT in config tools.exclude
     bool        pinned = false;  // config tools.pin: always loaded, never on demand
     bool        on_demand = false; // enabled, not loaded now; tool_search finds it
+    // Non-empty: the tool's schema would make providers reject every request,
+    // so it's left out. Shown on its row so the server author can fix it.
+    std::string skipped;
 };
 
 // Where a server's config entry was read from — enough for the picker to

@@ -107,6 +107,7 @@ struct Connection::Live {
     std::shared_ptr<void>      holder;   // what backs the channel; dropped after the peer
     std::unique_ptr<rpc::Peer> peer;
     ::mcp::ServerCapabilities  caps;     // set during connect(), read-only after
+    std::string                instructions;   // handshake `instructions`, read-only after
     maya::snapshot<Lists>      lists;
     std::atomic<bool>          poisoned{false};   // a cancelled call left it untrusted
     std::atomic<unsigned>      busy{0};           // a call is in flight; calls go one at a time (Gate)
@@ -295,6 +296,7 @@ std::shared_ptr<Connection::Live> Connection::connect(const maya::unlocked& cap)
     l->peer->set_request_meta(cap, m::modern_request_meta(cfg_.client_info, client_caps));
     if (auto disc = l->peer->call<m::to_server::Discover>(cap, m::DiscoverParams{})) {
         l->caps = disc->capabilities;
+        if (disc->instructions) l->instructions = *disc->instructions;
     } else {
         // A pre-2026 server. Speak its dialect all the way down: no modern
         // per-request _meta, the legacy version in initialize, and (over
@@ -308,6 +310,7 @@ std::shared_ptr<Connection::Live> Connection::connect(const maya::unlocked& cap)
         ip.clientInfo      = cfg_.client_info;
         auto init = take(l->peer->call<m::to_server::Initialize>(cap, ip));
         l->caps = init.capabilities;
+        if (init.instructions) l->instructions = *init.instructions;
         // The version the server picked goes on every later request.
         if (link_.set_protocol_version)
             link_.set_protocol_version(l->holder, init.protocolVersion);
@@ -332,6 +335,11 @@ bool Connection::alive() const {
 ::mcp::ServerCapabilities Connection::server_capabilities() const {
     auto l = live_.current();
     return l ? l->caps : ::mcp::ServerCapabilities{};
+}
+
+std::string Connection::instructions() const {
+    auto l = live_.current();
+    return l ? l->instructions : std::string{};
 }
 
 std::expected<std::shared_ptr<Connection::Live>, std::string>
