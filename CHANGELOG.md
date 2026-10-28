@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.37] - 2026-10-28
+
 ### Changed
 - **Every MCP tool is usable, however many a server has** (#98). agentty
   used to send at most 16 MCP tools per request, picked by matching words
