@@ -38,6 +38,9 @@ struct ListOpen {
     bool        input_active = false;
     std::string input;          // typed buffer
     int         cursor = 0;     // byte cursor into `input`
+    // Plugins: servers whose tool list is open. Collapsed by default, so a
+    // 75-tool server is one row until you open it.
+    std::vector<std::string> expanded;
     // Destructive `d` (remove a plugin) is two-step, like account removal:
     // the first press ARMS (stores the server name here + the view paints the
     // row "press d again to remove"); the second press on the SAME row

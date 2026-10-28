@@ -1201,6 +1201,8 @@ struct PluginEdited {
 struct SettingsListBackspace  {};
 // `p` on a plugin's tool row: pin it (always loaded) or unpin it (#98).
 struct SettingsListPin        {};
+// → / ← on Plugins: show or hide a server's tools.
+struct SettingsListExpand     { bool open; };
 // Settings hub search: type to search every setting, Backspace to trim.
 struct SettingsSearchInput     { char32_t ch; };
 struct SettingsSearchBackspace {};
@@ -1503,6 +1505,7 @@ using SettingsListMsg = std::variant<
     OpenSettingsList, CloseSettingsList, SettingsListMove,
     SettingsSearchInput, SettingsSearchBackspace, SettingsSearchClear,
     SettingsListActivate, SettingsListAddStart, SettingsListRemove, SettingsListPin,
+    SettingsListExpand,
     SettingsListEditOpen,
     SettingsListChar, SettingsListPaste, PluginsUpdated, PluginEdited,
     SettingsListBackspace, SettingsListSubmitInput, SettingsListCancelInput,

@@ -22,6 +22,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   - The Plugins pane (also `/tools`) shows how many tools are loaded and
     on demand, what they cost, and marks each tool. `p` pins a tool so it
     is always loaded.
+  - Each server is one row (`→` shows its tools, `←` hides them), with
+    what it contributes: tool count, how many are on demand, pinned, off.
+    The focused tool shows its description, and the footer only lists keys
+    that work on the row you're on.
 - `mcp_read_resource` and `mcp_get_prompt` are now `mcp__resources__read`
   and `mcp__prompts__get`. Anthropic's subscription endpoint rejects any
   tool named `mcp_<letter>...`; the old names still work when called.

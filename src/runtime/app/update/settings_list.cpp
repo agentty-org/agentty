@@ -393,6 +393,35 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
                     return Cmd::none();
             }
         },
+        [&](SettingsListExpand& e) -> Cmd {
+            auto* o = m.ui.panel.get<pn::SettingsList>();
+            if (!o || o->concern != se::Category::Plugins || o->input_active) return Cmd::none();
+            auto rows = se::items_for(m, o->concern);
+            if (o->index < 0 || o->index >= static_cast<int>(rows.size())) return Cmd::none();
+            const se::Item& row = rows[static_cast<std::size_t>(o->index)];
+            const std::string server = row.arg;
+            if (server.empty()) return Cmd::none();
+            auto& ex = o->expanded;
+            const auto it = std::find(ex.begin(), ex.end(), server);
+            if (e.open) {
+                // Only a server row opens; → on a tool does nothing.
+                if (row.action != se::Action::TogglePlugin || !row.expandable) return Cmd::none();
+                if (it == ex.end()) ex.push_back(server);
+                return Cmd::none();
+            }
+            // ← closes the list from the server row or any of its tools, and
+            // the cursor lands back on the server so you never lose your place.
+            if (it == ex.end()) return Cmd::none();
+            ex.erase(it);
+            const auto after = se::items_for(m, o->concern);
+            for (int i = 0; i < static_cast<int>(after.size()); ++i)
+                if (after[static_cast<std::size_t>(i)].action == se::Action::TogglePlugin
+                    && after[static_cast<std::size_t>(i)].arg == server) {
+                    o->index = i;
+                    break;
+                }
+            return Cmd::none();
+        },
         [&](SettingsListPin) -> Cmd {
             // `p` on a tool row: always load it (#98). Pinned tools never go
             // on demand, so the model sees them without searching.

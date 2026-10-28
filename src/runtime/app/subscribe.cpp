@@ -407,6 +407,12 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active,
     s.select  = [] { return Msg{SettingsListActivate{}}; };
     s.move    = [](int d) { return Msg{SettingsListMove{d}}; };
     s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
+        // → opens a plugin server's tool list, ← closes it (from the server
+        // or any of its tools). Other rows ignore them.
+        if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
+            if (*sk == SpecialKey::Right) return Msg{SettingsListExpand{true}};
+            if (*sk == SpecialKey::Left)  return Msg{SettingsListExpand{false}};
+        }
         const auto v = nav::char_view(e);
         if (!v || !v->ctrl) return std::nullopt;
         switch (v->c) {

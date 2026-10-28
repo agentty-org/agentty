@@ -109,6 +109,12 @@ struct Item {
     bool        indented = false;  // render as a sub-row (a plugin's tool)
     bool        on = true;         // toggle state (for ToggleTool rows)
     bool        pinned = false;    // ToggleTool rows: tools.pin, always loaded (#98)
+    // Plugins: a server row whose tools can be shown (→) or hidden (←).
+    bool        expandable = false;
+    bool        expanded = false;
+    // Longer text shown under the row only while it is focused (a tool's
+    // description).
+    std::string detail;
     // Effectively inactive though PRESENT: a tool under a DISABLED (or not-
     // connected) plugin. Its individual on/off is still shown (◉/○) so you
     // know what it'll be when the plugin comes back, but the whole row is

@@ -106,9 +106,24 @@ int count_tool_rows(const std::string& screen, int n) {
 
 } // namespace
 
+TEST_CASE("settings list: a 120-tool server is one row until opened") {
+    Model m = big_plugins_model(120);
+    m.ui.panel.descend(pn::SettingsList{{settings::Category::Plugins, 0}});
+    const std::string screen = render_picker(m);
+    INFO(screen);
+    CHECK(has(screen, "big"));
+    CHECK(has(screen, "120 tools"));
+    CHECK_MESSAGE(!has(screen, "tool_0"), "collapsed: no tool rows");
+    CHECK(has(screen, "show tools"));   // the footer says how to open it
+}
+
 TEST_CASE("settings list: bounded, clipped, and scrollable") {
     Model m = big_plugins_model(120);
-    m.ui.panel.descend(pn::SettingsList{{settings::Category::Plugins, 2}});
+    {
+        pn::SettingsList o{{settings::Category::Plugins, 2}};
+        o.expanded = {"big"};   // tools are collapsed until the server is opened
+        m.ui.panel.descend(std::move(o));
+    }
 
     const std::string screen = render_picker(m);
     INFO(screen);
@@ -145,10 +160,14 @@ TEST_CASE("settings list: bounded, clipped, and scrollable") {
     CHECK_MESSAGE(seen < 40, "list is clipped to the viewport, not painted whole");
 
     // ── 3: scrolling — a deep selection moves the window ──
-    // Row 0 = info row, 1 = server row, 2..n+1 = tool_i — cursor 118 sits
-    // on tool_116.
+    // Row 0 = server row, 1..n = tool_i (the summary is the pane header,
+    // not a row) — cursor 117 sits on tool_116.
     const bool early_before = has(screen, "tool_0\xe2\x80\xa6") || has(screen, " tool_0");
-    m.ui.panel.descend(pn::SettingsList{{settings::Category::Plugins, 118}});
+    {
+        pn::SettingsList o{{settings::Category::Plugins, 117}};
+        o.expanded = {"big"};
+        m.ui.panel.descend(std::move(o));
+    }
     const std::string deep = render_picker(m);
     INFO(deep);
     CHECK_MESSAGE(has(deep, "tool_116"), "deep row is reachable and rendered");

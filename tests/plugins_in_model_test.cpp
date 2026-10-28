@@ -85,13 +85,16 @@ TEST_CASE("plugins in model") {
               && rows_empty[0].primary.find("no plugins") != std::string::npos,
               "projection: empty+idle renders the 'no plugins' hint");
 
-        // Populated → a server header + its tools; nothing reads the live pool.
+        // Populated → a server row; its tools show once it's opened. Nothing
+        // reads the live pool.
         Model populated;
         mcp::ServerState s;
         s.name = "date";
         s.connected = true;
         s.tools.push_back({"current_date", "d", true, false});
         populated.ui.plugins.servers.push_back(std::move(s));
+        populated.ui.panel.descend(pn::SettingsList{});
+        populated.ui.panel.get<pn::SettingsList>()->expanded = {"date"};
         auto rows = settings::items_for(populated, settings::Category::Plugins);
         bool saw_date = false, saw_tool = false;
         for (const auto& r : rows) {
@@ -126,6 +129,8 @@ TEST_CASE("plugins in model") {
         d.tools.push_back({"current_date", "", true, false});
         d.tools.push_back({"days_between", "", true, false});
         off.ui.plugins.servers.push_back(std::move(d));
+        off.ui.panel.descend(pn::SettingsList{});
+        off.ui.panel.get<pn::SettingsList>()->expanded = {"date"};
         int tools_seen = 0, inactive_seen = 0;
         for (const auto& r : settings::items_for(off, settings::Category::Plugins)) {
             if (r.primary == "date") {
@@ -155,6 +160,8 @@ TEST_CASE("plugins in model") {
         ls.connected = true;
         ls.tools.push_back({"current_date", "", true, false});
         live.ui.plugins.servers.push_back(std::move(ls));
+        live.ui.panel.descend(pn::SettingsList{});
+        live.ui.panel.get<pn::SettingsList>()->expanded = {"date"};
         for (const auto& r : settings::items_for(live, settings::Category::Plugins)) {
             if (r.indented) {
                 check(!r.inactive,
@@ -260,8 +267,8 @@ TEST_CASE("settings nav skips non-actionable rows") {
         return mm.ui.panel.get<pn::SettingsList>();
     };
 
-    // Build a populated Plugins model: row 0 is the "N tools on the wire"
-    // header (Action::None), the server + its tools are actionable.
+    // Build a populated Plugins model: one server with two tools. The
+    // summary is the pane header (not a row), so row 0 is the server.
     auto make_model = [] {
         Model m;
         mcp::ServerState s;
@@ -273,17 +280,16 @@ TEST_CASE("settings nav skips non-actionable rows") {
         return m;
     };
 
-    // Opening lands on the FIRST actionable row, not the info header at 0.
+    // Opening lands on the server, the first row you can act on.
     {
         auto [m, cmd] = app::update(make_model(),
             Msg{OpenSettingsList{settings::Category::Plugins}});
         auto rows = settings::items_for(m, settings::Category::Plugins);
         auto* o = opened(m);
         REQUIRE(o != nullptr);
-        check(rows[0].action == Action::None,
-              "row 0 is the informational header");
-        check(o->index > 0 && rows[o->index].action != Action::None,
-              "open lands on the first ACTIONABLE row, skipping the header");
+        check(rows.size() == 1, "tools are collapsed: one row per server");
+        check(o->index == 0 && rows[0].action == Action::TogglePlugin,
+              "open lands on the server row");
     }
 
     // Moving up from the first actionable row does NOT drop back onto the
@@ -314,6 +320,30 @@ TEST_CASE("settings nav skips non-actionable rows") {
             check(rows[o->index].action != Action::None,
                   "every down-step lands on an actionable row");
         }
+    }
+
+    // → opens a server's tools, ← closes them from a tool row and puts the
+    // cursor back on the server.
+    {
+        auto [m, c] = app::update(make_model(), Msg{OpenSettingsList{settings::Category::Plugins}});
+        std::tie(m, c) = app::update(std::move(m), Msg{SettingsListExpand{true}});
+        auto rows = settings::items_for(m, settings::Category::Plugins);
+        check(rows.size() == 3 && rows[0].expanded, "→ shows the server's two tools");
+        std::tie(m, c) = app::update(std::move(m), Msg{SettingsListMove{1}});
+        check(opened(m)->index == 1 && rows[1].indented, "down moves onto a tool");
+        std::tie(m, c) = app::update(std::move(m), Msg{SettingsListExpand{false}});
+        rows = settings::items_for(m, settings::Category::Plugins);
+        check(rows.size() == 1, "← on a tool hides the list");
+        check(opened(m)->index == 0, "and the cursor returns to the server");
+        // → on a server with no tools does nothing.
+        Model bare;
+        mcp::ServerState s;
+        s.name = "empty";
+        s.connected = true;
+        bare.ui.plugins.servers.push_back(std::move(s));
+        std::tie(bare, c) = app::update(std::move(bare), Msg{OpenSettingsList{settings::Category::Plugins}});
+        std::tie(bare, c) = app::update(std::move(bare), Msg{SettingsListExpand{true}});
+        check(opened(bare)->expanded.empty(), "a server with no tools doesn't open");
     }
 
     // A wholly-informational pane (Agents = built-ins, all Action::None) must

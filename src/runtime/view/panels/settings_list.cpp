@@ -147,6 +147,37 @@ Element settings_list_panel(const Model& m) {
     } else if (o->concern == se::Category::General) {
         // The hub searches every setting: the filter line is the header.
         cfg.header.push_back(filter_header(o->query, "every setting", highlight));
+    } else if (o->concern == se::Category::Plugins && !m.ui.plugins.servers.empty()) {
+        // What the model gets from plugins, always in view (#98): counts on
+        // the first line, mode and cost on the second. Not a list row, so it
+        // never takes the cursor and never scrolls away.
+        const auto& pm = m.ui.plugins;
+        const std::size_t total = pm.enabled_mcp();
+        std::string line1, line2;
+        if (total == 0)
+            line1 = "no plugin tools enabled";
+        else if (pm.on_demand_count == 0)
+            line1 = std::to_string(total) + (total == 1 ? " tool" : " tools") + ", all loaded";
+        else
+            line1 = std::to_string(pm.loaded_count) + " loaded, "
+                  + std::to_string(pm.on_demand_count) + " on demand";
+        const std::string mode = pm.loading == "all"       ? "load all"
+                               : pm.loading == "on_demand" ? "load on demand"
+                                                           : "auto";
+        line2 = mode;
+        if (pm.schema_tokens > 0) {
+            line2 += " \xc2\xb7 ~" + std::to_string((pm.schema_tokens + 500) / 1000) + "k tokens";
+            if (pm.context_window > 0)
+                line2 += " (" + std::to_string(pm.schema_tokens * 100 / pm.context_window)
+                       + "% of context)";
+        }
+        if (pm.on_demand_count > 0) line2 += " \xc2\xb7 the model searches for the rest";
+        cfg.header.push_back(h(text("  "), text(line1, fg_bold(fg))).build());
+        cfg.header.push_back(h(text("  "), text(line2, fg_dim(muted))).build());
+        if (pm.capped_by_provider)
+            cfg.header.push_back(h(text("  "),
+                text("this provider takes at most 128 tools at once; pin what you need with p",
+                     fg_of(warn))).build());
     } else {
         cfg.header.push_back(h(
             text("  "), text(se::subtitle(o->concern), fg_dim(muted))
@@ -229,14 +260,24 @@ Element settings_list_panel(const Model& m) {
             row.badge_style = fg_dim(muted);
             row.leading       = it.primary;
             row.leading_style = fg_of(dim ? muted : (it.on ? fg : muted));
+            // The tool's description, only on the focused row, so a long
+            // list stays one line per tool.
+            if (i == o->index && !it.detail.empty())
+                row.help = std::string{last ? "   " : "\xe2\x94\x82  "} + it.detail;   // │ keeps the tree
         } else {
             row.badge       = b.glyph;
             row.badge_style = fg_of(adding ? muted : b.color);
-            row.leading       = it.primary;
+            // A server with tools shows whether its list is open.
+            row.leading       = it.expandable
+                ? std::string{it.expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 "} + it.primary   // ▾ / ▸
+                : it.primary;
             row.leading_style = fg_of(adding ? muted : fg);
         }
         row.trailing       = it.secondary;
         row.trailing_style = fg_dim(muted);
+        // Pinned reads as a state, not a footnote: the accent colour, like
+        // other \"this is set\" marks in the panes.
+        if (it.indented && it.pinned && !it.inactive) row.trailing_style = fg_of(highlight);
         // Info rows (no Enter action) carry PROSE in `secondary` — "press
         // `a` to add one, or agentty plugin add <name>…". As a trailing
         // cell that prose right-aligns and fights the leading for one row's
@@ -290,10 +331,25 @@ Element settings_list_panel(const Model& m) {
         std::vector<Hint> keys{{"\xe2\x86\x91\xe2\x86\x93", "move", 5},
                                {"\xe2\x86\xb5", "act", 5}};
         if (o->concern == se::Category::General) keys.push_back({"type", "search", 4});
-        if (can_add(o->concern))                     keys.push_back({"a", "add", 2, success});
         if (o->concern == se::Category::Plugins) {
-            keys.push_back({"e", "edit", 3});
-            keys.push_back({"d", "remove", 3, warn});
+            // Only keys that do something on THIS row.
+            const se::Item* cur = (o->index >= 0 && o->index < static_cast<int>(rows.size()))
+                ? &rows[static_cast<std::size_t>(o->index)] : nullptr;
+            const bool on_tool   = cur && cur->action == se::Action::ToggleTool;
+            const bool on_server = cur && cur->action == se::Action::TogglePlugin;
+            if (cur && cur->expandable)
+                keys.push_back({cur->expanded ? "\xe2\x86\x90" : "\xe2\x86\x92",   // ← / →
+                                cur->expanded ? "hide tools" : "show tools", 4});
+            if (on_tool && cur->on && !cur->inactive)
+                keys.push_back({"p", cur->pinned ? "unpin" : "pin", 3});
+            if (on_tool) keys.push_back({"\xe2\x86\x90", "back", 4});
+            keys.push_back({"a", "add", 2, success});
+            if (on_server) {
+                keys.push_back({"e", "edit", 3});
+                keys.push_back({"d", "remove", 3, warn});
+            }
+        } else if (can_add(o->concern)) {
+            keys.push_back({"a", "add", 2, success});
         }
         keys.push_back({"esc", "close", 5});
         cfg.footer.push_back(key_hints(std::move(keys)));

@@ -38,7 +38,40 @@ int main(int argc, char** argv) {
 
     pn::SettingsList o;
     o.concern = settings::Category::Plugins;
-    if (arg == "--general") {
+    if (arg == "--plugins") {
+        // A realistic pane: the #98 server (75 tools, most on demand), a
+        // small healthy one, a pinned tool, a disabled server, a broken one.
+        auto& pm = m.ui.plugins;
+        pm.native_tool_count = 45;
+        pm.loading = "auto";
+        pm.context_window = 128'000;
+        auto add = [&](std::string name, int n, int on_demand_from, bool connected,
+                       bool disabled, std::string error, std::string command) {
+            agentty::mcp::ServerState s;
+            s.name = std::move(name);
+            s.connected = connected;
+            s.disabled = disabled;
+            s.error = std::move(error);
+            s.command = std::move(command);
+            for (int i = 0; i < n; ++i) {
+                agentty::mcp::ToolState t;
+                t.name = s.name + "_tool_" + std::to_string(i);
+                t.description = "does thing number " + std::to_string(i);
+                t.on_demand = connected && !disabled && i >= on_demand_from;
+                if (t.on_demand) ++pm.on_demand_count; else if (connected && !disabled) ++pm.loaded_count;
+                s.tools.push_back(std::move(t));
+            }
+            pm.servers.push_back(std::move(s));
+        };
+        add("binary_ninja", 75, 12, true, false, "", "uvx binary-ninja-mcp");
+        add("github", 6, 99, true, false, "", "npx -y @github/mcp");
+        pm.servers[1].tools[2].pinned = true;
+        add("slack", 9, 99, false, true, "", "npx -y @slack/mcp");
+        add("jira", 0, 99, false, false, "connect: spawn failed: npx not found", "npx -y jira-mcp");
+        pm.schema_tokens = 9'400;
+        o.index = argc > 2 ? std::atoi(argv[2]) : 0;
+        if (const char* ex = std::getenv("PROBE_EXPAND"); ex && *ex) o.expanded = {ex};
+    } else if (arg == "--general") {
         o.concern = settings::Category::General;
         o.index  = argc > 2 ? std::atoi(argv[2]) : 0;
         if (const char* sw = std::getenv("PROBE_SMART"); sw && *sw == '1')

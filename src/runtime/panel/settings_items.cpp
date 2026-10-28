@@ -273,7 +273,8 @@ std::vector<Item> general(const Model& m) {
     return out;
 }
 
-std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) {
+std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading,
+                          const std::vector<std::string>& expanded) {
     // Pure projection of the PluginModel snapshot OWNED BY THE MODEL
     // (m.ui.plugins) — NOT a live plugin_model() call. This keeps items_for
     // (and therefore the view) a pure function of the Model, so the render
@@ -295,43 +296,8 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
         return out;
     }
 
-    // Header: how tools load (#98). Every enabled tool is callable; this says
-    // which ride every request and which the model finds with tool_search.
-    {
-        Item w;
-        const std::size_t total = model.enabled_mcp();
-        const std::string mode = model.loading.empty() ? "auto" : model.loading;
-        std::string mode_label = mode == "all"       ? "load all"
-                               : mode == "on_demand" ? "load on demand"
-                                                     : "auto";
-        if (total == 0) {
-            w.primary = std::to_string(model.native_tool_count) + " built-in tools";
-        } else if (model.on_demand_count == 0) {
-            w.primary = std::to_string(total) + " plugin tools, all loaded";
-        } else {
-            w.primary = std::to_string(model.loaded_count) + " loaded \u00b7 "
-                      + std::to_string(model.on_demand_count)
-                      + " on demand (found with tool_search)";
-        }
-        std::string cost;
-        if (model.schema_tokens > 0) {
-            cost = "~" + std::to_string((model.schema_tokens + 500) / 1000) + "k tokens";
-            if (model.context_window > 0)
-                cost += " (" + std::to_string(model.schema_tokens * 100 / model.context_window)
-                      + "% of context)";
-        }
-        if (model.capped_by_provider) {
-            w.secondary = "this provider takes at most 128 tools per request, so the rest "
-                          "are on demand \u00b7 pin what you need with p";
-            w.status    = Item::Status::Bad;   // amber: needs attention
-        } else {
-            w.secondary = "loading: " + mode_label + (cost.empty() ? "" : " \u00b7 " + cost)
-                        + " \u00b7 Enter toggles \u00b7 p pins \u00b7 e edits \u00b7 a adds"
-                          " \u00b7 d removes";
-            w.status    = Item::Status::Neutral;
-        }
-        out.push_back(std::move(w));
-    }
+    // The loading summary (counts, mode, cost) is the pane HEADER, drawn by
+    // the view, so it never takes the cursor or scrolls away.
 
     for (const auto& s : model.servers) {
         Item i;
@@ -377,8 +343,21 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
                         + " → " + s.url;
             i.status    = Item::Status::Ok;
         } else {
-            i.secondary = scope_tag + std::to_string(s.enabled_count()) + " of " +
-                          std::to_string(s.tools.size()) + " tools active";
+            // What this server contributes right now: how many tools, how
+            // many of those the model sees without searching, what's off.
+            std::size_t on_demand = 0, pinned = 0;
+            for (const auto& t : s.tools) {
+                if (!t.enabled) continue;
+                if (t.on_demand) ++on_demand;
+                if (t.pinned) ++pinned;
+            }
+            const std::size_t enabled = s.enabled_count();
+            const std::size_t off = s.tools.size() - enabled;
+            std::string d = std::to_string(enabled) + (enabled == 1 ? " tool" : " tools");
+            if (on_demand > 0) d += ", " + std::to_string(on_demand) + " on demand";
+            if (pinned > 0)    d += ", " + std::to_string(pinned) + " pinned";
+            if (off > 0)       d += ", " + std::to_string(off) + " off";
+            i.secondary = scope_tag + d;
             i.status    = Item::Status::Ok;
         }
         // Enter toggles the WHOLE plugin on/off (reversible). Remove is the
@@ -394,16 +373,28 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
         }
         out.push_back(std::move(i));
 
+        // Tools are collapsed until you open the server: a 75-tool server is
+        // one row, and the list you scroll is the list of servers.
+        const bool open = std::find(expanded.begin(), expanded.end(), s.name) != expanded.end();
+        if (!s.tools.empty()) {
+            Item& srv = out.back();
+            srv.expandable = true;
+            srv.expanded   = open;
+        }
+        if (!open) continue;
         for (const auto& t : s.tools) {
             Item ti;
             ti.primary   = t.name;
             if (!subtree_inactive && t.enabled) {
                 // Pinned beats on-demand: a pin always loads.
                 if (t.pinned)
-                    ti.secondary = "pinned \u00b7 always loaded";
+                    ti.secondary = "pinned";
                 else if (t.on_demand)
                     ti.secondary = "on demand";
             }
+            // The tool's own description, under the focused row, so you can
+            // tell op_12 from op_13 before you switch one off.
+            ti.detail    = t.description;
             ti.action    = Action::ToggleTool;
             ti.arg       = s.name;
             ti.arg2      = t.name;
@@ -502,7 +493,11 @@ std::vector<Item> hooks(const Library& lib) {
 std::vector<Item> items_for(const Model& m, Category cat) {
     switch (cat) {
         case Category::General:  return general(m);
-        case Category::Plugins:  return plugins(m.ui.plugins, m.ui.plugins_loading);
+        case Category::Plugins: {
+            static const std::vector<std::string> none;
+            const auto* o = m.ui.panel.get<ui::panel::SettingsList>();
+            return plugins(m.ui.plugins, m.ui.plugins_loading, o ? o->expanded : none);
+        }
         case Category::Commands: return commands(m.ui.library);
         case Category::Agents:   return agents(m.ui.library);
         case Category::Hooks:    return hooks(m.ui.library);
