@@ -762,31 +762,22 @@ constexpr const char* kHomeToolSubdirsWin[] = {
     opts.timeout = timeout;
 
     if (detected_backend() == Backend::Claybin) {
-        // Byte-for-byte the Linux claybin branch minus the broker, which macOS
-        // has no equivalent of. claybin forks, enters the sandbox and execs;
-        // the supervise loop (poll, progress, idle deadline, TERM/KILL, reap)
-        // stays in Subprocess::run, shared with every other path on every
-        // platform.
-        opts.command = SubprocessOptions::Shell{std::string{cmd}};
-        std::string shell_cmd{cmd};
-        opts.spawner = [shell_cmd](const SubprocessOptions&,
-                                   int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
-            SubprocessOptions::SpawnedChild out;
-            auto posture = build_claybin_posture();
-            // Both streams onto the one pipe the runner already made, which is
-            // what the sandbox-exec path gets from its file_actions.
-            auto r = claybin_backend::spawn_shell(posture, shell_cmd, pipe_write_fd,
-                                                  pipe_write_fd);
-            if (!r.started) {
-                out.error = r.start_error;
-                return out;
-            }
-            out.pid = r.pid;
-            // No supervisor fd and no broker: seccomp user-notify has no macOS
-            // counterpart, so these keep their sentinel defaults and the
-            // runner's `supervisor_fd >= 0` test skips the poll on its own.
-            return out;
-        };
+        // NOT claybin's spawn + adopt, as on Linux: darwin has no pidfd, so
+        // jaal's posix_process::adopt refuses every foreign child ("the exit
+        // is not watchable"). That refusal came AFTER the spawn, so the guest
+        // ran unsupervised while the caller got exit 128 and no output --
+        // every sandboxed hook and ACP terminal command silently failed.
+        // Instead put claybin's compiled profile into the argv via
+        // sandbox-exec, exactly as the bash tool does (JaalExec::confine):
+        // same posture, and the child is our own fork, so it is watchable.
+        auto wrapped = wrap_argv_for_exec({"/bin/sh", "-c", std::string{cmd}}, {}, {});
+        if (!wrapped) {
+            SubprocessResult r;
+            r.started = false;
+            r.start_error = "sandbox: " + wrapped.error();
+            return r;
+        }
+        opts.command = SubprocessOptions::Argv{std::move(*wrapped)};
         return Subprocess::run(std::move(opts));
     }
 
