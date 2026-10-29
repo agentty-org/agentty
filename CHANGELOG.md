@@ -4,6 +4,34 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **One bad MCP tool no longer breaks every request.** A tool whose schema
+  the API would reject (an invalid JSON Schema, a property name with a
+  space) used to make every request fail with a 400, so one badly written
+  server took agentty down. Now that tool is skipped, the Plugins pane shows
+  it as skipped with the reason, the model is told why, and the server's
+  other tools keep working.
+- MCP tool names longer than 64 characters are shortened with a short hash
+  so OpenAI-style providers accept them.
+- MCP schemas that some providers reject are cleaned up before sending:
+  root `anyOf`/`oneOf`/`allOf`, `$ref`, `type` arrays, old-draft spellings,
+  and very large schemas.
+- A long thread that had used more than 128 tools no longer goes over
+  OpenAI's tool cap. The most recently used ones stay loaded; the rest are
+  found again with `tool_search`.
+- **Sandboxed hooks and ACP terminal commands work on macOS.** They ran
+  outside the sandbox's supervision and came back as exit 128 with no
+  output.
+
+### Changed
+- Large MCP tool results are saved to `.agentty/tool-results/` and the
+  model gets the path and a preview, so it can `read` the rest instead of
+  losing the middle to a trim.
+- Each MCP server's own instructions are shown to the model next to that
+  server in `tool_search`, so it knows what to search for.
+- Small local models get their tools loaded up front instead of relying
+  on `tool_search`.
+
 ## [0.9.37] - 2026-10-28
 
 ### Changed
