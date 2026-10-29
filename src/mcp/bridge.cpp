@@ -34,6 +34,7 @@
 #include "agentty/config/inventory.hpp"   // kMcpLayout — the one declaration
 #include "agentty/dirs/dirs.hpp"
 #include "agentty/io/http.hpp"
+#include "agentty/io/shared_file.hpp"
 #include "agentty/tool/plugin.hpp"
 #include "agentty/tool/schema.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
@@ -665,10 +666,9 @@ std::string spill_if_large(std::string text, std::size_t limit, std::string_view
                   static_cast<unsigned long long>(std::hash<std::string>{}(text)));
     const fs::path file = dir / name;
     bool saved = false;
-    if (!ec) {
-        std::ofstream out(file, std::ios::binary | std::ios::trunc);
-        if (out.write(text.data(), static_cast<std::streamsize>(text.size()))) saved = true;
-    }
+    if (!ec)
+        saved = persistence::write_atomic(::agentty::IoAccess::grant(), file, text,
+                                          {.durability = persistence::Durability::Atomic});
     if (saved) tools::util::allow_read_root(::agentty::IoAccess::grant(), file);
     constexpr std::size_t kHead = 6'000, kTail = 2'000;
     const std::size_t head = tools::util::safe_utf8_cut(text, kHead);

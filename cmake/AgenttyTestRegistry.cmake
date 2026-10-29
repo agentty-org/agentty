@@ -138,7 +138,11 @@ function(agentty_test name)
     endif()
 
     # Both standalone and raw record into the aggregates + label sets.
-    set_property(DIRECTORY APPEND PROPERTY AGENTTY_T_STANDALONE ${name})
+    # NO_TEST tools (visual dumps, benches) run nothing in ctest, so CI has
+    # no reason to link them; build them by name.
+    if(NOT T_NO_TEST)
+        set_property(DIRECTORY APPEND PROPERTY AGENTTY_T_STANDALONE ${name})
+    endif()
     if("sanitizer" IN_LIST T_LABELS)
         set_property(DIRECTORY APPEND PROPERTY AGENTTY_T_SANITIZER ${name})
     endif()

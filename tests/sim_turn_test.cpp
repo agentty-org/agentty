@@ -18,6 +18,8 @@
 // them safe to assert against a random interleaving.
 #include "agtest.hpp"
 
+#include <filesystem>
+
 #include <maya/runtime.hpp>
 #include <maya/device/events.hpp>
 
@@ -62,6 +64,15 @@ NullProvider g_provider;
 NullStore    g_store;
 
 void install() { app::install(g_provider, g_store, auth::AuthHeader{}); }
+
+// init() and submit probe git and checkpoint the cwd. From the repo that's a
+// git add -A of the whole tree per seed (20 min on CI), so run in an empty dir.
+struct InEmptyDir {
+    TempDir dir{"sim_turn"};
+    std::filesystem::path prev = std::filesystem::current_path();
+    InEmptyDir() { std::filesystem::current_path(dir.path()); }
+    ~InEmptyDir() { std::error_code ec; std::filesystem::current_path(prev, ec); }
+};
 
 // init() starts owned background threads (the blob GC, the models.dev
 // refresh) that main() joins on its way out. A test binary has no such
@@ -119,6 +130,7 @@ void arm_invariants(Sim& s) {
 }  // namespace
 
 TEST_CASE("sim: the turn machine holds under a scripted interleaving") {
+    InEmptyDir cwd;
     install();
     JoinsBackgroundThreads joiner;   // see its comment
 
@@ -147,6 +159,7 @@ TEST_CASE("sim: the turn machine holds under a scripted interleaving") {
 // and breaks ties differently, so this is the part that covers the
 // interleavings nobody wrote down.
 TEST_CASE("sim: the turn machine holds across 200 seeds") {
+    InEmptyDir cwd;
     install();
     JoinsBackgroundThreads joiner;   // see its comment
 
@@ -173,6 +186,7 @@ TEST_CASE("sim: the turn machine holds across 200 seeds") {
 // Fault injection: a task that crashes or never returns must not leave the
 // machine wedged. This is the path a flaky provider actually takes.
 TEST_CASE("sim: a lost or crashing task leaves the machine consistent") {
+    InEmptyDir cwd;
     install();
     JoinsBackgroundThreads joiner;   // see its comment
 

@@ -92,11 +92,12 @@ jobs:
           # mingw ccache both vanished while the total sat at 3 GiB of a
           # 10 GB budget. GitHub's cap is not the only limit that matters;
           # thousands of small entries starve the few big ones that actually
-          # save time. Keep the newest 40 and drop the rest: a partial
-          # sccache still hits on most objects, and it regrows every run.
+          # save time. Keep the newest 450: one entry per object, ~415 objects
+          # a build, ~1.5 GiB total. Keeping 40 capped the msvc lane at ~10%
+          # hits (measured 2-22%), so it recompiled nearly everything.
           gh api --paginate "repos/$REPO/actions/caches?per_page=100" \
             --jq '.actions_caches[] | select(.key|startswith("sccache/")) | "\(.created_at)\t\(.id)\t\(.key)"' \
-            | sort -r | tail -n +41 \
+            | sort -r | tail -n +451 \
             | while IFS="$(printf '\t')" read -r created id key; do
                 echo "delete surplus sccache: $key"
                 gh api -X DELETE "repos/$REPO/actions/caches/$id" >/dev/null || true
@@ -696,7 +697,14 @@ jobs:
           restore-keys: windows-mingw-ucrt64-ccache-
       - name: Configure + build (compile only)
         run: |
+          # Pin the dir. This is native (mingw) ccache: it ignores MSYS $HOME
+          # and wrote to %LOCALAPPDATA%\ccache, so the save step below found
+          # nothing at its path and the lane never warmed (0% hits every run).
+          mkdir -p /home/runneradmin/.ccache
+          export CCACHE_DIR="$(cygpath -w /home/runneradmin/.ccache)"
           export CCACHE_MAXSIZE=2G
+          export CCACHE_SLOPPINESS=locale,time_macros,include_file_ctime,include_file_mtime
+          ccache -z
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
