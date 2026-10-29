@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.38] - 2026-10-29
+
 ### Fixed
 - **One bad MCP tool no longer breaks every request.** A tool whose schema
   the API would reject (an invalid JSON Schema, a property name with a
