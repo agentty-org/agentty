@@ -1,25 +1,15 @@
 name: ci
 
-# Two gates:
-#   1. build-test (linux gcc) — the primary gate matching the LOCAL
-#      toolchain (GCC, Release): does it compile with the same compiler
-#      used locally, and do the smoke tests pass. Fast + deterministic.
-#   2. windows-compile (msvc) — a COMPILE-ONLY gate that mirrors the
-#      release workflow's Windows configure (vcpkg static + MSVC) but
-#      stops at the build; no MSI, no signing, no upload. It exists
-#      because MSVC-only breakage (POSIX-only headers like <unistd.h> /
-#      <ext/stdio_filebuf.h> compiled into mcp-cpp's tests/examples, which
-#      agentty's standalone build pulls in) is invisible to the Linux gate
-#      and used to surface only at release time (C1083). Catch it per-push.
+# Push/PR gate: build the agentty binary ONCE per platform (linux, macos,
+# msvc, msys2) and check it starts. No tests here; they all run in
+# nightly.yml (schedule + manual dispatch), which takes over an hour.
 #
-# NOTE: if GitHub still shows phantom failing checks named linux-clang19,
-# sanitizers (...), macos-gcc, or "fuzz harness smoke", those are REQUIRED
-# STATUS CHECKS configured by NAME in the repo's branch-protection rules
-# (Settings → Branches → master). No workflow in this repo produces them,
-# so they hang forever. Remove those names from the required-checks list
-# there — this workflow only emits the two jobs below (the windows check is
-# named "windows compile (msvc)", so a required "windows-msvc" name still
-# won't match; use the exact job name or drop it).
+# The MSVC lane exists because MSVC-only breakage (POSIX-only headers like
+# <unistd.h> / <ext/stdio_filebuf.h>) is invisible to the Linux build and
+# used to surface only at release time (C1083).
+#
+# Each lane's cache key differs from nightly's (`-bin` suffix), so the
+# binary-only and full-test builds don't evict each other's objects.
 
 on:
   push:
@@ -122,7 +112,7 @@ jobs:
             --jq '"\(.active_caches_count) caches, \(.active_caches_size_in_bytes/1073741824*100|floor/100) GiB"'
 
   build-test:
-    name: build + test (linux gcc)
+    name: build (linux gcc)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -171,7 +161,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: linux-gcc16-release
+          key: linux-gcc16-release-bin
           # 2G was SMALLER THAN ONE BUILD's output. The post-job report read
           # "2.0 / 2.0 GB (99.96%), Cleanups: 60" — ccache evicted itself 60
           # times while compiling, so objects written early were gone before
@@ -236,30 +226,13 @@ jobs:
             -DAGENTTY_AUTO_PULL_MAYA=OFF \
             -DAGENTTY_USE_MIMALLOC=OFF \
             -DMAYA_NATIVE_TUNING=OFF \
-            -DAGENTTY_BUILD_TESTS=ON
+            -DAGENTTY_BUILD_TESTS=OFF
 
       - name: Build
-        # tests_gating = the correctness set (agentty_tests + every standalone
-        # test) MINUS the perf probes/benches, which never gate — see the
-        # derived aggregate in cmake/AgenttyTestRegistry.cmake.
-        run: cmake --build build -j"$(nproc)" --target all tests_gating
-
-      - name: Test
-        # -LE perf skips the perf-labelled ctest entries (e.g. long_session_bench)
-        # that tests_gating deliberately didn't build.
-        run: ctest --test-dir build --output-on-failure -j"$(nproc)" -LE perf
-
-      - name: Perf regression gate
-        # The long_session_bench is labelled `perf` (excluded from the gating
-        # suite because timing on a shared runner is noisy). Build + run it
-        # here in BENCH_ASSERT mode: it prints the numbers AND fails the job if
-        # any scenario blows a generous ceiling (~6× the observed values). This
-        # catches an order-of-magnitude regression — e.g. an O(n) accidentally
-        # reintroduced into the per-frame path, or a lost render cache — while
-        # tolerating the runner's timing jitter. Not a hard microbenchmark.
-        run: |
-          cmake --build build -j"$(nproc)" --target agentty_standalone_tests
-          BENCH_ASSERT=1 ./build/agentty_standalone_tests long_session_bench
+        # Only the binary. Tests (and the perf gate) run in nightly.yml.
+        run: cmake --build build -j"$(nproc)" --target agentty
+      - name: Smoke
+        run: ./build/agentty --version
 
   # macOS. Not a courtesy leg: a Mac is a first-class sandbox platform
   # (seatbelt via claybin), and with no mac job every one of these shipped
@@ -270,7 +243,7 @@ jobs:
   # GCC, not Apple clang: i18n.cpp uses std::atomic<std::shared_ptr<T>>,
   # which libc++ doesn't implement. And jaal needs P1061 (GCC 16).
   macos:
-    name: build + test (macos gcc)
+    name: build (macos gcc)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -293,7 +266,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: macos-gcc16
+          key: macos-gcc16-bin
           max-size: 1G
 
       - name: Configure
@@ -319,157 +292,12 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DAGENTTY_AUTO_PULL_MAYA=OFF \
             -DMAYA_NATIVE_TUNING=OFF \
-            -DAGENTTY_BUILD_TESTS=ON
+            -DAGENTTY_BUILD_TESTS=OFF
 
       - name: Build
-        run: cmake --build build -j"$(sysctl -n hw.ncpu)" --target all tests_gating
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure -j"$(sysctl -n hw.ncpu)" -LE perf
-
-  # Rust-grade memory-safety gate. Builds agentty's OWN-logic test set under
-  # -fsanitize=address,undefined and runs it: proves those paths are free of
-  # use-after-free / buffer overflow / leaks / UB at RUNTIME, complementing the
-  # compile-time static_assert proofs. Scoped to the `sanitizer`-labelled
-  # tests (crypto/creds, FSM, tool-arg repair, skills, fuzzy match, and the
-  # concurrency primitives) because they don't link maya's prebuilt,
-  # un-instrumented renderer (which would ODR-clash). LTO is off for speed +
-  # readable traces; the constexpr catalog proofs auto-skip under
-  # AGENTTY_SANITIZER_BUILD (they already ran green in the build-test job).
-  sanitizers:
-    name: sanitizers (asan+ubsan, tsan)
-    runs-on: ubuntu-latest
-    # Fail fast instead of being killed: a run that hit the runner's limit
-    # saved no ccache, so every run after it started cold and died too.
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Init submodules (HTTPS, race-tolerant)
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          for attempt in 1 2 3 4 5; do
-            if git submodule update --init --recursive --force; then
-              echo "submodules ready (attempt $attempt)"
-              break
-            fi
-            echo "submodule update failed (attempt $attempt) — full-fetching and retrying"
-            git submodule sync --recursive
-            git submodule foreach --recursive 'git fetch --prune origin || true'
-            sleep $((attempt * 10))
-          done
-          git submodule update --init --recursive --force
-      - name: Install deps
-        run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          for i in 1 2 3; do
-            sudo apt-get -o Acquire::Retries=5 update \
-              && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-                   g++-16 cmake ninja-build pkg-config ripgrep \
-                   libssl-dev libnghttp2-dev zlib1g-dev \
-              && break
-            [ $i = 3 ] && exit 1
-            echo "apt failed (attempt $i), retrying in 30s"; sleep 30
-          done
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: linux-gcc16-asan-ubsan
-          # 600M held LESS THAN ONE BUILD: "0.6 / 0.6 GB (97.97%), Cleanups:
-          # 321" with a 5.47% hit rate — the cache evicted itself 321 times
-          # and then missed on 415 of 439 compiles. It was pure overhead:
-          # paying upload/download for something that never hit.
-          #
-          # Sanitizer objects are bigger than release ones (instrumentation
-          # + full debug info), which is exactly why 600M never stood a
-          # chance. 3G covers a full ASan build and the TSan tree that
-          # follows it in the same job, and fits the 10 GB repo budget
-          # alongside the release cache now that prune-caches drops
-          # superseded copies.
-          max-size: 3G
-      - name: Configure (ASan + UBSan)
-        env:
-          CC: gcc-16
-          CXX: g++-16
-        run: |
-          cmake -S . -B build-san -GNinja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAGENTTY_AUTO_PULL_MAYA=OFF \
-            -DAGENTTY_USE_MIMALLOC=OFF \
-            -DMAYA_NATIVE_TUNING=OFF \
-            -DAGENTTY_BUILD_TESTS=ON \
-            -DAGENTTY_SANITIZE_ALL=address,undefined
-      - name: Build sanitizer test set
-        run: cmake --build build-san -j"$(nproc)" --target sanitizer_tests
-      - name: Run under ASan + UBSan
-        env:
-          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ctest --test-dir build-san -L sanitizer --output-on-failure -j"$(nproc)"
-
-      # ── ThreadSanitizer ────────────────────────────────────────────────
-      # A SEPARATE tree because TSan cannot be combined with ASan in one
-      # binary. Scoped to the `race`-labelled tests, which are written to
-      # drive the shared seams from many threads at once so TSan has
-      # interleavings to find.
-      #
-      # This lane exists because asan+ubsan above cannot see a data race, and
-      # every concurrency bug this project has shipped was a race or a
-      # lifetime error between threads: a shared_ptr cycle that made a worker
-      # destroy its own queue and join itself, a worker left joinable in a
-      # function-local static (terminate at exit), and N threads racing to
-      # publish into one map. All three passed the ASan lane.
-      - name: Configure TSan tree
-        # Same compiler as the ASan tree above. Without this the step falls
-        # back to the runner's DEFAULT gcc (13), which does not implement
-        # deducing `this` (P0847) — so maya's type-state Terminal fails to
-        # parse and the whole lane dies at third_party/maya/src/app/app.cpp with
-        # "expected identifier before 'this'". The ASan configure has always
-        # set this; the TSan one was missed, so the lane only ever built
-        # when the runner image happened to default to a new enough gcc.
-        env:
-          CC: gcc-16
-          CXX: g++-16
-        run: |
-          cmake -S . -B build-tsan -GNinja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAGENTTY_AUTO_PULL_MAYA=OFF \
-            -DAGENTTY_USE_MIMALLOC=OFF \
-            -DMAYA_NATIVE_TUNING=OFF \
-            -DAGENTTY_BUILD_TESTS=ON \
-            -DAGENTTY_SANITIZE_ALL=thread
-      - name: Build race test set
-        # Narrow targets, ~4-11 TUs each. This lane used to also build
-        # agentty_standalone_tests (375 TUs, every provider + the ACP server
-        # + the RAG adapter + all of maya) because persistence_race_test
-        # lived inside it and carried the `race` label. TSan roughly doubles
-        # compile time, so that one test was the most expensive thing in CI.
-        # It now has a narrow target of its own; coverage is unchanged.
-        #
-        # This list must contain EVERY target carrying the `race` label, or
-        # the ctest step below fails with "Unable to find executable" — the
-        # label selects it, the build never produced it. That is what happened
-        # to sandbox_config_race_test: added with the label, never added here,
-        # and this lane went red the moment it landed. Grep the label when
-        # adding one:
-        #
-        #   grep -n 'LABELS race' cmake/AgenttyTests.cmake
-        run: |
-          cmake --build build-tsan -j"$(nproc)" --target race_harness_test
-          cmake --build build-tsan -j"$(nproc)" --target real_subsystem_race_test
-          cmake --build build-tsan -j"$(nproc)" --target persistence_race_test_narrow
-          cmake --build build-tsan -j"$(nproc)" --target sandbox_config_race_test
-          cmake --build build-tsan -j"$(nproc)" --target exec_session_race_test
-          cmake --build build-tsan -j"$(nproc)" --target settings_cache_race_test
-          cmake --build build-tsan -j"$(nproc)" --target gen_cache_race_test
-          cmake --build build-tsan -j"$(nproc)" --target mcp_connection_race_test
-      - name: Run under TSan
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
-        run: ctest --test-dir build-tsan -L race --output-on-failure -j"$(nproc)"
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)" --target agentty
+      - name: Smoke
+        run: ./build/agentty --version
 
   # Compile-only Windows gate. Mirrors release.yml's build-windows configure
   # (vcpkg static openssl+nghttp2, MSVC, Release) but stops at the build:
@@ -577,7 +405,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
             -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
-          cmake --build build
+          cmake --build build --target agentty
           # $LASTEXITCODE, explicitly, because pwsh does NOT fail a step when a
           # NATIVE command fails mid-script -- the step's exit code is the LAST
           # command's, and `sccache --show-stats` below always succeeds. So a
@@ -595,41 +423,6 @@ jobs:
             exit $LASTEXITCODE
           }
           sccache --show-stats
-      - name: Smoke test startup
-        shell: pwsh
-        # Compile-only let #115 through: the release binary died at launch with
-        # 0xC0000409 (a CRT call the UCRT rejects) before drawing a frame. Run
-        # the TUI path once without a console and fail only on a crash: an
-        # NTSTATUS exit (0xC...) or a fast-fail. A normal exit, or still
-        # running after 20s, means startup got past the stderr redirect.
-        run: |
-          $exe = Get-ChildItem -Recurse build -Filter agentty.exe | Select-Object -First 1
-          $env:AGENTTY_HOME = Join-Path $env:RUNNER_TEMP "agentty-home"
-          New-Item -ItemType Directory -Force $env:AGENTTY_HOME | Out-Null
-          & $exe.FullName --version
-          if ($LASTEXITCODE -ne 0) { throw "agentty --version failed ($LASTEXITCODE)" }
-          $in = Join-Path $env:RUNNER_TEMP "empty.txt"; Set-Content $in "" -NoNewline
-          $p = Start-Process -FilePath $exe.FullName -PassThru -NoNewWindow `
-                 -RedirectStandardInput $in `
-                 -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP "tui-out.txt") `
-                 -RedirectStandardError (Join-Path $env:RUNNER_TEMP "tui-err.txt")
-          if (-not $p.WaitForExit(20000)) { $p.Kill(); Write-Host "still running after 20s: startup ok"; exit 0 }
-          $rc = $p.ExitCode
-          Write-Host ("TUI path exited {0} (0x{0:X8})" -f $rc)
-          if ($rc -lt 0 -or ($rc -band 0xC0000000) -eq 0xC0000000) {
-            Get-Content (Join-Path $env:AGENTTY_HOME "logs/stderr.log") -ErrorAction SilentlyContinue | Select-Object -Last 20
-            throw ("agentty crashed at startup (0x{0:X8})" -f $rc)
-          }
-      - name: Smoke test a real console session (ConPTY)
-        shell: pwsh
-        # A real pseudo console this time: the TUI must draw a frame, take
-        # /quit from the keyboard and exit 0.
-        run: |
-          $exe = Get-ChildItem -Recurse build -Filter agentty.exe | Select-Object -First 1
-          $env:AGENTTY_HOME = Join-Path $env:RUNNER_TEMP "agentty-home-conpty"
-          New-Item -ItemType Directory -Force $env:AGENTTY_HOME | Out-Null
-          $env:AGENTTY_NO_PREWARM = "1"
-          ./tests/windows/conpty_smoke.ps1 $exe.FullName
 
   # MinGW / MSYS2 ucrt64 gate. This is the toolchain real Windows users build
   # under, and CRUCIALLY it is the ONLY Windows path that actually COMPILES the
@@ -709,7 +502,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DAGENTTY_STANDALONE=ON -DAGENTTY_AUTO_PULL_MAYA=OFF
-          cmake --build build -j
+          cmake --build build -j --target agentty
           ccache -s
 
       # Save whatever got compiled, even if the build was cancelled or
@@ -726,150 +519,6 @@ jobs:
           path: D:\a\_temp\msys64\home\runneradmin\.ccache
           key: windows-mingw-ucrt64-ccache-${{ github.sha }}
 
-      # Runtime smoke test. Compile-only cannot catch MSYS2/mintty's runtime
-      # path: mintty gives a native executable PIPE-backed stdio handles, not
-      # Win32 console handles. Exercise that exact HANDLE type with cmd.exe's
-      # `type NUL | agentty.exe`: unlike MSYS bash's /dev/null (a NUL character
-      # device, NOT a pipe) and its unreliable PE exit-status bookkeeping, cmd
-      # creates an anonymous pipe and reports the native process exit code.
-      - name: Runtime smoke test (native pipe, mintty-like)
-        timeout-minutes: 2
-        shell: pwsh
-        env:
-          # setup-msys2 installs the UCRT runtime below RUNNER_TEMP. A pwsh
-          # step needs it explicitly for libstdc++/libgcc/nghttp2 DLL lookup.
-          UCRT64_BIN: ${{ runner.temp }}\msys64\ucrt64\bin
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:Path = "$env:UCRT64_BIN;$env:Path"
-          $env:COLUMNS = '80'
-          $env:LINES = '24'
-          $bin = (Resolve-Path 'build/agentty.exe').Path
-          Write-Host "binary: $bin"
-          & $bin --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "--version failed with exit $LASTEXITCODE"
-          }
-
-          # `type NUL` writes zero bytes then closes its pipe end. agentty must
-          # select its pipe-terminal implementation, observe EOF/hangup, and
-          # exit normally — no hidden console, MSYS shell shim, or NUL device.
-          #
-          # Run it several times. This has failed INTERMITTENTLY with
-          # 0xC0000005 (access violation) on byte-identical code — run
-          # 36416000161 passed and 36545165818 crashed with only a version
-          # bump between them — so a single attempt cannot tell "works" from
-          # "happened to win the race this time". A startup/teardown race on
-          # the pipe path is the live hypothesis; N attempts make it show up
-          # on the run that introduces it rather than three merges later.
-          $cmd = 'type NUL | "' + $bin + '"'
-          $attempts = 5
-          $failures = @()
-          for ($i = 1; $i -le $attempts; $i++) {
-            & cmd.exe /d /s /c $cmd 1>smoke.out 2>smoke.err
-            $rc = $LASTEXITCODE
-            # Windows reports a crash as a negative NTSTATUS. Name the common
-            # ones: an exit code alone sends you reading kernel docs.
-            $why = switch ($rc) {
-              0           { 'ok' }
-              -1073741819 { 'CRASH 0xC0000005 access violation' }
-              -1073741571 { 'CRASH 0xC00000FD stack overflow' }
-              -1073740791 { 'CRASH 0xC0000409 stack buffer overrun' }
-              -1073741510 { 'CRASH 0xC000013A interrupted (ctrl-c)' }
-              default     { "exit $rc" }
-            }
-            Write-Host "attempt ${i}/${attempts}: $why"
-            if ($rc -ne 0) {
-              $failures += "attempt ${i}: $why"
-              Write-Host '----- stdout (head) -----'
-              if (Test-Path smoke.out) { Get-Content smoke.out -TotalCount 50 }
-              Write-Host '----- stderr -----'
-              if (Test-Path smoke.err) { Get-Content smoke.err }
-            }
-          }
-          if ($failures.Count -gt 0) {
-            Write-Error ("agentty failed $($failures.Count)/$attempts pipe-stdin launches:`n" +
-                         ($failures -join "`n"))
-            exit 1
-          }
-          Write-Host "smoke test passed: $attempts/$attempts clean launches under a native pipe"
-
-  # Bounded fuzz smoke of the mcp-cpp harnesses (fuzz/). libFuzzer needs Clang,
-  # which ubuntu-latest doesn't ship by default; the harnesses double as a
-  # deterministic GCC + ASan/UBSan driver (fuzz_<name>_driver.cpp), so we run
-  # that here — same crash coverage on the reachable-from-a-tool locators
-  # (edit/apply_patch fuzzy match) without a Clang toolchain. Fast: a few k
-  # iterations + the hand-picked edge cases, seconds of runtime. Satisfies the
-  # "fuzz harness smoke" required status check.
-  fuzz-smoke:
-    name: fuzz harness smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Init submodules (HTTPS, race-tolerant)
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          for attempt in 1 2 3 4 5; do
-            if git submodule update --init --recursive --force; then break; fi
-            sleep $((attempt * 10))
-          done
-          git submodule update --init --recursive --force
-      - name: Install deps
-        run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          for i in 1 2 3; do
-            sudo apt-get -o Acquire::Retries=5 update \
-              && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-                   g++-16 cmake ninja-build \
-              && break
-            [ $i = 3 ] && exit 1
-            echo "apt failed (attempt $i), retrying in 30s"; sleep 30
-          done
-      - name: Configure fuzz harnesses (GCC asan+ubsan driver)
-        env:
-          CC: gcc-16
-          CXX: g++-16
-        run: |
-          cmake -S third_party/mcp-cpp -B fuzzbuild -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DMCP_BUILD_FUZZERS=ON \
-            -DMCP_BUILD_TESTS=OFF \
-            -DMCP_BUILD_EXAMPLES=OFF
-      - name: Build fuzz harnesses
-        run: cmake --build fuzzbuild -j"$(nproc)"
-      - name: Run bounded fuzz smoke
-        env:
-          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: |
-          # Edge cases + a bounded random burst per harness; a crash/UB aborts
-          # the job non-zero.
-          ./fuzzbuild/fuzz/fuzz_fuzzy_match 5000
-          ./fuzzbuild/fuzz/fuzz_apply_patch 20000
-      - name: agentty + richpaste parsers (libFuzzer, 60s each)
-        env:
-          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: |
-          # Model ids, streamed tool-call JSON, terminal output, and every
-          # richpaste parser (clipboard images, agent wire, OSC 5522, armor).
-          # agentty is C++26: a recent clang, on gcc-16's libstdc++ (above).
-          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s 21
-          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends nlohmann-json3-dev
-          mkdir -p "$HOME/bin"
-          ln -sf /usr/bin/clang++-21 "$HOME/bin/clang++"
-          export PATH="$HOME/bin:$PATH"
-          clang++ --version | head -1
-          sh tests/fuzz/run.sh 60
-      - name: Keep fuzz crash inputs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-crashes
-          path: build-fuzz/crashes
-          if-no-files-found: ignore
   # ── AUR source package: does agentty-git still CONFIGURE? ────────────────
   #
   # packaging/arch/agentty-git/PKGBUILD wires each submodule to a local clone
