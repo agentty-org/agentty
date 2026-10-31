@@ -711,8 +711,7 @@ struct AgenttyApp {
                                                                 std::size_t cursor) {
         return ::agentty::app::detail::history_chunk(m, cursor);
     }
-    // How much to replay: what the terminal keeps anyway. See
-    // ui_prefs / terminal detection for the numbers.
+    // Replay limits: none by default (AGENTTY_REPLAY_ROWS sets one; 0 = off).
     static std::pair<int, std::size_t> scrollback_limits(const Model& m) {
         return ::agentty::app::detail::scrollback_replay_limits(m);
     }

@@ -7,6 +7,7 @@
 // only the runtime glue needs the full composite.
 
 #include <optional>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -960,12 +961,12 @@ struct Model {
         // Running under a cooperating editor host (AGENTTY_HOST=emacs or
         // INSIDE_EMACS with vterm): emit file-event OSCs.
         bool host_integration     = false;
-        // Scrollback replay caps (maya/render/scrollback_replay.hpp): how much
-        // history to print back after a width change. Matched to what the
-        // terminal keeps, so the replay isn't wasted work. Set once at launch
-        // from TERM_PROGRAM & co; AGENTTY_REPLAY_ROWS overrides (0 = off).
-        int         replay_max_rows  = 10'000;
-        std::size_t replay_max_bytes = 8u << 20;
+        // Scrollback replay limits (maya/render/scrollback_replay.hpp). No
+        // cap by default: the whole conversation is printed back and the
+        // terminal keeps what its own scrollback setting allows (no terminal
+        // reports that setting). AGENTTY_REPLAY_ROWS=0 turns replay off.
+        int         replay_max_rows  = std::numeric_limits<int>::max();
+        std::size_t replay_max_bytes = std::numeric_limits<std::size_t>::max();
         // Colour tier and background polarity the terminal reports (TERM,
         // COLORTERM, COLORFGBG, NO_COLOR). "auto" appearance resolves here.
         ui_prefs::Detected terminal;

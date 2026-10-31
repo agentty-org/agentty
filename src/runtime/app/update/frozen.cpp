@@ -48,6 +48,7 @@
 #include <utility>
 #include <vector>
 
+#include <maya/core/executor.hpp>
 #include <maya/dsl.hpp>
 #include <maya/element/text.hpp>   // maya::string_width (display-column count)
 #include <maya/platform/io.hpp>
@@ -991,9 +992,30 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     for (std::size_t k = lo; k < hi; ++k) {
         const Message& mm = msgs[k];
         if (mm.role == Role::Assistant && !mm.text.empty()
-            && !m.ui.view_cache.peek(m.d.current.id, mm.id)) {
-            settle_message_md_cached(m, mm);
+            && !m.ui.view_cache.peek(m.d.current.id, mm.id))
             settled_here.push_back(k);
+    }
+    // Parsing is the cold cost of a replay (messages this session never
+    // showed). Each message gets its own StreamingMarkdown, so: create the
+    // slots on this thread (the cache map is not thread-safe), then parse
+    // them in parallel. A widget touches only its own state.
+    if (!settled_here.empty()) {
+        // Parse into widgets this function owns, then hand them to the
+        // cache on this thread: no references into the cache map are held
+        // across the parallel part.
+        std::vector<std::shared_ptr<maya::StreamingMarkdown>> parsed(settled_here.size());
+        maya::exec::parallel_for(parsed.size(), [&](std::size_t j) {
+            auto w = std::make_shared<maya::StreamingMarkdown>();
+            w->set_content(msgs[settled_here[j]].text);
+            w->finish();
+            parsed[j] = std::move(w);
+        });
+        for (std::size_t j = 0; j < parsed.size(); ++j) {
+            const Message& mm = msgs[settled_here[j]];
+            auto& c = m.ui.view_cache.message_md(m.d.current.id, mm.id);
+            c.streaming         = std::move(parsed[j]);
+            c.last_settled_size = mm.text.size();
+            c.revealed_size     = mm.text.size();
         }
     }
     BlockSink sink;
