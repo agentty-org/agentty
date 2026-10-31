@@ -9,11 +9,13 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <maya/core/scroll_state.hpp>
 #include <maya/element/element.hpp>
 #include <maya/render/scrollback_ledger.hpp>
+#include <maya/render/scrollback_replay.hpp>
 
 #include "agentty/domain/catalog.hpp"
 #include "agentty/domain/smart_mode.hpp"
@@ -731,6 +733,19 @@ struct Model {
         // rebuilds each frame (bounded by the active turn).
         mutable ui::ViewCache view_cache;
 
+        // Scrollback replay: history blocks already built, per chunk start
+        // (message index) and a key over that chunk's content + turn number.
+        // A second resize serves the Elements from here and only re-lays
+        // them out; a changed message changes the key, so it's rebuilt.
+        // Cleared on thread swap (wholesale view_cache.clear() sites).
+        struct HistoryChunk {
+            std::uint64_t                  key = 0;
+            std::vector<maya::ReplayBlock> blocks;
+            std::size_t                    next = 0;
+        };
+        mutable std::unordered_map<std::size_t, HistoryChunk> history_chunks;
+        mutable ThreadId history_thread;
+
         // ── Scroll state for modal pickers ─────────────────────────────
         //
         // Storage for the scroll state of each modal picker. The picker
@@ -935,6 +950,12 @@ struct Model {
         // Running under a cooperating editor host (AGENTTY_HOST=emacs or
         // INSIDE_EMACS with vterm): emit file-event OSCs.
         bool host_integration     = false;
+        // Scrollback replay caps (maya/render/scrollback_replay.hpp): how much
+        // history to print back after a width change. Matched to what the
+        // terminal keeps, so the replay isn't wasted work. Set once at launch
+        // from TERM_PROGRAM & co; AGENTTY_REPLAY_ROWS overrides (0 = off).
+        int         replay_max_rows  = 10'000;
+        std::size_t replay_max_bytes = 8u << 20;
         // Colour tier and background polarity the terminal reports (TERM,
         // COLORTERM, COLORFGBG, NO_COLOR). "auto" appearance resolves here.
         ui_prefs::Detected terminal;

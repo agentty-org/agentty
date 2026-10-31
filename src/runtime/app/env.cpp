@@ -7,10 +7,12 @@
 
 #include "agentty/runtime/app/env.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 #include <maya/terminal/ansi.hpp>
 
@@ -74,6 +76,45 @@ bool detect_remote() noexcept {
     return false;
 }
 
+// How much history a width-change replay should print back: about what the
+// terminal keeps, since anything past its scrollback limit is thrown away.
+// Defaults per terminal (rows, bytes); AGENTTY_REPLAY_ROWS overrides the
+// rows (0 turns replay off). Ghostty and cmux keep scrollback by BYTES
+// (10 MB default), so their cap is in bytes.
+void read_replay_caps(Model::Env& e) noexcept {
+    auto eq = [](const char* name, const char* want) {
+        const char* v = std::getenv(name);
+        return v && std::string_view{v} == want;
+    };
+    int rows = 10'000;
+    std::size_t bytes = 8u << 20;
+    if (set("VSCODE_INJECTION") || eq("TERM_PROGRAM", "vscode")) {
+        rows = 1'000;                      // xterm.js default scrollback
+    } else if (set("GHOSTTY_RESOURCES_DIR") || eq("TERM_PROGRAM", "ghostty")
+               || set("CMUX_SOCKET_PATH") || set("CMUX_WORKSPACE_ID")) {
+        rows = 50'000; bytes = 9u << 20;    // 10 MB byte-limited scrollback
+    } else if (set("WT_SESSION")) {
+        rows = 9'001;                       // Windows Terminal default
+    } else if (set("WEZTERM_EXECUTABLE") || eq("TERM_PROGRAM", "WezTerm")) {
+        rows = 3'500;                       // WezTerm default
+    } else if (set("KITTY_WINDOW_ID")) {
+        rows = 2'000;                       // kitty default
+    } else if (set("ALACRITTY_WINDOW_ID") || set("ALACRITTY_LOG")) {
+        rows = 10'000;                      // Alacritty default
+    } else if (eq("TERM_PROGRAM", "iTerm.app")) {
+        rows = 10'000;
+    } else if (eq("TERM_PROGRAM", "Apple_Terminal")) {
+        rows = 10'000;
+    }
+    if (const char* v = std::getenv("AGENTTY_REPLAY_ROWS"); v && *v) {
+        char* end = nullptr;
+        const long n = std::strtol(v, &end, 10);
+        if (end && *end == '\0' && n >= 0) rows = static_cast<int>(std::min<long>(n, 1'000'000));
+    }
+    e.replay_max_rows  = rows;
+    e.replay_max_bytes = bytes;
+}
+
 }  // namespace
 
 Model::Env read_launch_env(Io io) noexcept {
@@ -94,6 +135,7 @@ Model::Env read_launch_env(Io io) noexcept {
     e.reveal_decorate     = on_unless_off("AGENTTY_REVEAL_DECORATE");
     e.painted_caret       = set("AGENTTY_PAINTED_CARET");
     e.host_integration    = ui::host::detect_integration();
+    read_replay_caps(e);
     e.terminal            = ui_prefs::detect(/*tty=*/true);
     e.settings            = settings::registry::read_env(io);
     {

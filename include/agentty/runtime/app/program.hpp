@@ -694,6 +694,35 @@ struct AgenttyApp {
     static bool needs_warmup(const Model& m) {
         return m.ui.needs_warmup_render;
     }
+
+    // Scrollback replay (maya/render/scrollback_replay.hpp). A width change
+    // wipes the terminal's scrollback; maya calls this on that frame and
+    // prints the history back, rewrapped, above the live canvas. Built from
+    // the same freeze code the live prefix uses, so it looks the same.
+    static std::vector<maya::ReplayBlock> scrollback_history(const Model& m) {
+        const auto t0 = std::chrono::steady_clock::now();
+        auto v = ::agentty::app::detail::build_history_blocks(m);
+        ::agentty::app::note_slow("scrollback_history", t0);
+        return v;
+    }
+    // Preferred by maya: newest-first chunks, so a capped replay of a long
+    // thread only builds the part it shows.
+    static maya::ScrollbackReplay::Chunk scrollback_history_chunk(const Model& m,
+                                                                std::size_t cursor) {
+        return ::agentty::app::detail::history_chunk(m, cursor);
+    }
+    // How much to replay: what the terminal keeps anyway. See
+    // ui_prefs / terminal detection for the numbers.
+    static std::pair<int, std::size_t> scrollback_limits(const Model& m) {
+        return ::agentty::app::detail::scrollback_replay_limits(m);
+    }
+    // The live prefix sits inside AppLayout's padding(1) and Conversation's
+    // padding(0, 1): two columns each side. Replayed history gets the same
+    // horizontal padding so its rows land on the exact columns they had.
+    static maya::Element scrollback_wrap(maya::Element e) {
+        using namespace maya::dsl;
+        return (v(std::move(e)) | padding(0, 2)).build();
+    }
 };
 
 static_assert(maya::Program<AgenttyApp>);

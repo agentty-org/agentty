@@ -37,6 +37,8 @@
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/app/update.hpp"
 
+#include <maya/print.hpp>
+
 #include <cstdio>
 #include <string>
 
@@ -154,6 +156,54 @@ int rehydrate_scrollback_test_main() {
           "the trim COMMITS the dropped rows (scrollback, not /dev/null)");
     check(trimmed_rows <= live * 2,
           "the live canvas is bounded after the trim");
+
+    // 5. Scrollback replay: after a width change wipes scrollback, the
+    //    history source must give back EVERY message the trim dropped, in
+    //    order, and nothing still in the live prefix (no duplicates).
+    {
+        const std::size_t live_start =
+            static_cast<std::size_t>(m.ui.frozen.source(0)) - 1;
+        check(m.ui.frozen.source(0) > 0, "live prefix blocks carry their source message");
+        check(live_start > 0 && live_start < m.d.current.messages.size(),
+              "the trim moved the live prefix past the start");
+
+        const auto ledger_before   = m.ui.frozen.size();
+        const auto through_before  = m.ui.frozen_through;
+        const auto turn_before     = m.ui.frozen_turn;
+        const auto blocks = detail::build_history_blocks(m);
+        check(!blocks.empty(), "history is non-empty");
+        check(m.ui.frozen.size() == ledger_before
+              && m.ui.frozen_through == through_before
+              && m.ui.frozen_turn == turn_before,
+              "building history leaves the live prefix untouched");
+
+        // Render the history and find each message's text in order.
+        std::string all;
+        for (const auto& b : blocks) all += maya::render_to_string(b.element, 100) + "\n";
+        std::size_t at = 0;
+        bool order = true;
+        int seen = 0;
+        for (std::size_t i = 0; i < live_start; ++i) {
+            const auto& msg = m.d.current.messages[i];
+            const std::string needle = msg.text.substr(0, msg.text.find('\n'));
+            const auto p = all.find(needle, at);
+            if (p == std::string::npos) { order = false; break; }
+            at = p + needle.size();
+            ++seen;
+        }
+        std::printf("  history: %zu blocks, %d of %zu dropped messages found in order\n",
+                    blocks.size(), seen, live_start);
+        check(order, "every dropped message is in the history, in order");
+        const auto& first_live = m.d.current.messages[live_start];
+        const std::string live_needle =
+            first_live.text.substr(0, first_live.text.find('\n'));
+        check(all.find(live_needle) == std::string::npos,
+              "nothing from the live prefix is duplicated in the history");
+        // Every turn block carries a cache key, so a second resize is cheap.
+        int keyed = 0;
+        for (const auto& b : blocks) keyed += b.hash != 0 ? 1 : 0;
+        check(keyed > 0, "history blocks are cache-keyed");
+    }
 
     if (failures) {
         std::printf("FAILED (%d)\n", failures);

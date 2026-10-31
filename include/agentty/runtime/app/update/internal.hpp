@@ -262,6 +262,21 @@ void rehydrate_frozen(Model& m);
 // For NewThread before a fresh-start submit.
 void clear_frozen(Model& m);
 
+// Scrollback replay (maya/render/scrollback_replay.hpp): the history ABOVE
+// the live frozen prefix, oldest first, built exactly as freeze_range built
+// it. The terminal calls this only on a frame that wipes scrollback (a width
+// change, reset_inline), so it never runs per frame. Reads the model and
+// may settle markdown for never-shown messages; touches no live state.
+[[nodiscard]] std::vector<maya::ReplayBlock> build_history_blocks(const Model& m);
+// The same history newest-first, one chunk of runs ending at `cursor` per
+// call (SIZE_MAX = at the live prefix). A capped replay only builds what
+// it keeps. Same output as build_history_blocks when concatenated.
+[[nodiscard]] maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor);
+// The replay's (max rows, max bytes), from Model::Env (terminal-aware).
+[[nodiscard]] inline std::pair<int, std::size_t> scrollback_replay_limits(const Model& m) {
+    return {m.env.replay_max_rows, m.env.replay_max_bytes};
+}
+
 // restyle_sealed_turns: re-publish the theme, drop built colours, and
 // rebuild the frozen prefix so EVERYTHING ON SCREEN carries the new
 // scheme. Runs on every arrow key in the theme browser, which is what
@@ -301,6 +316,8 @@ void restyle_sealed_turns(Model& m);
 // same auto-fold preset cached_markdown_for uses, and stamp the cache
 // sizes so the per-frame settled fast-path engages. Defined in stream.cpp.
 void settle_message_md(Model& m, const Message& msg);
+// Same, through a const Model (it only touches the mutable view cache).
+void settle_message_md_cached(const Model& m, const Message& msg);
 
 // Remote-session detection and the end-of-turn reveal-glide policy are
 // LAUNCH FACTS, captured once by init() into Model::env

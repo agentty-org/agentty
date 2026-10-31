@@ -40,20 +40,25 @@
 #include "agentty/runtime/app/update/internal.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <maya/dsl.hpp>
 #include <maya/element/text.hpp>   // maya::string_width (display-column count)
 #include <maya/platform/io.hpp>
 #include <maya/render/cache_id.hpp>
 #include <maya/render/scrollback_ledger.hpp>
+#include <maya/render/scrollback_replay.hpp>
 #include <maya/widget/conversation.hpp>
 #include <maya/widget/turn.hpp>
 
 #include "agentty/runtime/view/palette.hpp"
+#include "agentty/domain/ui_prefs.hpp"
 #include "agentty/runtime/view/thread/seam.hpp"
 #include "agentty/runtime/view/thread/turn/turn.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_body_preview.hpp"
@@ -529,9 +534,11 @@ std::size_t estimate_run_rows(const Model& m, std::size_t from, std::size_t to) 
 // exclusively from paint-recorded heights (ledger.harvest()), so a
 // measurement drift here costs at most one avoidable soft repaint,
 // never scrollback corruption.
+// `source` is 1 + the index of the first message the block was built from
+// (0 = none). Replay reads it to find where the live prefix starts.
 void push_frozen(Model& m, maya::Element e, std::size_t rows,
-                 bool separator = false) {
-    (void)m.ui.frozen.seal_measured(std::move(e), rows, separator);
+                 bool separator = false, std::uint64_t source = 0) {
+    (void)m.ui.frozen.seal_measured(std::move(e), rows, separator, source);
 }
 
 // Strip leading separator blocks so the sealed prefix always opens on
@@ -630,10 +637,25 @@ bool run_is_freezable(const Model& m, std::size_t from, std::size_t run_end) {
 // tail is EMPTY — nothing re-renders these runs and there is no seam to
 // match. It is also the path that needs it: the trim's atom is a block,
 // so one huge run pins the canvas at its own height forever.
-void freeze_range(Model& m, std::size_t from, std::size_t to,
-                  bool split_oversized_runs = false) {
+//
+// The building is shared with scrollback replay (build_history_blocks):
+// both walk the same runs and build the same Turns, so history replayed
+// after a resize is the same bytes it was when it first froze. `emit`
+// receives each block; `first_overall` says whether one was emitted yet.
+// Returns the index the walk stopped at (`to`, or the first run that
+// isn't settled yet).
+struct BlockSink {
+    // (element, estimated rows, separator, cache hash or 0, first message index)
+    std::function<void(maya::Element, std::size_t, bool, std::uint64_t, std::size_t)> emit;
+    bool any = false;
+    int  turn = 0;   // running assistant-turn number (frozen_turn)
+    bool drop_view_cache = true;   // live freeze only
+};
+
+std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
+                         bool split_oversized_runs, BlockSink& sink) {
     const std::size_t total = m.d.current.messages.size();
-    if (from >= to || to > total) return;
+    if (from >= to || to > total) return from;
     // Frozen Elements are painted once then blitted forever, so tool
     // bodies render with full content (show_all) here — unlike the live
     // tail, which elides to a window for per-frame cheapness.
@@ -646,24 +668,26 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
         }
         return false;
     };
+    std::size_t cur = from;   // the run being built (the blocks' source)
+    auto push = [&](maya::Element e, std::size_t rows, bool sep = false,
+                    std::uint64_t hash = 0) {
+        sink.emit(std::move(e), rows, sep, hash, cur);
+        sink.any = true;
+    };
 
     std::size_t i = from;
     while (i < to) {
+        cur = i;
         // Run boundary — shared with build_live_tail.
         const std::size_t run_end_global =
             ui::turn_run_end(m.d.current.messages, i);
         const std::size_t run_end = std::min(run_end_global, to);
 
         // Safety gate: if any tool in this run is not yet terminal,
-        // stop here. frozen_through advances to `i` (the start of
-        // the un-freezable run) so the next freeze_through call
-        // resumes here once the live path has settled it.
-        if (!run_is_freezable(m, i, run_end)) {
-            m.ui.frozen_through = i;
-            return;
-        }
+        // stop here; the caller resumes from `i` once it has settled.
+        if (!run_is_freezable(m, i, run_end)) return i;
 
-        const bool first_overall = m.ui.frozen.empty();
+        const bool first_overall = !sink.any;
 
         // Compaction divider, flanked by a full inter-turn gap on BOTH
         // sides — a leading gap for breathing room above (so the section
@@ -672,8 +696,8 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
         // frozen and live rows stay byte-identical across the freeze seam.
         if (needs_compaction_divider(i)) {
             if (!first_overall)
-                push_frozen(m, gap_row(), static_cast<std::size_t>(gap_rows()), /*separator=*/true);
-            push_frozen(m, compaction_divider_row(), 1, /*separator=*/true);
+                push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true);
+            push(compaction_divider_row(), 1, /*sep=*/true);
         }
 
         const Message& head = m.d.current.messages[i];
@@ -681,7 +705,7 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
         // Leading gap: one blank row before every turn except the
         // very first frozen row (avoid a top-of-thread gap).
         if (!first_overall) {
-            push_frozen(m, gap_row(), static_cast<std::size_t>(gap_rows()), /*separator=*/true);
+            push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true);
         }
 
         if (head.role == Role::Assistant) {
@@ -712,24 +736,24 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
             const std::size_t split_at = frozen_row_budget(m);
 
             if (split_oversized_runs && run_rows > split_at && (run_end - i) > 1) {
-                int turn_num = m.ui.frozen_turn + 1;
+                int turn_num = sink.turn + 1;
                 for (std::size_t sub = i; sub < run_end; ++sub) {
                     if (sub > i)
-                        push_frozen(m, gap_row(),
-                                    static_cast<std::size_t>(gap_rows()),
-                                    /*separator=*/true);
+                        push(gap_row(), static_cast<std::size_t>(gap_rows()),
+                             /*sep=*/true);
                     auto scfg = ui::turn_config_for_assistant_run(
                         sub, sub + 1, turn_num, m);
                     // Keyed on the SUB-RANGE, so each block caches
                     // independently and a later whole-run build cannot
                     // collide with a split one.
                     scfg.hash_id = ui::assistant_run_hash_id(m, sub, sub + 1);
-                    push_frozen(m, maya::Turn{std::move(scfg)}.build(),
-                                estimate_run_rows(m, sub, sub + 1));
+                    const std::uint64_t h = scfg.hash_id.hash();
+                    push(maya::Turn{std::move(scfg)}.build(),
+                         estimate_run_rows(m, sub, sub + 1), false, h);
                 }
-                ++m.ui.frozen_turn;
+                ++sink.turn;
             } else {
-                int turn_num = m.ui.frozen_turn + 1;
+                int turn_num = sink.turn + 1;
                 auto cfg = ui::turn_config_for_assistant_run(
                     i, run_end, turn_num, m);
 
@@ -740,12 +764,13 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
                 // bytes change — the key is stable for the lifetime of this
                 // entry.
                 cfg.hash_id = ui::assistant_run_hash_id(m, i, run_end);
-                push_frozen(m, maya::Turn{std::move(cfg)}.build(), run_rows);
-                ++m.ui.frozen_turn;
+                const std::uint64_t h = cfg.hash_id.hash();
+                push(maya::Turn{std::move(cfg)}.build(), run_rows, false, h);
+                ++sink.turn;
             }
         } else {
             // User / compaction-summary single-message Turn.
-            int turn_num = m.ui.frozen_turn;
+            int turn_num = sink.turn;
             auto cfg = ui::turn_config(head, i, turn_num, m,
                                        /*continuation=*/false,
                                        /*meta_override=*/{},
@@ -755,8 +780,9 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
                 .add(std::string_view{head.id.value})
                 .add(head.compute_render_key())
                 .build();
-            push_frozen(m, maya::Turn{std::move(cfg)}.build(),
-                        estimate_run_rows(m, i, run_end));
+            const std::uint64_t h = cfg.hash_id.hash();
+            push(maya::Turn{std::move(cfg)}.build(),
+                 estimate_run_rows(m, i, run_end), false, h);
         }
 
         // A frozen message is, by construction, no longer read from the
@@ -770,8 +796,9 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
         // error/cancel mid-reveal, or a run scrolling into the prefix
         // before its drain frame). This is what makes the settled map
         // self-emptying and its cap unnecessary. Idempotent no-op for the
-        // common case where the message had no cache entry.
-        for (std::size_t k = i; k < run_end; ++k) {
+        // common case where the message had no cache entry. Replay builds
+        // history that is already frozen and must not touch the live cache.
+        for (std::size_t k = i; sink.drop_view_cache && k < run_end; ++k) {
             const auto& mid = m.d.current.messages[k].id;
             m.ui.view_cache.drop(m.d.current.id, mid);
             // Sibling reasoning slot (turn.cpp's MdView::Reasoning keys the
@@ -782,8 +809,24 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
 
         i = run_end;
     }
+    return to;
+}
 
-    m.ui.frozen_through = to;
+void freeze_range(Model& m, std::size_t from, std::size_t to,
+                  bool split_oversized_runs = false) {
+    BlockSink sink;
+    sink.any  = !m.ui.frozen.empty();
+    sink.turn = m.ui.frozen_turn;
+    sink.emit = [&m](maya::Element e, std::size_t rows, bool sep, std::uint64_t,
+                     std::size_t msg) {
+        push_frozen(m, std::move(e), rows, sep, static_cast<std::uint64_t>(msg) + 1);
+    };
+    const std::size_t stopped = build_blocks(m, from, to, split_oversized_runs, sink);
+    m.ui.frozen_turn = sink.turn;
+    // A stop before `to` is the un-settled run: frozen_through parks there
+    // so the next freeze_through resumes once the live path settles it.
+    if (from < to && to <= m.d.current.messages.size())
+        m.ui.frozen_through = stopped;
 }
 
 } // namespace
@@ -791,6 +834,186 @@ void freeze_range(Model& m, std::size_t from, std::size_t to,
 void freeze_through(Model& m, std::size_t live_start) {
     if (live_start <= m.ui.frozen_through) return;
     freeze_range(m, m.ui.frozen_through, live_start);
+}
+
+// ── Scrollback replay source ──────────────────────────────────────────────────────
+// Messages [0, live prefix start) as sealed blocks, built the same way
+// freeze_range builds them, so a resize replays history byte-identical to
+// how it first froze. Never touches live state: its own turn counter, no
+// view-cache drops of live entries, no ledger writes.
+std::size_t history_end(const Model& m) {
+    // The live prefix starts at the first ledger block's source message.
+    for (std::size_t k = 0; k < m.ui.frozen.size(); ++k)
+        if (const auto src = m.ui.frozen.source(k); src > 0)
+            return static_cast<std::size_t>(src - 1);
+    // Empty ledger: nothing was frozen, so nothing was trimmed away.
+    return 0;
+}
+
+std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
+    // Replay is a VIEW of the model: it reads messages and writes only the
+    // view cache, which is mutable for exactly this (view() does the same).
+    std::vector<maya::ReplayBlock> out;
+    const std::size_t end = std::min(history_end(m), m.d.current.messages.size());
+    if (end == 0) return out;
+    // Settle markdown for messages this session never showed (a resumed
+    // thread's skipped prefix), the same sync settle rehydrate uses so the
+    // folded heights match. Remember which ones we created so we can drop
+    // exactly those afterwards.
+    std::vector<std::size_t> settled_here;
+    for (std::size_t k = 0; k < end; ++k) {
+        const Message& mm = m.d.current.messages[k];
+        if (mm.role == Role::Assistant && !mm.text.empty()
+            && !m.ui.view_cache.peek(m.d.current.id, mm.id)) {
+            settle_message_md_cached(m, mm);
+            settled_here.push_back(k);
+        }
+    }
+    BlockSink sink;
+    sink.drop_view_cache = false;
+    // The rendered bytes also depend on the turn label ("turn N") and on
+    // relative timestamps ("4m ago"), which hash_id doesn't cover. Fold the
+    // turn number in, and the minute when timestamps are relative, so a
+    // cached block is never shown with a stale label.
+    const bool relative = agentty::ui_prefs::current().timestamps
+                          == agentty::ui_prefs::Timestamps::Relative;
+    const std::uint64_t minute = relative
+        ? static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::minutes>(
+              m.wall_at(maya::anim_now()).time_since_epoch()).count())
+        : 0;
+    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool,
+                                      std::uint64_t hash, std::size_t) {
+        if (hash != 0)
+            hash = maya::CacheIdBuilder{}
+                       .add(hash)
+                       .add(static_cast<std::uint64_t>(sink.turn))
+                       .add(minute)
+                       .build().hash();
+        out.push_back(maya::ReplayBlock{hash, std::move(e)});
+    };
+    (void)build_blocks(m, 0, end, /*split_oversized_runs=*/true, sink);
+    // The seam: a gap separates the last history turn from the live
+    // prefix's first turn. drop_leading_separators normally strips the live
+    // prefix's leading gap, so the history supplies it; if the live prefix
+    // still opens on a separator, it already has one. The live frame opens
+    // with AppLayout's top padding row, which stands in for the gap's
+    // trailing blank, so the history adds the gap minus that row.
+    if (!out.empty() && !m.ui.frozen.empty() && !m.ui.frozen.separator_at(0)) {
+        using namespace maya::dsl;
+        if (gap_rows() > 1)
+            out.push_back(maya::ReplayBlock{0, v(blank(), maya::Conversation::divider()).build()});
+        else
+            out.push_back(maya::ReplayBlock{0, maya::Conversation::divider()});
+    }
+    // The sealed Elements hold their own markdown trees; the cache entries
+    // settled just for this are dead weight. Drop them.
+    for (std::size_t k : settled_here)
+        m.ui.view_cache.drop(m.d.current.id, m.d.current.messages[k].id);
+    return out;
+}
+
+// The same history, pulled newest-first a chunk at a time, so a replay with
+// a row cap only builds what it shows. `cursor` is the message index the
+// previous chunk started at (SIZE_MAX = start at the live prefix). Each
+// chunk covers whole runs ending at `cursor`, about kChunkRuns of them.
+maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) {
+    maya::ScrollbackReplay::Chunk out;
+    const auto& msgs = m.d.current.messages;
+    const std::size_t live = std::min(history_end(m), msgs.size());
+    const std::size_t hi = std::min(cursor, live);
+    if (hi == 0) return out;
+
+    // Walk back over whole runs. turn_run_end goes forward, so step back to
+    // each run's first message: a run is a maximal same-role assistant
+    // stretch, or one non-assistant message.
+    constexpr int kChunkRuns = 24;
+    std::size_t lo = hi;
+    for (int r = 0; r < kChunkRuns && lo > 0; ++r) {
+        std::size_t s = lo - 1;
+        if (msgs[s].role == Role::Assistant)
+            while (s > 0 && msgs[s - 1].role == Role::Assistant) --s;
+        lo = s;
+    }
+
+    const bool relative = agentty::ui_prefs::current().timestamps
+                          == agentty::ui_prefs::Timestamps::Relative;
+    const std::uint64_t minute = relative
+        ? static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::minutes>(
+              m.wall_at(maya::anim_now()).time_since_epoch()).count())
+        : 0;
+
+    // Built Elements from an earlier replay are reused: the key covers every
+    // message's id + render key in [lo, hi), the theme epoch, the turn-label
+    // inputs, and whether this chunk carries the seam. Anything that would
+    // change the rendered tree changes the key.
+    if (m.ui.history_thread != m.d.current.id) {
+        m.ui.history_chunks.clear();
+        m.ui.history_thread = m.d.current.id;
+    }
+    const bool seam = cursor == SIZE_MAX;
+    maya::CacheIdBuilder kb;
+    kb.add(static_cast<std::uint64_t>(hi)).add(minute)
+      .add(static_cast<std::uint64_t>(maya::theme::live_epoch()))
+      .add(static_cast<std::uint64_t>(gap_rows()))
+      .add(static_cast<std::uint64_t>(seam && !m.ui.frozen.separator_at(0)));
+    for (std::size_t k = lo; k < hi; ++k) {
+        kb.add(std::string_view{msgs[k].id.value});
+        kb.add(msgs[k].compute_render_key());
+    }
+    const std::uint64_t key = kb.build().hash();
+    if (auto it = m.ui.history_chunks.find(lo); it != m.ui.history_chunks.end()
+        && it->second.key == key) {
+        out.blocks = it->second.blocks;   // Elements are shared handles: cheap
+        out.next   = it->second.next;
+        return out;
+    }
+
+    // Turn number at `lo`: assistant runs before it (rehydrate's rule).
+    int turn = 0;
+    for (std::size_t k = 0; k < lo;) {
+        const std::size_t e = ui::turn_run_end(msgs, k);
+        if (msgs[k].role == Role::Assistant) ++turn;
+        k = e;
+    }
+
+    std::vector<std::size_t> settled_here;
+    for (std::size_t k = lo; k < hi; ++k) {
+        const Message& mm = msgs[k];
+        if (mm.role == Role::Assistant && !mm.text.empty()
+            && !m.ui.view_cache.peek(m.d.current.id, mm.id)) {
+            settle_message_md_cached(m, mm);
+            settled_here.push_back(k);
+        }
+    }
+    BlockSink sink;
+    sink.drop_view_cache = false;
+    sink.turn = turn;
+    sink.any  = lo > 0;   // a gap above, unless this is the very first turn
+    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool,
+                                      std::uint64_t hash, std::size_t) {
+        if (hash != 0)
+            hash = maya::CacheIdBuilder{}
+                       .add(hash)
+                       .add(static_cast<std::uint64_t>(sink.turn))
+                       .add(minute)
+                       .build().hash();
+        out.blocks.push_back(maya::ReplayBlock{hash, std::move(e)});
+    };
+    (void)build_blocks(m, lo, hi, /*split_oversized_runs=*/true, sink);
+    // The first chunk (nearest the live prefix) ends with the seam gap.
+    if (cursor == SIZE_MAX && !out.blocks.empty() && !m.ui.frozen.empty()
+        && !m.ui.frozen.separator_at(0)) {
+        using namespace maya::dsl;
+        if (gap_rows() > 1)
+            out.blocks.push_back(maya::ReplayBlock{0, v(blank(), maya::Conversation::divider()).build()});
+        else
+            out.blocks.push_back(maya::ReplayBlock{0, maya::Conversation::divider()});
+    }
+    for (std::size_t k : settled_here)
+        m.ui.view_cache.drop(m.d.current.id, msgs[k].id);
+    out.next = lo;
+    m.ui.history_chunks[lo] = Model::UI::HistoryChunk{key, out.blocks, out.next};
+    return out;
 }
 
 // ── Incremental (mid-stream) body freeze — REMOVED ────────────────────

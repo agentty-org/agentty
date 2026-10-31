@@ -107,6 +107,13 @@ constexpr int kMaxTruncationRetries = 2;
 // m.env.reveal_end_glide().
 
 void settle_message_md(Model& m, const Message& msg) {
+    settle_message_md_cached(m, msg);
+}
+
+// The same settle through a const Model: it only writes the view cache,
+// which is mutable (view() populates it the same way). Used by scrollback
+// replay, which reads the model and must not need a Model&.
+void settle_message_md_cached(const Model& m, const Message& msg) {
     auto& cache = m.ui.view_cache.message_md(m.d.current.id, msg.id);
     if (!cache.streaming)
         cache.streaming = std::make_shared<maya::StreamingMarkdown>();
