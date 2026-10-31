@@ -733,18 +733,28 @@ struct Model {
         // rebuilds each frame (bounded by the active turn).
         mutable ui::ViewCache view_cache;
 
-        // Scrollback replay: history blocks already built, per chunk start
-        // (message index) and a key over that chunk's content + turn number.
-        // A second resize serves the Elements from here and only re-lays
-        // them out; a changed message changes the key, so it's rebuilt.
-        // Cleared on thread swap (wholesale view_cache.clear() sites).
+        // Scrollback replay: history blocks already built, per thread, per
+        // chunk start (message index), with a key over that chunk's content
+        // + turn number. A second resize (or switching back to a recent
+        // thread) serves the Elements from here and only re-lays them out;
+        // a changed message changes the key, so it's rebuilt. The last few
+        // threads are kept (kHistoryThreads), oldest dropped.
         struct HistoryChunk {
             std::uint64_t                  key = 0;
             std::vector<maya::ReplayBlock> blocks;
             std::size_t                    next = 0;
         };
-        mutable std::unordered_map<std::size_t, HistoryChunk> history_chunks;
-        mutable ThreadId history_thread;
+        struct ThreadHistory {
+            ThreadId id;
+            std::unordered_map<std::size_t, HistoryChunk> chunks;
+        };
+        static constexpr std::size_t kHistoryThreads = 4;
+        mutable std::vector<ThreadHistory> history;   // most recent first
+        // The width changed while a turn was running. The replay that ran
+        // then rewrapped history, but the live turn's rows that had already
+        // scrolled off were printed at the old width; once the turn settles
+        // and freezes, one more replay rewraps them too.
+        bool replay_after_settle = false;
 
         // ── Scroll state for modal pickers ─────────────────────────────
         //

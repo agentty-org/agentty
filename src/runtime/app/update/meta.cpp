@@ -373,6 +373,12 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             return Cmd::none();
         },
         [&](TerminalResized& e) -> Cmd {
+            // A width change mid-turn: maya replays history now, but the
+            // running turn's rows that already scrolled off stay at the old
+            // width. Replay once more after it settles (meta Tick).
+            if (e.cols > 0 && m.ui.term_cols > 0 && e.cols != m.ui.term_cols
+                && !m.s.is_idle())
+                m.ui.replay_after_settle = true;
             // A transient 0 from a detached tty keeps the last good value.
             if (e.cols > 0) m.ui.term_cols = e.cols;
             if (e.rows > 0) m.ui.term_rows = e.rows;
@@ -593,6 +599,14 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
                     // common collapse-only Tick, commit_scrollback(N) on
                     // the rarer Tick that also trims the front.
                     settle_freeze_trim = trim_frozen_if_oversized(m);
+                    // Resized during this turn: its scrolled-off rows were
+                    // printed at the old width. Now that it's frozen, a
+                    // replay rewraps everything (the trim's commit is moot
+                    // under the reset, which redraws from scratch).
+                    if (m.ui.replay_after_settle) {
+                        m.ui.replay_after_settle = false;
+                        settle_freeze_trim = cmd::reset_inline();
+                    }
 
                     // Keep the clock alive for a few frames so maya's
                     // shrink reconciliation (its own diff-path collapse)

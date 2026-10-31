@@ -923,17 +923,25 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     const std::size_t hi = std::min(cursor, live);
     if (hi == 0) return out;
 
-    // Walk back over whole runs. turn_run_end goes forward, so step back to
-    // each run's first message: a run is a maximal same-role assistant
-    // stretch, or one non-assistant message.
+    // Chunks sit on FIXED boundaries counted from the start of the thread
+    // (every kChunkRuns runs), so the same chunk is the same key however the
+    // live prefix moved: reopening a thread lands its window elsewhere, and
+    // live-relative chunks would never hit the cache again. Only the chunk
+    // touching the live prefix is cut short at `hi`.
     constexpr int kChunkRuns = 24;
-    std::size_t lo = hi;
-    for (int r = 0; r < kChunkRuns && lo > 0; ++r) {
-        std::size_t s = lo - 1;
-        if (msgs[s].role == Role::Assistant)
-            while (s > 0 && msgs[s - 1].role == Role::Assistant) --s;
-        lo = s;
+    std::vector<std::size_t> run_starts;   // starts of runs in [0, hi)
+    for (std::size_t k = 0; k < hi;) {
+        run_starts.push_back(k);
+        k = ui::turn_run_end(msgs, k);
     }
+    // The boundary at or below the last run start < hi.
+    const std::size_t last_run = run_starts.size() - 1;
+    const std::size_t first_run = last_run - (last_run % kChunkRuns);
+    const std::size_t lo = run_starts[first_run];
+    // Turn number at `lo`: assistant runs before it (rehydrate's rule).
+    int turn_at_lo = 0;
+    for (std::size_t r = 0; r < first_run; ++r)
+        if (msgs[run_starts[r]].role == Role::Assistant) ++turn_at_lo;
 
     const bool relative = agentty::ui_prefs::current().timestamps
                           == agentty::ui_prefs::Timestamps::Relative;
@@ -945,11 +953,20 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     // Built Elements from an earlier replay are reused: the key covers every
     // message's id + render key in [lo, hi), the theme epoch, the turn-label
     // inputs, and whether this chunk carries the seam. Anything that would
-    // change the rendered tree changes the key.
-    if (m.ui.history_thread != m.d.current.id) {
-        m.ui.history_chunks.clear();
-        m.ui.history_thread = m.d.current.id;
+    // change the rendered tree changes the key. Kept per thread (recent
+    // few), so switching back to a thread reuses what it built.
+    auto& hist = m.ui.history;
+    auto th = std::find_if(hist.begin(), hist.end(),
+                           [&](const auto& h) { return h.id == m.d.current.id; });
+    if (th == hist.end()) {
+        hist.insert(hist.begin(), Model::UI::ThreadHistory{m.d.current.id, {}});
+        if (hist.size() > Model::UI::kHistoryThreads) hist.pop_back();
+        th = hist.begin();
+    } else if (th != hist.begin()) {
+        std::rotate(hist.begin(), th, th + 1);   // most recent first
+        th = hist.begin();
     }
+    auto& chunks = th->chunks;
     const bool seam = cursor == SIZE_MAX;
     maya::CacheIdBuilder kb;
     kb.add(static_cast<std::uint64_t>(hi)).add(minute)
@@ -961,20 +978,14 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
         kb.add(msgs[k].compute_render_key());
     }
     const std::uint64_t key = kb.build().hash();
-    if (auto it = m.ui.history_chunks.find(lo); it != m.ui.history_chunks.end()
-        && it->second.key == key) {
+    if (auto it = chunks.find(lo); it != chunks.end() && it->second.key == key) {
         out.blocks = it->second.blocks;   // Elements are shared handles: cheap
         out.next   = it->second.next;
         return out;
     }
 
-    // Turn number at `lo`: assistant runs before it (rehydrate's rule).
-    int turn = 0;
-    for (std::size_t k = 0; k < lo;) {
-        const std::size_t e = ui::turn_run_end(msgs, k);
-        if (msgs[k].role == Role::Assistant) ++turn;
-        k = e;
-    }
+    // Turn number at `lo`: computed above with the run walk.
+    const int turn = turn_at_lo;
 
     std::vector<std::size_t> settled_here;
     for (std::size_t k = lo; k < hi; ++k) {
@@ -1012,7 +1023,7 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     for (std::size_t k : settled_here)
         m.ui.view_cache.drop(m.d.current.id, msgs[k].id);
     out.next = lo;
-    m.ui.history_chunks[lo] = Model::UI::HistoryChunk{key, out.blocks, out.next};
+    chunks[lo] = Model::UI::HistoryChunk{key, out.blocks, out.next};
     return out;
 }
 
