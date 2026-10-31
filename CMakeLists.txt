@@ -180,7 +180,7 @@ endif()
 # .cpp + a link.
 #
 # `agentty_objlib(NAME src...)` defines the lib, wires the include dir +
-# AGENTTY_VERSION define + the project compile flags, and links the
+# the project compile flags, and links the
 # header-providing libs as INTERFACE deps so transitive #includes resolve
 # during compilation (OBJECT libs don't link, but they DO need the
 # headers). maya/json/simdjson/nghttp2/openssl all expose their include
@@ -302,7 +302,8 @@ endif()
 function(agentty_objlib name)
     add_library(${name} OBJECT ${ARGN})
     target_include_directories(${name} PRIVATE include)
-    target_compile_definitions(${name} PRIVATE AGENTTY_VERSION="${PROJECT_VERSION}")
+    # No AGENTTY_VERSION here: only src/version.cpp sees it (set below), so a
+    # version bump recompiles one file instead of every TU.
     # No C++20 module scanning. This tree uses headers, not modules, so the
     # scan finds nothing -- but CMake still passes `-fmodule-mapper=<...>.modmap`
     # to every compile, and ccache classifies that as an UNSUPPORTED COMPILER
@@ -453,11 +454,10 @@ target_include_directories(agentty PRIVATE include)
 # uncacheable by ccache. main.cpp is compiled straight into this target, so it
 # needs the property too.
 set_target_properties(agentty PROPERTIES CXX_SCAN_FOR_MODULES OFF)
-# Bake the project version into the binary so `agentty --version` /
-# the User-Agent string don't drift from CMakeLists.txt's
-# `project(agentty VERSION X.Y.Z)`. Single source of truth — bumping
-# the project line bumps every site that reads the macro.
-target_compile_definitions(agentty PRIVATE AGENTTY_VERSION="${PROJECT_VERSION}")
+# The version lives in one TU (src/version.cpp, in agentty_io_obj); everything
+# else reads ::agentty::version(). Bumping project(VERSION) recompiles just it.
+set_source_files_properties(src/version.cpp PROPERTIES
+    COMPILE_DEFINITIONS AGENTTY_VERSION="${PROJECT_VERSION}")
 if(AGENTTY_MCP)
     # main.cpp branches on AGENTTY_MCP (the `mcp-serve` subcommand). The objlibs
     # get this macro via agentty_objlib(); main.cpp is compiled straight into

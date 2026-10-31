@@ -1,6 +1,7 @@
 // agentty::modelsdev — background snapshot of models.dev (see header).
 
 #include "agentty/util/modelsdev.hpp"
+#include "agentty/version.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -239,7 +240,7 @@ int refresh() {
     req.path   = "/api.json";
     req.headers = {
         {"accept", "application/json"},
-        {"user-agent", "agentty/" AGENTTY_VERSION},
+        {"user-agent", ::agentty::user_agent()},
     };
     req.max_body_bytes = kMaxBody;
     http::Timeouts tos;

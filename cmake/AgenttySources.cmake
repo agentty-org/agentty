@@ -21,6 +21,7 @@
 #   runtime/   — the Elm-style app: model, update, subscriptions, view tree.
 
 set(AGENTTY_IO_SOURCES
+    src/version.cpp
     src/io/http.cpp
     src/io/inflate.cpp
     src/io/tls.cpp

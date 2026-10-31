@@ -6,6 +6,7 @@
 // notifications over an rpc::Peer.
 
 #include "agentty/acp/server.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/digits.hpp"
 
 #include "agentty/util/base64.hpp"
@@ -68,9 +69,6 @@
 #include "agentty/mcp/client.hpp"
 #endif
 
-#ifndef AGENTTY_VERSION
-#define AGENTTY_VERSION "0.0.0-dev"
-#endif
 
 namespace agentty::acp {
 namespace {
@@ -1732,7 +1730,7 @@ a::InitializeResult AgentServer::on_initialize(const Cap&, const a::InitializePa
     negotiated_version_.store(r.protocolVersion, std::memory_order_relaxed);
 
     r.agentInfo = a::Just<a::ImplementationInfo>(
-        {"agentty", a::Nothing, a::Just<std::string>(AGENTTY_VERSION)});
+        {"agentty", a::Nothing, a::Just<std::string>(::agentty::version())});
 
     auto& caps = r.agentCapabilities;
     caps.loadSession = true;

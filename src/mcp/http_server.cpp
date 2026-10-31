@@ -25,6 +25,7 @@
 //   HTTP dependency into the SDK.
 
 #include "agentty/mcp/http_server.hpp"
+#include "agentty/version.hpp"
 #include "agentty/mcp/oauth.hpp"
 
 #include "agentty/io/http.hpp"
@@ -509,7 +510,7 @@ make_http_provider(const std::string& name, const HttpConfig& cfg, std::string& 
 
     ConnectionConfig cc;
     cc.name              = name;
-    cc.client_info       = ::mcp::Implementation{"agentty", AGENTTY_VERSION};
+    cc.client_info       = ::mcp::Implementation{"agentty", ::agentty::version()};
     cc.handshake_timeout = cfg.handshake_timeout;
     cc.call_timeout      = cfg.call_timeout;
     if (!cfg.workspace_root.empty()) {

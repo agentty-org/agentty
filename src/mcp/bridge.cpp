@@ -28,6 +28,7 @@
 //   ConnectionPool kept alive by a shared_ptr the execute() closures capture.
 
 #include "agentty/mcp/client.hpp"
+#include "agentty/version.hpp"
 #include "agentty/mcp/connection.hpp"
 #include "agentty/mcp/http_server.hpp"
 #include "agentty/scope/scope.hpp"
@@ -499,7 +500,7 @@ make_provider(const std::string& name, const json& spec) {
     if (spec.contains("env") && spec["env"].is_object())
         for (auto it = spec["env"].begin(); it != spec["env"].end(); ++it)
             spawn.env_kv.push_back(it.key() + "=" + as_str(it.value()));
-    cfg.client_info  = ::mcp::Implementation{"agentty", AGENTTY_VERSION};
+    cfg.client_info  = ::mcp::Implementation{"agentty", ::agentty::version()};
     cfg.call_timeout = call_timeout();
     if (const auto ms = spec.value("timeoutMs", 0L); ms > 0)
         cfg.call_timeout = std::chrono::milliseconds{ms};

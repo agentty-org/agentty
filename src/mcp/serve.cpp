@@ -20,6 +20,7 @@
 // agentty_mcp object library); the agentty-facing header is mcp-cpp-free.
 
 #include "agentty/mcp/serve.hpp"
+#include "agentty/version.hpp"
 
 #include "agentty/tool/tool.hpp"        // DynamicDispatch
 #include "agentty/tool/registry.hpp"    // registry(), ToolDef
@@ -39,9 +40,6 @@
 #  include <io.h>
 #endif
 
-#ifndef AGENTTY_VERSION
-#define AGENTTY_VERSION "0.0.0-dev"
-#endif
 
 namespace agentty::mcp {
 
@@ -108,7 +106,7 @@ using ::mcp::Json;
 
 int serve_stdio(const maya::unlocked& cap) {
     ::mcp::Server server(
-        ::mcp::Implementation{"agentty", AGENTTY_VERSION,
+        ::mcp::Implementation{"agentty", ::agentty::version(),
                               std::string("agentty native tools"),
                               ::mcp::Nothing, ::mcp::Nothing, ::mcp::Nothing});
     server.set_capabilities(::mcp::ServerCapabilities{

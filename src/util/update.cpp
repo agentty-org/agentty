@@ -4,6 +4,7 @@
 // See include/agentty/util/update.hpp for the design contract.
 
 #include "agentty/util/update.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/digits.hpp"
 
 #include "agentty/util/user_root.hpp"   // user_cache_dir()
@@ -27,9 +28,6 @@
 #include <sys/stat.h>   // chmod
 #endif
 
-#ifndef AGENTTY_VERSION
-#define AGENTTY_VERSION "0.0.0"
-#endif
 
 namespace agentty::update {
 
@@ -65,7 +63,7 @@ HttpResult https_get(std::string_view host, std::string_view path,
     req.path   = std::string{path};
     req.headers = {
         {"accept", "application/vnd.github+json"},
-        {"user-agent", "agentty-updater/" AGENTTY_VERSION},
+        {"user-agent", std::string{"agentty-updater/"} + ::agentty::version()},
     };
     req.max_body_bytes = max_bytes;
     http::Timeouts tos;
@@ -139,7 +137,7 @@ bool version_less(const std::string& a, const std::string& b) {
     return false;
 }
 
-std::string current_version() { return AGENTTY_VERSION; }
+std::string current_version() { return ::agentty::version(); }
 
 std::string platform_asset() {
 #if defined(_WIN32)

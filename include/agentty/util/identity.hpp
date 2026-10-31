@@ -18,10 +18,7 @@
 // Copilot's editor block, on Endpoint::extra_headers.
 //
 // Not here (deliberately): the User-Agent string. "agentty/<version>" is
-// still built from the AGENTTY_VERSION macro at its nine call sites, because
-// that macro lives in io/http.hpp and hoisting it would mean http.hpp
-// depending on util/ or this file duplicating the fallback. Worth doing, but
-// as its own change — not smuggled in behind an attribution fix.
+// ::agentty::user_agent() in agentty/version.hpp, next to the version.
 
 #include <string_view>
 

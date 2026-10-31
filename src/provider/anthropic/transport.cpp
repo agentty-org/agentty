@@ -1,4 +1,5 @@
 #include "agentty/provider/anthropic/transport.hpp"
+#include "agentty/version.hpp"
 #include "agentty/provider/prompt.hpp"
 #include "agentty/provider/anthropic/sse.hpp"
 
@@ -70,8 +71,7 @@ using json = nlohmann::json;
 // key or another provider"), not one we quietly circumvent by masquerading.
 namespace headers {
     inline constexpr const char* anthropic_version = "2023-06-01";
-    // Honest identity — agentty says it is agentty.
-    inline constexpr const char* user_agent        = "agentty/" AGENTTY_VERSION;
+    // Honest identity — agentty says it is agentty (::agentty::user_agent()).
     inline constexpr const char* x_app             = "agentty";
 
     // Beta IDs are FEATURE flags, not identity spoofing — each unlocks a
@@ -216,7 +216,7 @@ http::Headers build_request_headers(const AuthHeader& auth,
         // accumulates. These standard directives preserve incremental frames.
         http::append_sse_no_buffer(h);
     }
-    h.push_back({"user-agent",     headers::user_agent});
+    h.push_back({"user-agent",     ::agentty::user_agent()});
     h.push_back({"x-app",          headers::x_app});
     h.push_back({"anthropic-version", headers::anthropic_version});
     h.push_back({"anthropic-dangerous-direct-browser-access", "true"});

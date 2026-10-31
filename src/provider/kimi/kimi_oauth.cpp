@@ -8,6 +8,7 @@
 //   /api/oauth/token (grant_type=refresh_token)
 
 #include "agentty/provider/kimi/kimi_oauth.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
 
 #include <atomic>
@@ -49,7 +50,7 @@ constexpr const char* kOAuthHost  = "auth.kimi.com";
 constexpr const char* kClientId   = "17e5f671-d194-4dfb-9706-5516cb48c098";
 constexpr const char* kDevicePath = "/api/oauth/device_authorization";
 constexpr const char* kTokenPath  = "/api/oauth/token";
-constexpr const char* kUserAgent  = "kimi_code_cli/" AGENTTY_VERSION;
+// User-Agent "kimi_code_cli/<agentty version>", built at the request.
 // X-Msh-Platform: Kimi's server routes the device-flow (device-approval page,
 // not a bare login) on this identifier. Must be exactly "kimi_code_cli".
 constexpr const char* kMshPlatform = "kimi_code_cli";
@@ -143,7 +144,7 @@ std::string device_id() {
 std::vector<std::pair<std::string, std::string>> device_headers_impl() {
     return {
         {"x-msh-platform",     kMshPlatform},
-        {"x-msh-version",      AGENTTY_VERSION},
+        {"x-msh-version",      ::agentty::version()},
         {"x-msh-device-name",  host_name()},
         {"x-msh-device-model", device_model()},
         {"x-msh-os-version",   os_version()},
@@ -190,7 +191,7 @@ HttpResult post_form(std::string_view path, std::string body) {
     req.headers = {
         {"accept",       "application/json"},
         {"content-type", "application/x-www-form-urlencoded"},
-        {"user-agent",   kUserAgent},
+        {"user-agent",   std::string{"kimi_code_cli/"} + ::agentty::version()},
     };
     for (auto& h : device_headers_impl()) req.headers.push_back({h.first, h.second});
     if (const auto& ov = http::agentty_oauth_host_override(); ov.active()) {

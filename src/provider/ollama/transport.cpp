@@ -12,6 +12,7 @@
 // arrives, salvage is disabled (the model can drive the real channel).
 
 #include "agentty/provider/ollama/transport.hpp"
+#include "agentty/version.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -59,7 +60,7 @@ http::Headers build_request_headers(const AuthHeader& auth) {
     http::Headers h;
     h.push_back({"accept", "application/json"});
     h.push_back({"content-type", "application/json"});
-    h.push_back({"user-agent", "agentty/" AGENTTY_VERSION});
+    h.push_back({"user-agent", ::agentty::user_agent()});
     // Ollama needs no auth by default, but a remote / proxied instance may
     // sit behind a bearer key — emit it the same way the OpenAI family does
     // (auth::bearer_token is the single source of truth for extraction).

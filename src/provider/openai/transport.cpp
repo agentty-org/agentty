@@ -20,6 +20,7 @@
 // StreamToolUseEnd when the index is superseded or the stream ends.
 
 #include "agentty/provider/openai/transport.hpp"
+#include "agentty/version.hpp"
 
 #include <maya/runtime.hpp>
 // The observation tables: every way this spec-less wire spells a field lives
@@ -2104,7 +2105,7 @@ http::Headers build_request_headers(const AuthHeader& auth,
     http::Headers h;
     h.push_back({"accept", "application/json"});
     h.push_back({"content-type", "application/json"});
-    h.push_back({"user-agent", "agentty/" AGENTTY_VERSION});
+    h.push_back({"user-agent", ::agentty::user_agent()});
     // Ask for an UNCOMPRESSED body. agentty's HTTP client does not decode
     // content-encodings (no gzip/deflate/br inflater), so a gateway that
     // gzips its JSON response — z.ai's GLM Coding Plan does this on /models

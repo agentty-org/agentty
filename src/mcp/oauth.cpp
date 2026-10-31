@@ -7,6 +7,7 @@
 // an at-rest-encrypted per-server token store.
 
 #include "agentty/mcp/oauth.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/user_root.hpp"
@@ -101,7 +102,7 @@ HttpOut do_http(http::HttpMethod method, const std::string& url,
     req.body      = body;
     req.max_body_bytes = 1ull * 1024 * 1024;   // metadata/token JSON is tiny
     req.headers.push_back({"accept", "application/json"});
-    req.headers.push_back({"user-agent", "agentty/" AGENTTY_VERSION});
+    req.headers.push_back({"user-agent", ::agentty::user_agent()});
     if (method == http::HttpMethod::Post)
         req.headers.push_back({"content-type",
             form ? "application/x-www-form-urlencoded" : "application/json"});

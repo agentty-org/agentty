@@ -25,6 +25,7 @@
 // this file is only the destination.
 
 #include "agentty/provider/openai/responses_site.hpp"
+#include "agentty/version.hpp"
 
 #include <string>
 #include <utility>
@@ -75,7 +76,7 @@ openai_target(const PendingTarget& p, const provider::Request& req) {
     t.headers = {
         {"content-type", "application/json"},
         {"accept",       "text/event-stream"},
-        {"user-agent",   "agentty/" AGENTTY_VERSION},
+        {"user-agent",   ::agentty::user_agent()},
         // The chat path learned this the hard way (issue #30): gateways gzip
         // responses even with no Accept-Encoding sent, and agentty's HTTP
         // client has no inflater on the streaming path. Ask for identity.

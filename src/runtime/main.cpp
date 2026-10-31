@@ -81,6 +81,7 @@
 #include "agentty/runtime/app/host.hpp"   // agentty::app::Host
 
 #include "agentty/acp/server.hpp"
+#include "agentty/version.hpp"
 #include "agentty/airgap/airgap.hpp"
 #include "agentty/util/logx.hpp"   // flight recorder dump in crash handler
 #include "agentty/util/teardown.hpp"
@@ -152,14 +153,7 @@ void rag_shutdown();
 
 namespace {
 
-// Compiled-in project version — populated by CMakeLists.txt's
-// target_compile_definitions(agentty PRIVATE AGENTTY_VERSION=...). The fallback
-// "0.0.0-dev" is only reached on a build that bypasses our CMake (e.g.
-// hand-invoked compiler), which keeps the binary self-describing instead
-// of a hard #error.
-#ifndef AGENTTY_VERSION
-#define AGENTTY_VERSION "0.0.0-dev"
-#endif
+// Compiled-in project version: ::agentty::version() (agentty/version.hpp).
 
 // ── Debug crash handler ───────────────────────────────────────────────────
 // In debug builds, install a SIGSEGV/SIGABRT handler that prints a
@@ -338,7 +332,7 @@ void fputs_utf8(FILE* f, std::string_view s) {
 }
 
 void print_version() {
-    std::printf("agentty %s\n", AGENTTY_VERSION);
+    std::printf("agentty %s\n", ::agentty::version());
     // Where diagnostics land, and whether they are being captured right now.
     // A user cannot send a log they cannot find, and `--version` is the first
     // thing anyone runs when asked "what are you on?" — so it is the one
@@ -378,7 +372,7 @@ int cmd_diagnostics() {
     };
 
     section("agentty");
-    out += std::string{"version: "} + AGENTTY_VERSION + "\n";
+    out += std::string{"version: "} + ::agentty::version() + "\n";
     out += std::string{"os: "} +
 #if defined(_WIN32)
         "windows"
@@ -612,7 +606,7 @@ int cmd_diagnostics() {
     (void)agentty::persistence::write_atomic(::agentty::IoAccess::grant(), path, out,
         {.durability = agentty::persistence::Durability::Atomic, .mode = 0600});
 
-    std::printf("agentty %s \u2014 diagnostics written\n", AGENTTY_VERSION);
+    std::printf("agentty %s \u2014 diagnostics written\n", ::agentty::version());
     if (const auto n = agentty::logx::redaction_count(); n > 0)
         std::printf("  %lu secret%s redacted\n", n, n == 1 ? "" : "s");
     if (agentty::logx::log_file().empty())
@@ -700,7 +694,7 @@ void print_usage() {
     auto doc = maya::vstack();
     doc.gap(0);
     auto body = doc(
-        text(std::string{"agentty "} + AGENTTY_VERSION) | Bold,
+        text(std::string{"agentty "} + ::agentty::version()) | Bold,
         blank(),
         text("usage: agentty [subcommand] [options]") | Dim,
         blank(),
@@ -1364,7 +1358,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // into runs; a shared log names the exact binary that produced it.
     {
         std::string banner;
-        banner += AGENTTY_VERSION;
+        banner += ::agentty::version();
 #if defined(NDEBUG)
         banner += " release";
 #else
@@ -1423,7 +1417,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
 
     AGT_LOG(General, Warn, "startup",
             "agentty {} os={} arch={} build={} pid={}",
-            AGENTTY_VERSION, os_name, arch_name, build_kind, pid_ll);
+            ::agentty::version(), os_name, arch_name, build_kind, pid_ll);
 
     if (args.subcommand == "help")    { print_usage();   return 0; }
     if (args.subcommand == "version") { print_version(); return 0; }

@@ -27,9 +27,6 @@
 
 #include <maya/runtime.hpp>
 
-#ifndef AGENTTY_VERSION
-#define AGENTTY_VERSION "0.0.0-dev"
-#endif
 
 namespace agentty::provider::copilot {
 namespace {

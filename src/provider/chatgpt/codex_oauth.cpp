@@ -1,4 +1,5 @@
 #include "agentty/provider/chatgpt/codex_oauth.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
 
 #include <algorithm>
@@ -102,7 +103,7 @@ PostResult post(std::string_view path, std::string body, bool json_body) {
         {"content-type", json_body ? "application/json"
                                    : "application/x-www-form-urlencoded"},
         {"accept",       "application/json"},
-        {"user-agent",   "agentty/" AGENTTY_VERSION},
+        {"user-agent",   ::agentty::user_agent()},
     };
     if (const auto& ov = http::agentty_oauth_host_override(); ov.active()) {
         req.dial_host = ov.host;

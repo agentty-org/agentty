@@ -49,7 +49,6 @@ define_property(DIRECTORY PROPERTY AGENTTY_T_PERF
 function(_agentty_test_link_full name)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/include)
     target_compile_definitions(${name} PRIVATE
-        AGENTTY_VERSION="${PROJECT_VERSION}"
         # Source path for the picker row-style convention guard: those rules
         # are view-layer style constants with no runtime seam to assert
         # against, so the test reads the source. The pickers were split into

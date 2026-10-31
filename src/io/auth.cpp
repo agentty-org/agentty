@@ -1,4 +1,5 @@
 #include "agentty/auth/auth.hpp"
+#include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
 
 #include "agentty/util/logx.hpp"
@@ -576,7 +577,7 @@ FormPostResult http_post_form(const std::string& url,
     hreq.headers = {
         {"content-type", "application/x-www-form-urlencoded"},
         {"accept",       "application/json"},
-        {"user-agent",   "agentty/" AGENTTY_VERSION},
+        {"user-agent",   ::agentty::user_agent()},
     };
     hreq.body = form_urlencode(fields);
     // OAuth token exchange/refresh response is a tiny JSON object

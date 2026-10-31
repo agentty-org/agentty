@@ -226,7 +226,7 @@ if(TARGET maya::app)
         $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 target_compile_definitions(sandbox_live_check PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 
 # ws_bind_probe: a hand-run answer to "is the workspace actually bound, and is
 # the rest of $HOME actually read-only" -- driven through run_shell_command
@@ -265,7 +265,7 @@ if(TARGET maya::app)
         $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 target_compile_definitions(ws_bind_probe PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 
 # exec_exit_probe: does a (sandboxed) command come back when it exits, or only
 # at its timeout? Same sources and rationale as ws_bind_probe; run by hand:
@@ -297,7 +297,7 @@ if(TARGET maya::app)
         $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 target_compile_definitions(exec_exit_probe PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 
 # sandbox_audit: what does agentty ACTUALLY enforce on THIS host?
 #
@@ -345,7 +345,7 @@ if(TARGET maya::app)
         $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 target_compile_definitions(sandbox_audit PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 
 agentty_fold_test(fork_test                TIMEOUT 30)
 agentty_fold_test(palette_render_probe     TIMEOUT 30)
@@ -643,7 +643,7 @@ target_include_directories(persistence_race_test_narrow PRIVATE
 target_link_libraries(persistence_race_test_narrow PRIVATE
     nlohmann_json::nlohmann_json simdjson::simdjson Threads::Threads maya::runtime)
 target_compile_definitions(persistence_race_test_narrow PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 add_test(NAME persistence_race_test_narrow COMMAND persistence_race_test_narrow)
 set_tests_properties(persistence_race_test_narrow PROPERTIES TIMEOUT 120 LABELS "race")
 
@@ -722,7 +722,7 @@ if(TARGET maya::app)
         $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 target_compile_definitions(sandbox_config_race_test PRIVATE
-    AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+    AGENTTY_MCP=0)
 add_test(NAME sandbox_config_race_test COMMAND sandbox_config_race_test)
 set_tests_properties(sandbox_config_race_test PROPERTIES TIMEOUT 120 LABELS "race")
 
@@ -761,7 +761,7 @@ if(TARGET mcp::tools)
             src/util/logx.cpp src/util/dbglog.cpp src/util/home_dir.cpp
             src/util/user_root.cpp src/util/teardown.cpp)
         target_compile_definitions(exec_session_race_sandboxed PRIVATE
-            EXEC_RACE_REAL_SANDBOX=1 AGENTTY_MCP=0 AGENTTY_VERSION="${PROJECT_VERSION}")
+            EXEC_RACE_REAL_SANDBOX=1 AGENTTY_MCP=0)
         target_include_directories(exec_session_race_sandboxed PRIVATE include)
         target_link_libraries(exec_session_race_sandboxed PRIVATE
             mcp::tools claybin nlohmann_json::nlohmann_json maya::app Threads::Threads)
