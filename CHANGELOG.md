@@ -4,6 +4,23 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Resizing the terminal keeps the whole conversation in scrollback.** A
+  width change (dragging the window edge, a cmux or tmux split, a sidebar
+  opening) wipes the terminal's scrollback, because every wrapped line is
+  wrong at the new width. agentty used to repaint only the last few
+  screens, so older turns were gone until you reopened the thread. Now the
+  whole conversation is printed back, rewrapped to the new width, in the
+  same frame.
+  - Dragging an edge replays once, at the final width.
+  - A resize during a reply replays again once that reply finishes, so it
+    is rewrapped too.
+  - There's no cap: the terminal keeps what its own scrollback setting
+    allows. `AGENTTY_REPLAY_ROWS` sets a limit; `0` turns replay off.
+- **Opening a thread shows all of it in scrollback**, not just the last few
+  screens. Switching back to a recently opened thread reuses what was
+  built, so it's quick.
+
 ## [0.9.38] - 2026-10-29
 
 ### Fixed
