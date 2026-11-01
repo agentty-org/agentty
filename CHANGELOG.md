@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.40] - 2026-11-01
+
 ### Added
 - **Continue your Codex and Claude Code conversations.** They show up in
   the thread list (Ctrl+J), marked `↗` with the tool's name. Enter brings
