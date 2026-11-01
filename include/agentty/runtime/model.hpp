@@ -751,6 +751,17 @@ struct Model {
         };
         static constexpr std::size_t kHistoryThreads = 4;
         mutable std::vector<ThreadHistory> history;   // most recent first
+        // Run starts of the current thread + the turn number at each, so
+        // every replay chunk finds its range in O(log n) instead of walking
+        // the thread from message 0. Rebuilt when the thread or its length
+        // changes.
+        struct RunIndex {
+            ThreadId                 thread;
+            std::size_t              msg_count = 0;
+            std::vector<std::size_t> starts;
+            std::vector<int>         turn_at;
+        };
+        mutable RunIndex history_runs;
         // The width changed while a turn was running. The replay that ran
         // then rewrapped history, but the live turn's rows that had already
         // scrolled off were printed at the old width; once the turn settles

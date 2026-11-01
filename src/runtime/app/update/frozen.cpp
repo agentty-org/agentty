@@ -675,6 +675,16 @@ std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
         sink.emit(std::move(e), rows, sep, hash, cur);
         sink.any = true;
     };
+    // Separators look the same wherever they sit (given the gap setting),
+    // so each kind has one stable key: rendered once, then served from
+    // the replay cache.
+    auto sep_key = [](std::string_view kind) {
+        return maya::CacheIdBuilder{}
+            .add(std::string_view{"agentty.sep"})
+            .add(kind)
+            .add(static_cast<std::uint64_t>(gap_rows()))
+            .build().hash();
+    };
 
     std::size_t i = from;
     while (i < to) {
@@ -697,8 +707,8 @@ std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
         // frozen and live rows stay byte-identical across the freeze seam.
         if (needs_compaction_divider(i)) {
             if (!first_overall)
-                push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true);
-            push(compaction_divider_row(), 1, /*sep=*/true);
+                push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true, sep_key("gap"));
+            push(compaction_divider_row(), 1, /*sep=*/true, sep_key("compaction"));
         }
 
         const Message& head = m.d.current.messages[i];
@@ -706,7 +716,7 @@ std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
         // Leading gap: one blank row before every turn except the
         // very first frozen row (avoid a top-of-thread gap).
         if (!first_overall) {
-            push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true);
+            push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true, sep_key("gap"));
         }
 
         if (head.role == Role::Assistant) {
@@ -741,7 +751,7 @@ std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
                 for (std::size_t sub = i; sub < run_end; ++sub) {
                     if (sub > i)
                         push(gap_row(), static_cast<std::size_t>(gap_rows()),
-                             /*sep=*/true);
+                             /*sep=*/true, sep_key("gap"));
                     auto scfg = ui::turn_config_for_assistant_run(
                         sub, sub + 1, turn_num, m);
                     // Keyed on the SUB-RANGE, so each block caches
@@ -882,9 +892,9 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
         ? static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::minutes>(
               m.wall_at(maya::anim_now()).time_since_epoch()).count())
         : 0;
-    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool,
+    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool sep,
                                       std::uint64_t hash, std::size_t) {
-        if (hash != 0)
+        if (hash != 0 && !sep)
             hash = maya::CacheIdBuilder{}
                        .add(hash)
                        .add(static_cast<std::uint64_t>(sink.turn))
@@ -902,9 +912,9 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
     if (!out.empty() && !m.ui.frozen.empty() && !m.ui.frozen.separator_at(0)) {
         using namespace maya::dsl;
         if (gap_rows() > 1)
-            out.push_back(maya::ReplayBlock{0, v(blank(), maya::Conversation::divider()).build()});
+            out.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()});
         else
-            out.push_back(maya::ReplayBlock{0, maya::Conversation::divider()});
+            out.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()});
     }
     // The sealed Elements hold their own markdown trees; the cache entries
     // settled just for this are dead weight. Drop them.
@@ -930,19 +940,30 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     // live-relative chunks would never hit the cache again. Only the chunk
     // touching the live prefix is cut short at `hi`.
     constexpr int kChunkRuns = 24;
-    std::vector<std::size_t> run_starts;   // starts of runs in [0, hi)
-    for (std::size_t k = 0; k < hi;) {
-        run_starts.push_back(k);
-        k = ui::turn_run_end(msgs, k);
+    // Run starts for the whole thread, computed once and reused by every
+    // chunk of this replay (and the next, until the thread grows).
+    auto& rs = m.ui.history_runs;
+    if (rs.thread != m.d.current.id || rs.msg_count != msgs.size()) {
+        rs.thread = m.d.current.id;
+        rs.msg_count = msgs.size();
+        rs.starts.clear();
+        rs.turn_at.clear();
+        int turn = 0;
+        for (std::size_t k = 0; k < msgs.size();) {
+            rs.starts.push_back(k);
+            rs.turn_at.push_back(turn);
+            if (msgs[k].role == Role::Assistant) ++turn;
+            k = ui::turn_run_end(msgs, k);
+        }
     }
-    // The boundary at or below the last run start < hi.
-    const std::size_t last_run = run_starts.size() - 1;
+    // The last run starting before `hi`, and the fixed boundary at or below it.
+    const auto it = std::lower_bound(rs.starts.begin(), rs.starts.end(), hi);
+    if (it == rs.starts.begin()) return out;
+    const std::size_t last_run  = static_cast<std::size_t>(it - rs.starts.begin()) - 1;
     const std::size_t first_run = last_run - (last_run % kChunkRuns);
-    const std::size_t lo = run_starts[first_run];
+    const std::size_t lo = rs.starts[first_run];
     // Turn number at `lo`: assistant runs before it (rehydrate's rule).
-    int turn_at_lo = 0;
-    for (std::size_t r = 0; r < first_run; ++r)
-        if (msgs[run_starts[r]].role == Role::Assistant) ++turn_at_lo;
+    const int turn_at_lo = rs.turn_at[first_run];
 
     const bool relative = agentty::ui_prefs::current().timestamps
                           == agentty::ui_prefs::Timestamps::Relative;
@@ -1022,9 +1043,11 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     sink.drop_view_cache = false;
     sink.turn = turn;
     sink.any  = lo > 0;   // a gap above, unless this is the very first turn
-    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool,
+    sink.emit = [&out, &sink, minute](maya::Element e, std::size_t, bool sep,
                                       std::uint64_t hash, std::size_t) {
-        if (hash != 0)
+        // Turn blocks mix in the turn label and clock; separators keep
+        // their shared per-kind key (build_blocks' sep_key).
+        if (hash != 0 && !sep)
             hash = maya::CacheIdBuilder{}
                        .add(hash)
                        .add(static_cast<std::uint64_t>(sink.turn))
@@ -1038,9 +1061,9 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
         && !m.ui.frozen.separator_at(0)) {
         using namespace maya::dsl;
         if (gap_rows() > 1)
-            out.blocks.push_back(maya::ReplayBlock{0, v(blank(), maya::Conversation::divider()).build()});
+            out.blocks.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()});
         else
-            out.blocks.push_back(maya::ReplayBlock{0, maya::Conversation::divider()});
+            out.blocks.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()});
     }
     for (std::size_t k : settled_here)
         m.ui.view_cache.drop(m.d.current.id, msgs[k].id);
