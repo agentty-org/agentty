@@ -105,11 +105,11 @@ namespace {
     return wire::home_dir();
 }
 
-// CLAUDE.md memory hierarchy — mirrors Claude Code's resolution
-// (binary near offset 134900):
+// CLAUDE.md memory hierarchy, same paths as Claude Code (see
+// wire::resolve_user_claude_md):
 //
-//   User    ~/CLAUDE.md             personal, all projects
-//   Project <cwd>/CLAUDE.md         committed, project-specific
+//   User    ~/.claude/CLAUDE.md     personal, all projects (~/CLAUDE.md fallback)
+//   Project <cwd>/CLAUDE.md + <cwd>/.claude/CLAUDE.md
 //   Local   <cwd>/CLAUDE.local.md   gitignored, personal-to-this-project
 //
 // Each tier is wrapped in its own tag so the model can tell them apart.
@@ -119,8 +119,11 @@ namespace {
 // memoized through read_memory_cached so the per-turn footprint is
 // 3× stat() + memcpy of the cached body, not 3× full read.
 [[nodiscard]] std::string collect_memory_blocks(Io) {
-    std::string user    = read_memory_cached(home_dir() / "CLAUDE.md");
-    std::string project = read_memory_cached(std::filesystem::path{"CLAUDE.md"});
+    const auto user_path = wire::resolve_user_claude_md();
+    std::string user    = user_path.empty() ? std::string{} : read_memory_cached(user_path);
+    std::string project = wire::join_project_claude_md(
+        read_memory_cached(std::filesystem::path{wire::kProjectClaudeMd[0]}),
+        read_memory_cached(std::filesystem::path{wire::kProjectClaudeMd[1]}));
     std::string local   = read_memory_cached(std::filesystem::path{"CLAUDE.local.md"});
 
     // Agent-authored memory (written by the `remember` tool, removed by

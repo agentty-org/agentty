@@ -44,6 +44,7 @@ set(AGENTTY_IO_SOURCES
     src/util/teardown.cpp
     src/util/home_dir.cpp
     src/util/user_root.cpp
+    src/util/toml_lite.cpp
     src/util/storage_lock.cpp
     src/util/self_exe.cpp
     src/util/update.cpp

@@ -727,7 +727,7 @@ void print_usage() {
                              "MCP client at `agentty mcp-serve`.", kCmdGutter),
         entry("  mcp import", "Copy another tool's MCP servers into "
                              "~/.agentty/mcp.json (`--from junie|claude|cursor|"
-                             "vscode`, `--dry-run`). No args lists what each "
+                             "vscode|codex`, `--dry-run`). No args lists what each "
                              "tool offers.", kCmdGutter),
         entry("  mcp-login <srv>", "Authorize an OAuth-gated MCP server from mcp.json "
                                    "(2026-07-28 OAuth 2.1 + PKCE via your browser).",

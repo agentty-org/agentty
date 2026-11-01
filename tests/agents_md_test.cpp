@@ -462,6 +462,50 @@ static void test_resolve_global_both_missing() {
     rm_tree(fake_home);
 }
 
+static void test_resolve_global_codex_fallback() {
+    // A Codex user's ~/.codex/AGENTS.md (or $CODEX_HOME/AGENTS.md) is read
+    // when neither agentty file exists.
+    const auto fake_home = fs::temp_directory_path() / ("agentty_test_home_codex_" +
+                          std::to_string(::getpid()));
+    fs::create_directories(fake_home);
+    write_file(fake_home / ".codex" / "AGENTS.md", "codex-global");
+    write_file(fake_home / "alt" / "AGENTS.md", "codex-home-env");
+    const char* orig_home = std::getenv("HOME");
+    const char* orig_ah = std::getenv("AGENTTY_HOME");
+    const std::string saved_ah = orig_ah ? orig_ah : "";
+    unsetenv("AGENTTY_HOME");
+    unsetenv("CODEX_HOME");
+    setenv("HOME", fake_home.string().c_str(), 1);
+    CHECK(wire::read_capped_file(wire::resolve_global_agents_md()) == "codex-global");
+    setenv("CODEX_HOME", (fake_home / "alt").string().c_str(), 1);
+    CHECK(wire::read_capped_file(wire::resolve_global_agents_md()) == "codex-home-env");
+    unsetenv("CODEX_HOME");
+    if (orig_home) setenv("HOME", orig_home, 1);
+    else unsetenv("HOME");
+    if (orig_ah) setenv("AGENTTY_HOME", saved_ah.c_str(), 1);
+    rm_tree(fake_home);
+}
+
+static void test_user_claude_md_path() {
+    // Claude Code keeps the user file at ~/.claude/CLAUDE.md; ~/CLAUDE.md is
+    // the fallback for setups that used agentty's old path.
+    const auto fake_home = fs::temp_directory_path() / ("agentty_test_home_claude_" +
+                          std::to_string(::getpid()));
+    fs::create_directories(fake_home);
+    const char* orig_home = std::getenv("HOME");
+    unsetenv("CLAUDE_CONFIG_DIR");
+    setenv("HOME", fake_home.string().c_str(), 1);
+    CHECK(wire::resolve_user_claude_md() == fake_home / "CLAUDE.md");
+    write_file(fake_home / ".claude" / "CLAUDE.md", "claude-user");
+    CHECK(wire::resolve_user_claude_md() == fake_home / ".claude" / "CLAUDE.md");
+    CHECK(wire::join_project_claude_md("a", "") == "a");
+    CHECK(wire::join_project_claude_md("", "b") == "b");
+    CHECK(wire::join_project_claude_md("a", "b") == "a\n\nb");
+    if (orig_home) setenv("HOME", orig_home, 1);
+    else unsetenv("HOME");
+    rm_tree(fake_home);
+}
+
 int main() {
     test_missing_returns_empty();
     test_wraps_content();
@@ -480,6 +524,8 @@ int main() {
     test_resolve_global_agentty_wins();
     test_resolve_global_fallback_to_agents_dir();
     test_resolve_global_both_missing();
+    test_resolve_global_codex_fallback();
+    test_user_claude_md_path();
     if (g_failures == 0) {
         std::printf("agents_md_test: all checks passed\n");
         return 0;

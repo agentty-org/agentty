@@ -8,12 +8,15 @@
 #include "agentty/tool/plugin.hpp"
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/logx.hpp"
+#include "agentty/util/toml_lite.hpp"
 #include "agentty/util/user_root.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <set>
 
 namespace agentty::mcp::import_ {
@@ -125,6 +128,94 @@ void scan_file(const fs::path& file, const fs::path& project,
     scan_claude_nested(doc, project, file, out);
 }
 
+// Codex keeps servers in TOML under [mcp_servers.<name>] with its own field
+// names. Map them onto ours; anything with no equivalent goes in `notes`.
+[[nodiscard]] json codex_entry(const json& c, std::vector<std::string>& notes) {
+    json e = json::object();
+    auto str = [&](const char* k) -> std::string {
+        auto it = c.find(k);
+        return it != c.end() && it->is_string() ? it->get<std::string>() : std::string{};
+    };
+    if (auto v = str("command"); !v.empty()) e["command"] = v;
+    if (auto v = str("url"); !v.empty()) {
+        e["url"]  = v;
+        e["type"] = "http";   // Codex's remote servers are streamable HTTP
+    }
+    if (auto v = str("cwd"); !v.empty()) e["cwd"] = v;
+    if (auto it = c.find("args"); it != c.end() && it->is_array()) e["args"] = *it;
+    if (auto it = c.find("env"); it != c.end() && it->is_object()) e["env"] = *it;
+    if (auto it = c.find("env_vars"); it != c.end() && it->is_array() && !it->empty())
+        notes.push_back("env_vars (forwarded from your shell) not copied; "
+                        "agentty servers inherit the environment");
+
+    json headers = json::object();
+    if (auto it = c.find("http_headers"); it != c.end() && it->is_object())
+        headers = *it;
+    // These live in env vars on purpose, so they are not copied into a file.
+    if (auto it = c.find("env_http_headers"); it != c.end() && it->is_object())
+        for (auto h = it->begin(); h != it->end(); ++h)
+            if (h->is_string())
+                notes.push_back("header " + h.key() + " comes from $"
+                                + h->get<std::string>() + "; add it under headers by hand");
+    if (auto v = str("bearer_token_env_var"); !v.empty())
+        notes.push_back("bearer token comes from $" + v
+                        + "; add an Authorization header by hand, or use agentty mcp-login");
+    if (!headers.empty()) e["headers"] = headers;
+
+    auto secs = [&](const char* k) -> long {
+        auto it = c.find(k);
+        if (it == c.end() || !it->is_number()) return 0;
+        return static_cast<long>(it->get<double>() * 1000.0);
+    };
+    if (long ms = secs("tool_timeout_sec"); ms > 0) e["timeoutMs"] = ms;
+    long start_ms = secs("startup_timeout_sec");
+    if (auto it = c.find("startup_timeout_ms"); it != c.end() && it->is_number_integer())
+        start_ms = it->get<long>();
+    if (start_ms > 0) e["connectTimeoutMs"] = start_ms;
+
+    json tools = json::object();
+    if (auto it = c.find("disabled_tools"); it != c.end() && it->is_array()) tools["exclude"] = *it;
+    if (!tools.empty()) e["tools"] = tools;
+    if (auto it = c.find("enabled_tools"); it != c.end() && it->is_array())
+        notes.push_back("enabled_tools not copied; agentty only has tools.exclude");
+
+    if (auto it = c.find("enabled"); it != c.end() && it->is_boolean() && !it->get<bool>())
+        e["disabled"] = true;
+    if (auto it = c.find("oauth"); it != c.end() && it->is_object())
+        if (auto id = it->find("client_id"); id != it->end() && id->is_string())
+            e["client_id"] = *id;
+    return e;
+}
+
+void scan_codex_file(const fs::path& file, std::vector<Found>& out,
+                     std::string& error, int& skipped) {
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) return;
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return;
+    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    json doc;
+    std::string why;
+    if (!util::toml_lite::parse(text, doc, why)) {
+        error = "could not parse " + file.string() + " (" + why + ")";
+        return;
+    }
+    auto servers = doc.find("mcp_servers");
+    if (servers == doc.end() || !servers->is_object()) return;
+    for (auto it = servers->begin(); it != servers->end(); ++it) {
+        if (!it->is_object()) { ++skipped; continue; }
+        std::vector<std::string> notes;
+        const json entry = codex_entry(*it, notes);
+        Found f;
+        if (translate(it.key(), entry, file, f)) {
+            f.notes = std::move(notes);
+            out.push_back(std::move(f));
+        } else {
+            ++skipped;
+        }
+    }
+}
+
 // The names agentty already has, so a scan can flag collisions without the
 // caller re-reading our own config.
 [[nodiscard]] std::set<std::string> our_server_names() {
@@ -154,21 +245,23 @@ std::string_view name_of(Tool t) noexcept {
         case Tool::ClaudeCode: return "claude";
         case Tool::Cursor:     return "cursor";
         case Tool::VsCode:     return "vscode";
+        case Tool::Codex:      return "codex";
     }
     return "?";
 }
 
 std::vector<Tool> all_tools() {
-    return {Tool::Junie, Tool::ClaudeCode, Tool::Cursor, Tool::VsCode};
+    return {Tool::Junie, Tool::ClaudeCode, Tool::Cursor, Tool::VsCode, Tool::Codex};
 }
 
 bool parse_tool(std::string_view s, Tool& out) noexcept {
-    for (Tool t : {Tool::Junie, Tool::ClaudeCode, Tool::Cursor, Tool::VsCode})
+    for (Tool t : {Tool::Junie, Tool::ClaudeCode, Tool::Cursor, Tool::VsCode, Tool::Codex})
         if (name_of(t) == s) { out = t; return true; }
     // Accept the obvious aliases rather than being pedantic about it.
     if (s == "jetbrains" || s == "intellij") { out = Tool::Junie; return true; }
     if (s == "claude-code")                  { out = Tool::ClaudeCode; return true; }
     if (s == "code")                         { out = Tool::VsCode; return true; }
+    if (s == "codex-cli" || s == "openai")   { out = Tool::Codex; return true; }
     return false;
 }
 
@@ -187,6 +280,12 @@ Locations locations_of(Tool t, const fs::path& home, const fs::path& project) {
         case Tool::VsCode:
             // No documented user-level file; workspace only.
             return {{}, project / ".vscode" / "mcp.json"};
+        case Tool::Codex: {
+            fs::path dir = home / ".codex";
+            if (const char* c = std::getenv("CODEX_HOME"); c && *c) dir = c;
+            return {home.empty() && dir == fs::path{".codex"} ? fs::path{} : dir / "config.toml",
+                    project / ".codex" / "config.toml"};
+        }
     }
     return {};
 }
@@ -199,7 +298,8 @@ Scan scan(Tool t, const fs::path& home, const fs::path& project) {
     for (const fs::path& p : {loc.user, loc.project}) {
         if (p.empty()) continue;
         s.looked_in.push_back(p);
-        scan_file(p, project, s.servers, s.error, s.skipped);
+        if (t == Tool::Codex) scan_codex_file(p, s.servers, s.error, s.skipped);
+        else                  scan_file(p, project, s.servers, s.error, s.skipped);
     }
     for (Found& f : s.servers) f.conflicts = existing.contains(f.name);
     AGT_LOG(Persist, Debug, "mcp", "import.scan {}: {} server(s) in {} path(s)",
@@ -247,10 +347,13 @@ void print_scan(const Scan& s) {
         return;
     }
     if (s.servers.empty()) { std::printf("  no servers\n"); return; }
-    for (const Found& f : s.servers)
+    for (const Found& f : s.servers) {
         std::printf("    %-20s %s%s\n", f.name.c_str(),
                     f.command.empty() ? f.url.c_str() : f.command.c_str(),
                     f.conflicts ? "   (agentty already has this name)" : "");
+        for (const std::string& n : f.notes)
+            std::printf("      note: %s\n", n.c_str());
+    }
     // Never drop an entry silently. "3 of 5 imported" with no explanation is
     // how someone concludes the import is broken.
     if (s.skipped > 0)
@@ -273,7 +376,7 @@ int cli(Io io, const maya::unlocked& cap, const std::vector<std::string>& argv) 
             std::printf(
                 "usage: agentty mcp import [--from <tool>] [--dry-run] [--force]\n\n"
                 "Copy another tool's MCP servers into ~/.agentty/mcp.json.\n"
-                "Known tools: junie (jetbrains), claude, cursor, vscode.\n\n"
+                "Known tools: junie (jetbrains), claude, cursor, vscode, codex.\n\n"
                 "With no --from, lists what every known tool offers.\n"
                 "A name agentty already has is left alone unless --force.\n");
             return 0;
@@ -293,7 +396,7 @@ int cli(Io io, const maya::unlocked& cap, const std::vector<std::string>& argv) 
         const auto scans = scan_all(home, project);
         if (scans.empty()) {
             std::printf("no MCP config found for any known tool.\n"
-                        "looked for: junie, claude, cursor, vscode\n");
+                        "looked for: junie, claude, cursor, vscode, codex\n");
             return 0;
         }
         for (const Scan& s : scans) print_scan(s);

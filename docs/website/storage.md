@@ -76,6 +76,9 @@ approve itself.
 - `.agents/` and `.claude/` (project and user): skills, agents and commands
   in the shared markdown format. Same files, no conversion.
 - `~/.claude.json`: only through `agentty mcp import --from claude`.
+- `~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, `~/.codex/AGENTS.md`: read live as
+  guidance, same as Claude Code and Codex read them.
+- `~/.codex/config.toml`: only through `agentty mcp import --from codex`.
 
 ### Outside both roots
 

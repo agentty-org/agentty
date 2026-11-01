@@ -500,6 +500,8 @@ make_provider(const std::string& name, const json& spec) {
     if (spec.contains("env") && spec["env"].is_object())
         for (auto it = spec["env"].begin(); it != spec["env"].end(); ++it)
             spawn.env_kv.push_back(it.key() + "=" + as_str(it.value()));
+    if (auto c = spec.find("cwd"); c != spec.end() && c->is_string())
+        spawn.cwd = c->get<std::string>();
     cfg.client_info  = ::mcp::Implementation{"agentty", ::agentty::version()};
     cfg.call_timeout = call_timeout();
     if (const auto ms = spec.value("timeoutMs", 0L); ms > 0)

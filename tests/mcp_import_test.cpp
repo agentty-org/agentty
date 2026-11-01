@@ -21,9 +21,11 @@
 
 #include "agentty/mcp/import.hpp"
 #include "agentty/tool/plugin.hpp"
+#include "agentty/util/toml_lite.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -331,4 +333,122 @@ TEST_CASE("scan_all skips tools with nothing to offer") {
     const auto found = imp::scan_all(dir, dir / "nowhere");
     CHECK(found.size() == 1, "exactly the tool that has something");
     CHECK(found.front().tool == imp::Tool::Junie);
+}
+
+TEST_CASE("toml_lite reads the subset Codex config uses") {
+    namespace tl = agentty::util::toml_lite;
+    json doc;
+    std::string err;
+    const bool ok = tl::parse(R"(# top comment
+model = "gpt-5"   # trailing
+effort = 'medium'
+n = 1_000
+hex = 0x1F
+f = 2.5
+on = true
+when = 1979-05-27T07:32:00Z
+
+[projects."/home/me/x"]
+trust_level = "trusted"
+
+[a.b]
+c.d = 1
+inline = { x = 1, y = [1, 2,
+  3,] }
+ml = """
+line one
+line two\
+   joined"""
+lit = '''C:\no\escape'''
+esc = "tab\there \u00e9"
+
+[[items]]
+name = "one"
+[[items]]
+name = "two"
+[items.sub]
+k = "v"
+)", doc, err);
+    REQUIRE(ok, err.c_str());
+    CHECK(doc["model"] == "gpt-5");
+    CHECK(doc["effort"] == "medium");
+    CHECK(doc["n"] == 1000);
+    CHECK(doc["hex"] == 31);
+    CHECK(doc["f"] == 2.5);
+    CHECK(doc["on"] == true);
+    CHECK(doc["when"] == "1979-05-27T07:32:00Z");
+    CHECK(doc["projects"]["/home/me/x"]["trust_level"] == "trusted");
+    CHECK(doc["a"]["b"]["c"]["d"] == 1);
+    CHECK(doc["a"]["b"]["inline"]["y"].size() == 3);
+    CHECK(doc["a"]["b"]["ml"] == "line one\nline twojoined");
+    CHECK(doc["a"]["b"]["lit"] == "C:\\no\\escape");
+    CHECK(doc["a"]["b"]["esc"] == "tab\there \xc3\xa9");
+    CHECK(doc["items"].size() == 2);
+    CHECK(doc["items"][1]["sub"]["k"] == "v");
+
+    CHECK(!tl::parse("a = 1\na = 2\n", doc, err), "duplicate keys are an error");
+    CHECK(err.find("line 2") != std::string::npos, "and the error names the line");
+    CHECK(!tl::parse("a = \"open\n", doc, err), "unterminated string");
+    CHECK(!tl::parse("a = 1 b = 2\n", doc, err), "junk after a value");
+}
+
+TEST_CASE("codex: config.toml servers map onto agentty's schema") {
+    const auto dir = sandbox("codex");
+    ::unsetenv("CODEX_HOME");
+    write_file(dir / ".codex" / "config.toml", R"(model = "gpt-5"
+
+[mcp_servers.docs]
+command = "npx"
+args = ["-y", "@acme/docs-mcp"]
+cwd = "/srv"
+env = { API_KEY = "k" }
+tool_timeout_sec = 45
+startup_timeout_sec = 20
+disabled_tools = ["delete_all"]
+enabled_tools = ["search"]
+
+[mcp_servers.remote]
+url = "https://mcp.example.com/mcp"
+http_headers = { "X-Team" = "core" }
+bearer_token_env_var = "REMOTE_TOKEN"
+enabled = false
+
+[mcp_servers.broken]
+note = "no transport"
+)");
+
+    const imp::Scan s = imp::scan(imp::Tool::Codex, dir, dir / "proj");
+    CHECK(s.error.empty(), s.error.c_str());
+    CHECK(s.skipped == 1, "an entry with no command or url is skipped and counted");
+
+    const auto* docs = by_name(s, "docs");
+    REQUIRE(docs != nullptr);
+    CHECK(docs->entry["command"] == "npx");
+    CHECK(docs->entry["args"].size() == 2);
+    CHECK(docs->entry["cwd"] == "/srv");
+    CHECK(docs->entry["env"]["API_KEY"] == "k");
+    CHECK(docs->entry["timeoutMs"] == 45000);
+    CHECK(docs->entry["connectTimeoutMs"] == 20000);
+    CHECK(docs->entry["tools"]["exclude"][0] == "delete_all");
+    CHECK(docs->notes.size() == 1, "enabled_tools has no equivalent, so it is noted");
+
+    const auto* remote = by_name(s, "remote");
+    REQUIRE(remote != nullptr);
+    CHECK(remote->entry["url"] == "https://mcp.example.com/mcp");
+    CHECK(remote->entry["type"] == "http");
+    CHECK(remote->entry["headers"]["X-Team"] == "core");
+    CHECK(!remote->entry["headers"].contains("Authorization"),
+          "an env-held token is never written to disk");
+    CHECK(remote->entry["disabled"] == true);
+    CHECK(remote->notes.size() == 1, "the bearer token is called out instead");
+}
+
+TEST_CASE("codex: a malformed config.toml refuses instead of importing part of it") {
+    const auto dir = sandbox("codex_bad");
+    ::unsetenv("CODEX_HOME");
+    write_file(dir / ".codex" / "config.toml",
+               "[mcp_servers.a]\ncommand = \"x\"\n[mcp_servers.b\n");
+    const imp::Scan s = imp::scan(imp::Tool::Codex, dir, dir / "proj");
+    CHECK(!s.error.empty());
+    CHECK(s.servers.empty());
 }

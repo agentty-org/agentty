@@ -184,10 +184,10 @@ Both files are plain JSONL you can inspect or hand-edit. Project scope is only o
 
 ## CLAUDE.md guidance
 
-On the Claude backend, agentty appends up to three user-authored guidance files to the system prompt (each capped at 64 KiB, mtime-cached):
+agentty appends up to three user-authored guidance files to the system prompt (each capped at 64 KiB, mtime-cached). The paths match Claude Code, so an existing setup works as-is:
 
-- `~/CLAUDE.md` — user tier (every workspace).
-- `<project>/CLAUDE.md` — project tier.
+- `~/.claude/CLAUDE.md` — user tier, every workspace (`$CLAUDE_CONFIG_DIR` if set). `~/CLAUDE.md` is still read when that file doesn't exist.
+- `<project>/CLAUDE.md` and `<project>/.claude/CLAUDE.md` — project tier; both are read when both exist.
 - `<project>/CLAUDE.local.md` — local tier (gitignore it for personal notes).
 
 ## AGENTS.md guidance
@@ -198,10 +198,11 @@ agentty resolves AGENTS.md in three tiers (lowest precedence → highest):
 
 ### Global scope (~/.agentty/AGENTS.md)
 
-Not part of the published spec (which is project-scoped only), but a pragmatic extension that major tools like Codex (`~/.codex/AGENTS.md`) and OpenCode (`~/.config/opencode/AGENTS.md`) implement. agentty checks two candidates in priority order — the first non-empty file wins:
+Not part of the published spec (which is project-scoped only), but a pragmatic extension that major tools like Codex (`~/.codex/AGENTS.md`) and OpenCode (`~/.config/opencode/AGENTS.md`) implement. agentty checks three candidates in priority order — the first non-empty file wins:
 
 1. `~/.agentty/AGENTS.md` — agentty-specific global guidance (highest priority).
-2. `~/.agents/AGENTS.md` — shared global guidance for any agent tool (fallback).
+2. `~/.agents/AGENTS.md` — shared global guidance for any agent tool.
+3. `~/.codex/AGENTS.md` — Codex's global file (`$CODEX_HOME/AGENTS.md` if set), so Codex users don't need to copy it.
 
 When present, the content is injected as an `<agents-md-global>` block **before** the project-level block, so project guidance overrides global. Capped at 64 KiB.
 
@@ -226,7 +227,7 @@ The walk starts from the agent's **cwd** (`project_root()`), not from the direct
 When AGENTS.md files are present, agentty injects them as separate blocks in the system prompt (low → high precedence):
 
 ```
-<agents-md-global>    ← ~/.agentty/AGENTS.md or ~/.agents/AGENTS.md (optional)
+<agents-md-global>    ← ~/.agentty, ~/.agents or ~/.codex AGENTS.md (optional)
 <agents-md>           ← <workspace_root>/AGENTS.md (project root)
 <agents-md-package>   ← nearest nested AGENTS.md (monorepo walk, optional)
 ```

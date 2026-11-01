@@ -262,16 +262,22 @@ tool_search_references(const ToolUse& tc) {
 // wins:
 //   1. ~/.agentty/AGENTS.md  — agentty-specific global guidance
 //   2. ~/.agents/AGENTS.md   — shared global guidance for any agent tool
+//   3. ~/.codex/AGENTS.md    — Codex's global file ($CODEX_HOME if set), so
+//                              a Codex user's rules carry over as-is
 //
 // Returns the path to the first existing non-empty file, or an empty path
-// when neither candidate exists.
+// when no candidate exists.
 [[nodiscard]] inline std::filesystem::path resolve_global_agents_md() noexcept {
     const auto home = home_dir();
     const auto root = ::agentty::util::user_root();
+    std::filesystem::path codex;
+    if (const char* c = std::getenv("CODEX_HOME"); c && *c) codex = c;
+    else if (!home.empty()) codex = home / ".codex";
 
     const std::filesystem::path candidates[] = {
         root.empty() ? std::filesystem::path{} : root / "AGENTS.md",
         home.empty() ? std::filesystem::path{} : home / ".agents" / "AGENTS.md",
+        codex.empty() ? std::filesystem::path{} : codex / "AGENTS.md",
     };
     for (const auto& p : candidates) {
         if (p.empty()) continue;
@@ -285,17 +291,42 @@ tool_search_references(const ToolUse& tc) {
     return {};
 }
 
+// Where the CLAUDE.md tiers live, matching Claude Code:
+//   User    ~/.claude/CLAUDE.md ($CLAUDE_CONFIG_DIR if set); ~/CLAUDE.md
+//           is still read when that is missing, for older setups
+//   Project ./CLAUDE.md, and ./.claude/CLAUDE.md (both, in that order)
+//   Local   ./CLAUDE.local.md
+[[nodiscard]] inline std::filesystem::path resolve_user_claude_md() noexcept {
+    const auto home = home_dir();
+    std::filesystem::path dir;
+    if (const char* c = std::getenv("CLAUDE_CONFIG_DIR"); c && *c) dir = c;
+    else if (!home.empty()) dir = home / ".claude";
+    std::error_code ec;
+    if (!dir.empty() && std::filesystem::is_regular_file(dir / "CLAUDE.md", ec))
+        return dir / "CLAUDE.md";
+    return home.empty() ? std::filesystem::path{} : home / "CLAUDE.md";
+}
+inline constexpr const char* kProjectClaudeMd[] = {"CLAUDE.md", ".claude/CLAUDE.md"};
+
+// Join the two project files; either may be empty.
+[[nodiscard]] inline std::string join_project_claude_md(std::string a, std::string b) {
+    if (a.empty()) return b;
+    if (!b.empty()) a += "\n\n" + b;
+    return a;
+}
+
 // The CLAUDE.md memory hierarchy — the "lite" wrapper (user/project/local
 // tiers only, no learned-memory / skills) that the local-model prompts share.
-//   User    ~/CLAUDE.md            personal, all projects
-//   Project <cwd>/CLAUDE.md        committed, project-specific
-//   Local   <cwd>/CLAUDE.local.md  gitignored, personal-to-this-project
-// Empty/missing tiers are elided; all-empty returns "". The intro line is a
-// parameter so callers can keep their exact wording (byte-identity matters —
-// this feeds the system prompt behind a cache breakpoint).
+// Paths are above. Empty/missing tiers are elided; all-empty returns "". The
+// intro line is a parameter so callers can keep their exact wording
+// (byte-identity matters — this feeds the system prompt behind a cache
+// breakpoint).
 [[nodiscard]] inline std::string claude_md_blocks(std::string_view intro) {
-    const std::string user    = read_capped_file(home_dir() / "CLAUDE.md");
-    const std::string project = read_capped_file(std::filesystem::path{"CLAUDE.md"});
+    const auto user_path      = resolve_user_claude_md();
+    const std::string user    = user_path.empty() ? std::string{} : read_capped_file(user_path);
+    const std::string project = join_project_claude_md(
+        read_capped_file(std::filesystem::path{kProjectClaudeMd[0]}),
+        read_capped_file(std::filesystem::path{kProjectClaudeMd[1]}));
     const std::string local   = read_capped_file(std::filesystem::path{"CLAUDE.local.md"});
     if (user.empty() && project.empty() && local.empty()) return {};
 

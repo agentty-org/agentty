@@ -69,12 +69,13 @@ enum class Tool : std::uint8_t {
     ClaudeCode, // ~/.claude.json (nested)    · ./.mcp.json
     Cursor,     // ~/.cursor/mcp.json         · .cursor/mcp.json
     VsCode,     // —                          · .vscode/mcp.json
+    Codex,      // ~/.codex/config.toml       · .codex/config.toml
 };
 
 [[nodiscard]] std::string_view name_of(Tool) noexcept;
 [[nodiscard]] std::vector<Tool> all_tools();
 
-// Parse `name` as a tool id ("junie", "claude", "cursor", "vscode").
+// Parse `name` as a tool id ("junie", "claude", "cursor", "vscode", "codex").
 [[nodiscard]] bool parse_tool(std::string_view, Tool& out) noexcept;
 
 // Where a tool keeps its config. Both may be empty if the tool has no such
@@ -104,6 +105,9 @@ struct Found {
     // guessing wrong would swap the command under an approved name — the
     // MCPoison shape, arriving through the front door.
     bool        conflicts = false;
+    // Settings from the source that agentty can't express, so the scan can
+    // say what didn't come across (Codex's env-var bearer tokens, say).
+    std::vector<std::string> notes;
 };
 
 // Everything a tool's configs offer, across both scopes.
