@@ -132,6 +132,17 @@ jobs:
             sleep $((attempt * 10))
           done
           git submodule update --init --recursive --force
+      - name: Add swap (heavy C++26 TUs + LTO link)
+        run: |
+          # The runner was killed for memory once (v0.9.39 aarch64: "lost
+          # communication with the server"). Swap turns that into slower,
+          # not dead.
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          free -g
       - name: Build static binary (Alpine edge / musl / clang 22)
         run: |
           docker run --rm --platform linux/amd64 \
@@ -160,7 +171,14 @@ jobs:
                     -DAGENTTY_STANDALONE=ON -DAGENTTY_FULLY_STATIC=ON \
                     -DAGENTTY_AUTO_PULL_MAYA=OFF -DAGENTTY_USE_MIMALLOC=OFF \
                     -DAGENTTY_ARCH="$CMARCH"
-              cmake --build build-rel -j"$(nproc)"
+              # One compile per ~2.5 GB of RAM: heavy C++26 TUs can each take
+              # 2 GB+, and running out of memory kills the runner silently.
+              mem_kb=$(awk "/MemTotal/{print \$2}" /proc/meminfo)
+              jobs=$(( mem_kb / 2621440 ))
+              if [ "$jobs" -lt 1 ]; then jobs=1; fi
+              if [ "$jobs" -gt "$(nproc)" ]; then jobs=$(nproc); fi
+              echo "building with -j$jobs (nproc=$(nproc), mem=$((mem_kb/1048576))G)"
+              cmake --build build-rel -j"$jobs"
               strip build-rel/agentty
               # ELF-shape guard: a correct static-PIE build is ET_DYN with no
               # PT_INTERP and no NEEDED. If the -static-pie link silently
@@ -228,6 +246,16 @@ jobs:
             sleep $((attempt * 10))
           done
           git submodule update --init --recursive --force
+      - name: Add swap (heavy C++26 TUs + LTO link)
+        run: |
+          # This leg died once with "the runner lost communication" mid-build
+          # (v0.9.39), the signature of running out of memory.
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          free -g
       - name: Build static binary (Alpine edge / musl / clang 22)
         # Host is already arm64, so a plain alpine:3.21 container builds
         # natively — no --platform, no QEMU.
@@ -258,7 +286,14 @@ jobs:
                     -DAGENTTY_STANDALONE=ON -DAGENTTY_FULLY_STATIC=ON \
                     -DAGENTTY_AUTO_PULL_MAYA=OFF -DAGENTTY_USE_MIMALLOC=OFF \
                     -DAGENTTY_ARCH="$CMARCH"
-              cmake --build build-rel -j"$(nproc)"
+              # One compile per ~2.5 GB of RAM: heavy C++26 TUs can each take
+              # 2 GB+, and running out of memory kills the runner silently.
+              mem_kb=$(awk "/MemTotal/{print \$2}" /proc/meminfo)
+              jobs=$(( mem_kb / 2621440 ))
+              if [ "$jobs" -lt 1 ]; then jobs=1; fi
+              if [ "$jobs" -gt "$(nproc)" ]; then jobs=$(nproc); fi
+              echo "building with -j$jobs (nproc=$(nproc), mem=$((mem_kb/1048576))G)"
+              cmake --build build-rel -j"$jobs"
               strip build-rel/agentty
               # Guard against the -static-pie spec bug (Debian #996326): a
               # broken link yields an ET_DYN that still has a PT_INTERP /
@@ -328,6 +363,14 @@ jobs:
           git submodule update --init --recursive --force
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
+      - name: Add swap (heavy C++26 TUs + LTO link)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          free -g
       - name: Build static binary (Alpine edge / musl / clang 22)
         run: |
           docker run --rm --platform linux/386 \
@@ -356,7 +399,14 @@ jobs:
                     -DAGENTTY_STANDALONE=ON -DAGENTTY_FULLY_STATIC=ON \
                     -DAGENTTY_AUTO_PULL_MAYA=OFF -DAGENTTY_USE_MIMALLOC=OFF \
                     -DAGENTTY_ARCH="$CMARCH"
-              cmake --build build-rel -j"$(nproc)"
+              # One compile per ~2.5 GB of RAM: heavy C++26 TUs can each take
+              # 2 GB+, and running out of memory kills the runner silently.
+              mem_kb=$(awk "/MemTotal/{print \$2}" /proc/meminfo)
+              jobs=$(( mem_kb / 2621440 ))
+              if [ "$jobs" -lt 1 ]; then jobs=1; fi
+              if [ "$jobs" -gt "$(nproc)" ]; then jobs=$(nproc); fi
+              echo "building with -j$jobs (nproc=$(nproc), mem=$((mem_kb/1048576))G)"
+              cmake --build build-rel -j"$jobs"
               strip build-rel/agentty
               if readelf -l build-rel/agentty | grep -q INTERP; then
                 echo "FATAL: binary has PT_INTERP (dynamic link, not static-pie)"; exit 1; fi
