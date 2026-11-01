@@ -900,7 +900,7 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
                        .add(static_cast<std::uint64_t>(sink.turn))
                        .add(minute)
                        .build().hash();
-        out.push_back(maya::ReplayBlock{hash, std::move(e)});
+        out.push_back(maya::make_replay_block(hash, std::move(e)));
     };
     (void)build_blocks(m, 0, end, /*split_oversized_runs=*/true, sink);
     // The seam: a gap separates the last history turn from the live
@@ -912,9 +912,9 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
     if (!out.empty() && !m.ui.frozen.empty() && !m.ui.frozen.separator_at(0)) {
         using namespace maya::dsl;
         if (gap_rows() > 1)
-            out.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()});
+            out.push_back(maya::make_replay_block(maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()));
         else
-            out.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()});
+            out.push_back(maya::make_replay_block(maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()));
     }
     // The sealed Elements hold their own markdown trees; the cache entries
     // settled just for this are dead weight. Drop them.
@@ -1053,7 +1053,7 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
                        .add(static_cast<std::uint64_t>(sink.turn))
                        .add(minute)
                        .build().hash();
-        out.blocks.push_back(maya::ReplayBlock{hash, std::move(e)});
+        out.blocks.push_back(maya::make_replay_block(hash, std::move(e)));
     };
     (void)build_blocks(m, lo, hi, /*split_oversized_runs=*/true, sink);
     // The first chunk (nearest the live prefix) ends with the seam gap.
@@ -1061,9 +1061,9 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
         && !m.ui.frozen.separator_at(0)) {
         using namespace maya::dsl;
         if (gap_rows() > 1)
-            out.blocks.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()});
+            out.blocks.push_back(maya::make_replay_block(maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), v(blank(), maya::Conversation::divider()).build()));
         else
-            out.blocks.push_back(maya::ReplayBlock{maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()});
+            out.blocks.push_back(maya::make_replay_block(maya::CacheIdBuilder{}.add(std::string_view{"agentty.sep.seam"}).add(static_cast<std::uint64_t>(gap_rows())).build().hash(), maya::Conversation::divider()));
     }
     for (std::size_t k : settled_here)
         m.ui.view_cache.drop(m.d.current.id, msgs[k].id);

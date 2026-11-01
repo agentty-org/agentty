@@ -179,7 +179,7 @@ int rehydrate_scrollback_test_main() {
 
         // Render the history and find each message's text in order.
         std::string all;
-        for (const auto& b : blocks) all += maya::render_to_string(b.element, 100) + "\n";
+        for (const auto& b : blocks) all += maya::render_to_string(b.element->front(), 100) + "\n";
         std::size_t at = 0;
         bool order = true;
         int seen = 0;
