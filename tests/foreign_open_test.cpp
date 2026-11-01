@@ -15,6 +15,7 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/panel/common.hpp"
+#include "agentty/runtime/panel/thread_filter.hpp"
 #include "agentty/runtime/view/thread/seam.hpp"
 #include "agtest.hpp"
 #include "agtest_fx.hpp"
@@ -139,6 +140,21 @@ TEST_CASE("foreign sessions: listed in ^J, opened, refreshed, and hideable") {
     // A native reload keeps the foreign rows.
     drive(m, ThreadsLoaded{{native}});
     CHECK(std::ranges::find(m.d.threads, sid, &Thread::id) != m.d.threads.end());
+
+    // ^O narrows to other tools' sessions and back.
+    {
+        auto* pp = m.ui.panel.get<pn::ThreadList>();
+        REQUIRE(pp != nullptr);
+        drive(m, ThreadListForeignToggle{});
+        CHECK(pp->only_foreign);
+        const auto only = ui::visible_threads(m.d.threads, "", "", true, true);
+        REQUIRE(only.size() == 1);
+        CHECK(m.d.threads[static_cast<std::size_t>(only[0])].id == sid);
+        drive(m, ThreadListForeignToggle{});
+        CHECK(!pp->only_foreign);
+        CHECK(ui::visible_threads(m.d.threads, "", "", true, false).size() == 2);
+        pp->index = 0;
+    }
 
     // 2. Enter on it imports it.
     auto* p = m.ui.panel.get<pn::ThreadList>();

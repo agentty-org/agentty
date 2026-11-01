@@ -583,6 +583,8 @@ struct ThreadListJump  { enum class Where { Home, End, PageUp, PageDown }; Where
 struct ThreadListSelect {};
 // Tab: this folder's threads <-> all threads.
 struct ThreadListScopeToggle {};
+// ^O: show only sessions from other tools (Codex, Claude Code), or all again.
+struct ThreadListForeignToggle {};
 // ← → scroll the peek a turn at a time; Shift jumps to the first / latest.
 struct ThreadPeekScroll { int delta; bool to_end = false; };
 // The settle timer fired for `id`: load it if the cursor is still there.
@@ -1458,7 +1460,7 @@ using ModelsMsg = std::variant<
 using ThreadListMsg = std::variant<
     OpenThreadList, CloseThreadList, ThreadListMove, ThreadListJump,
     ThreadListFilterInput, ThreadListFilterBackspace,
-    ThreadListSelect, ThreadListScopeToggle, ThreadPeekScroll, ThreadPeekSettled,
+    ThreadListSelect, ThreadListScopeToggle, ThreadListForeignToggle, ThreadPeekScroll, ThreadPeekSettled,
     ThreadPeekLoaded,
     ThreadListDelete,
     ThreadListRenameStart, ThreadListRenameChar, ThreadListRenameBackspace,

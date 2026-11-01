@@ -112,13 +112,16 @@ Element thread_list_panel(const Model& m) {
     auto* picker = m.ui.panel.get<pn::ThreadList>();
     if (!picker) return nothing();
     const auto visible = ui::visible_threads(m.d.threads, picker->query, m.env.cwd,
-                                             picker->all_workspaces);
+                                             picker->all_workspaces, picker->only_foreign);
     const bool all = ui::effective_all(m.d.threads, m.env.cwd, picker->all_workspaces);
+    const int  n_foreign = ui::foreign_thread_count(m.d.threads);
     const int  here = ui::workspace_thread_count(m.d.threads, m.env.cwd);
     const bool renaming = !picker->renaming.empty();
 
     Panel::Config cfg;
     cfg.title      = all ? " Threads \xc2\xb7 all " : " Threads \xc2\xb7 " + workspace_name(m.env.cwd) + " ";
+    if (picker->only_foreign)
+        cfg.title = cfg.title.substr(0, cfg.title.size() - 1) + " \xc2\xb7 Codex & Claude ";
     cfg.accent     = info;
     cfg.min_width  = kPanelStandard;
     cfg.viewport_h = panel_viewport_h();
@@ -176,8 +179,10 @@ Element thread_list_panel(const Model& m) {
                                 : "  No threads yet.",
             fg_italic(muted)));
     } else if (visible.empty()) {
-        cfg.prebuilt.push_back(text(
-            "  no thread matches \"" + picker->query + "\"", fg_italic(muted)));
+        std::string why = picker->query.empty()
+            ? std::string{"  no Codex or Claude Code sessions here \xc2\xb7 ^O for all"}
+            : "  no thread matches \"" + picker->query + "\"";
+        cfg.prebuilt.push_back(text(std::move(why), fg_italic(muted)));
     } else {
         cfg.items.reserve(visible.size() + 5);
         const auto now = m.wall_at(maya::anim_now());
@@ -283,6 +288,8 @@ Element thread_list_panel(const Model& m) {
     };
     // Only offer a scope to switch to when this folder has threads.
     if (here > 0) keys.push_back({"Tab", all ? "this folder" : "all", 3});
+    if (n_foreign > 0 || picker->only_foreign)
+        keys.push_back({"^O", picker->only_foreign ? "all threads" : "Codex & Claude", 3});
     keys.push_back({"Enter", "open", 5});
     keys.push_back({"^N", "new", 3});
     keys.push_back({"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 3});

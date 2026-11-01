@@ -616,6 +616,7 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev, bool renaming) {
             case U'n': return Msg{NewThread{}};
             case U'd': return Msg{ThreadListDelete{}};
             case U'r': return Msg{ThreadListRenameStart{}};
+            case U'o': return Msg{ThreadListForeignToggle{}};
             default:   return std::nullopt;
         }
     };

@@ -237,6 +237,7 @@ inline auto visual_parts(const ThreadList& p) {
                            visual::ref(p.rename_input),
                            p.rename_cursor,
                            p.all_workspaces,
+                           p.only_foreign,
                            visual::ref(p.peek_id),
                            p.peek_turn);
 }

@@ -26,6 +26,13 @@ namespace agentty::ui {
     return n;
 }
 
+// How many threads came from another tool (not yet opened, or imported).
+[[nodiscard]] inline int foreign_thread_count(const std::vector<Thread>& threads) {
+    int n = 0;
+    for (const auto& t : threads) n += t.imported ? 1 : 0;
+    return n;
+}
+
 // The scope actually in force: This folder when asked for and it has any
 // threads, else All. An empty folder never shows an empty picker.
 [[nodiscard]] inline bool effective_all(const std::vector<Thread>& threads,
@@ -53,13 +60,16 @@ namespace agentty::ui {
 [[nodiscard]] inline std::vector<int> visible_threads(const std::vector<Thread>& threads,
                                                       std::string_view query,
                                                       std::string_view workspace = {},
-                                                      bool all_workspaces = true) {
+                                                      bool all_workspaces = true,
+                                                      bool only_foreign = false) {
     const bool all = effective_all(threads, workspace, all_workspaces);
     std::vector<int> out;
     out.reserve(threads.size());
     for (int i = 0; i < static_cast<int>(threads.size()); ++i) {
         const auto& t = threads[static_cast<std::size_t>(i)];
         if (!all && !in_workspace(t, workspace)) continue;
+        // Imported threads count too: they came from another tool.
+        if (only_foreign && !t.imported) continue;
         if (query.empty()
             || fuzzy::score(shown_title(t), query).matched()
             || (!t.preview.empty() && fuzzy::score(t.preview, query).matched()))

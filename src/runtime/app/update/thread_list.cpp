@@ -76,7 +76,7 @@ namespace {
 
 // What the picker lists right now: its query, in its folder scope.
 [[nodiscard]] std::vector<int> visible(const Model& m, const pn::ThreadList& p) {
-    return ui::visible_threads(m.d.threads, p.query, m.env.cwd, p.all_workspaces);
+    return ui::visible_threads(m.d.threads, p.query, m.env.cwd, p.all_workspaces, p.only_foreign);
 }
 
 // The thread under the picker cursor, after the filter. -1 when none.
@@ -367,6 +367,24 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             // Keep the cursor on the same thread if it's in the new scope.
             const int was = picked_thread(m, *p);
             p->all_workspaces = !ui::effective_all(m.d.threads, m.env.cwd, p->all_workspaces);
+            p->confirm_remove.clear();
+            const int at = was < 0 ? -1 : visible_index_of(
+                m, *p, m.d.threads[static_cast<std::size_t>(was)].id);
+            p->index = std::max(0, at);
+            m.ui.thread_list_scroll.y = 0;
+            return sync_peek(m);
+        },
+        [&](ThreadListForeignToggle) -> Cmd {
+            auto* p = m.ui.panel.get<pn::ThreadList>();
+            if (!p) return Cmd::none();
+            // Nothing to narrow to: say why instead of showing an empty list.
+            if (!p->only_foreign && ui::foreign_thread_count(m.d.threads) == 0)
+                return set_status_toast(m, m.s.foreign_loading
+                        ? "still looking for Codex / Claude Code sessions\xe2\x80\xa6"
+                        : "no Codex or Claude Code sessions found",
+                    std::chrono::seconds{3});
+            const int was = picked_thread(m, *p);
+            p->only_foreign = !p->only_foreign;
             p->confirm_remove.clear();
             const int at = was < 0 ? -1 : visible_index_of(
                 m, *p, m.d.threads[static_cast<std::size_t>(was)].id);

@@ -147,6 +147,8 @@ struct ThreadList      : pick::OpenAt, WithFrom {
     // before folders were recorded have none, and hiding them by default
     // looked like the history was gone.
     bool        all_workspaces = true;
+    // ^O shows only sessions from other tools (Codex, Claude Code).
+    bool        only_foreign = false;
     // The peek: which thread it shows, and how many turns back from the
     // latest its view is scrolled (0 = latest). Reset per thread.
     std::string peek_id;
