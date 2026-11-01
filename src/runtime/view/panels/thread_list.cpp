@@ -7,6 +7,7 @@
 #include "thread_time.hpp"
 #include "agentty/runtime/panel/thread_filter.hpp"   // visible_threads + fuzzy
 #include "agentty/runtime/panel/thread_peek.hpp"
+#include "agentty/foreign/names.hpp"
 
 #include <maya/widget/peek_card.hpp>
 
@@ -49,9 +50,12 @@ using PeekKind = maya::PeekCard::Kind;
     std::vector<std::string> sub;
     if (!meta.workspace.empty()) sub.push_back(workspace_name(meta.workspace));
     if (!meta.forked_from.empty()) sub.push_back("\xe2\x91\x82 fork");   // ⑂
-    if (meta.auto_titled && !meta.user_named()) sub.push_back("auto-named");
+    if (meta.imported) sub.push_back("from " + foreign::display_name(meta.imported->source));
+    if (meta.auto_titled && !meta.user_named() && !meta.imported) sub.push_back("auto-named");
     for (std::size_t i = 0; i < sub.size(); ++i)
         pc.subtitle += (i ? " \xc2\xb7 " : "") + sub[i];
+    // Enter on a session from another tool brings it in; say so.
+    const std::string enter = meta.foreign_only ? "Enter continue here" : "Enter open";
 
     const auto loaded = std::ranges::find(m.ui.peek_cache, meta.id,
                                           &Model::UI::PeekThread::id);
@@ -68,13 +72,13 @@ using PeekKind = maya::PeekCard::Kind;
 
     if (loaded == m.ui.peek_cache.end()) {
         pc.lines.push_back({"", "loading\xe2\x80\xa6", PeekKind::Note});
-        pc.hint = "Enter open";
+        pc.hint = enter;
         return pc;
     }
     const auto& turns = loaded->turns;
     if (turns.empty()) {
         pc.lines.push_back({"", "nothing here yet", PeekKind::Note});
-        pc.hint = "Enter open";
+        pc.hint = enter;
         return pc;
     }
     const int n = static_cast<int>(turns.size());
@@ -98,7 +102,7 @@ using PeekKind = maya::PeekCard::Kind;
     while (!lines.empty() && lines.front().kind == PeekKind::Gap) lines.erase(lines.begin());
     pc.lines.insert(pc.lines.end(), lines.begin(), lines.end());
     pc.hint = "\xe2\x86\x90 \xe2\x86\x92 turn " + std::to_string(last + 1) + "/"
-            + std::to_string(n) + " \xc2\xb7 Enter open";
+            + std::to_string(n) + " \xc2\xb7 " + enter;
     return pc;
 }
 
@@ -221,10 +225,21 @@ Element thread_list_panel(const Model& m) {
             } else {
                 // A model-written name says so, so it doesn't pass for one
                 // you typed. ^R or /rename makes it yours.
-                std::string tail = t.auto_titled && !t.user_named() ? "auto \xc2\xb7 " : "";
+                std::string tail = t.auto_titled && !t.user_named() && !t.imported
+                                       ? "auto \xc2\xb7 " : "";
                 if (t.message_count > 0) tail += std::to_string(t.message_count) + " msgs \xc2\xb7 ";
                 row.trailing       = tail + ui::short_age(t.updated_at, now);
                 row.trailing_style = fg_dim(muted);
+                // Where it came from: "codex" / "claude" before the count.
+                // A session not opened yet is dim, an opened one plain.
+                if (t.imported) {
+                    row.badge       = t.foreign_only ? "\xe2\x86\x97" : "";   // ↗
+                    row.badge_style = fg_dim(info);
+                    row.trailing = foreign::display_name(t.imported->source)
+                                 + " \xc2\xb7 " + row.trailing;
+                    if (t.foreign_only && !is_current)
+                        row.leading_style = fg_of(text_secondary);
+                }
             }
             // The TITLE is what you are choosing; the timestamp is reference
             // data and yields first on a narrow terminal.

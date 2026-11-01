@@ -634,6 +634,8 @@ struct NewThread {};
 // `m.d.threads` and a `Cmd::task` that does the directory walk +
 // JSON parse off the UI thread; this Msg lands when it's done.
 struct ThreadsLoaded    { std::vector<Thread> threads; };
+// Codex / Claude Code sessions found on this machine.
+struct ForeignSessionsLoaded { foreign::Scan scan; };
 // A batch of old threads got their picker summary (preview, message count)
 // filled in the background. Headers only.
 struct ThreadSummariesFilled { std::vector<Thread> threads; };
@@ -1463,7 +1465,7 @@ using ThreadListMsg = std::variant<
     ThreadListRenameDelete, ThreadListRenameCursor,
     ThreadListRenamePaste, ThreadListRenameSubmit, ThreadListRenameCancel,
     RenameCurrentThread,
-    ThreadCycle, NewThread, ThreadsLoaded, ThreadSummariesFilled, ThreadLoaded, ThreadTitleGenerated,
+    ThreadCycle, NewThread, ThreadsLoaded, ForeignSessionsLoaded, ThreadSummariesFilled, ThreadLoaded, ThreadTitleGenerated,
     SaveRefused>;
 
 using PaletteMsg = std::variant<

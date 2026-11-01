@@ -57,6 +57,7 @@ inline constexpr std::string_view kChineseSimplified = R"JSON({
   "appearance.prose_width":  { "text": "正文宽度" },
   "appearance.compact":      { "text": "紧凑对话" },
   "appearance.thread_preview": { "text": "对话预览" },
+  "appearance.foreign_sessions": { "text": "Codex 与 Claude 会话" },
   "appearance.motion":       { "text": "动画" },
   "appearance.content":      { "text": "内容" },
   "appearance.syntax":       { "text": "语法高亮" },
@@ -65,6 +66,7 @@ inline constexpr std::string_view kChineseSimplified = R"JSON({
   "appearance.help.prose_width": { "text": "正文在 N 列处换行 · 0 = 使用全部宽度" },
   "appearance.help.compact":     { "text": "去掉对话之间的空行" },
   "appearance.help.thread_preview": { "text": "在 ^J 中显示选中的对话" },
+  "appearance.help.foreign_sessions": { "text": "在 ^J 中列出，以便在此继续" },
   "appearance.help.syntax":      { "text": "按语言为代码块着色" },
 
   "sandbox.read_paths":  { "text": "额外可读" },

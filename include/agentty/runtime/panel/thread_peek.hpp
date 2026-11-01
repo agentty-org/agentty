@@ -24,11 +24,14 @@ inline constexpr std::size_t kPeekLinesPerTurn = 24;
 
 // One message as peek lines: text by line (blank runs collapsed), then
 // "▸ name" per tool call. Nothing for injected or routing messages.
-inline void peek_lines_of(const Message& msg, PeekTurn& out) {
+// `agent` names who wrote the replies ("agentty", or "codex" for turns
+// imported from another tool).
+inline void peek_lines_of(const Message& msg, PeekTurn& out,
+                          std::string_view agent = "agentty") {
     const bool user = msg.typed_by_user();
     if (!user && msg.role != Role::Assistant) return;
     if (msg.smart_routing || msg.is_proactive_context()) return;
-    const std::string who = user ? "you" : "agentty";
+    const std::string who = user ? "you" : std::string{agent};
     bool first = true;
     int blank = 0;
     const std::string& s = msg.text;
@@ -62,9 +65,13 @@ inline void peek_lines_of(const Message& msg, PeekTurn& out) {
 // tool round), and back-to-back calls of one tool read as "▸ shell ×4".
 [[nodiscard]] inline std::vector<PeekTurn> peek_turns_of(const Thread& t) {
     std::vector<PeekTurn> turns;
-    for (const auto& msg : t.messages) {
+    // Replies that came from another tool's session are that tool's.
+    const std::size_t foreign_upto = t.imported ? t.imported->messages : 0;
+    const std::string_view other = t.imported ? std::string_view{t.imported->source} : "";
+    for (std::size_t i = 0; i < t.messages.size(); ++i) {
+        const auto& msg = t.messages[i];
         if (msg.typed_by_user() || turns.empty()) turns.emplace_back();
-        peek_lines_of(msg, turns.back());
+        peek_lines_of(msg, turns.back(), i < foreign_upto ? other : "agentty");
     }
     std::erase_if(turns, [](const PeekTurn& v) { return v.empty(); });
     for (auto& turn : turns) {

@@ -225,6 +225,8 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
              std::string{i18n::t("appearance.help.compact")});
     b.toggle(std::string{kApThreadPeek}, std::string{i18n::t("appearance.thread_preview")},
              p.thread_preview, std::string{i18n::t("appearance.help.thread_preview")});
+    b.toggle(std::string{kApForeign}, std::string{i18n::t("appearance.foreign_sessions")},
+             p.foreign_sessions, std::string{i18n::t("appearance.help.foreign_sessions")});
 
     // ── Motion ──────────────────────────────────────────────────────
     b.header(std::string{i18n::t("appearance.motion")});

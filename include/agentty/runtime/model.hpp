@@ -22,6 +22,7 @@
 #include "agentty/domain/smart_mode.hpp"
 #include "agentty/provider/selection.hpp"   // Domain::selection
 #include "agentty/domain/conversation.hpp"
+#include "agentty/foreign/scan.hpp"         // Domain::foreign
 #include "agentty/diff/diff.hpp"
 #include "agentty/domain/id.hpp"
 #include "agentty/domain/profile.hpp"
@@ -321,6 +322,10 @@ struct Model {
         // send it whole: a new thread, a swap, or a refused save.
         std::vector<std::uint64_t> saved_fps;
         std::vector<Thread> threads;
+        // Codex / Claude Code sessions, as picker headers. Their not-yet-
+        // opened rows are merged into `threads` (foreign_only) whenever
+        // either list changes; kept apart so a native reload can't drop them.
+        foreign::Scan foreign;
         // Bumped whenever `threads` or a row in it changes (load, rename,
         // delete), so the frame gate can tell without walking the list.
         std::uint64_t threads_rev = 0;

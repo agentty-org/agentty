@@ -46,6 +46,7 @@
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/tool/util/utf8.hpp"   // safe_utf8_cut: trims the title prompt
 #include "agentty/io/persistence.hpp"
+#include "agentty/foreign/sessions.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 
 namespace agentty::app::cmd {
@@ -2972,6 +2973,78 @@ Cmd load_thread_peek_async(ThreadId id) {
             out.send(Msg{ThreadPeekLoaded{std::move(id), std::move(turns)}});
         },
         std::move(id));
+}
+
+Cmd load_foreign_sessions_async(foreign::Scan previous) {
+    return cmd::io_task_isolated(
+        [](Io io, maya::Sink<Msg> out, std::stop_token, foreign::Scan prev) {
+            foreign::Scan s;
+            try { s = foreign::list_sessions(io, prev); } catch (...) {}
+            out.send(Msg{ForeignSessionsLoaded{std::move(s)}});
+        },
+        std::move(previous));
+}
+
+Cmd open_foreign_async(ThreadId id, Thread::Import im) {
+    return cmd::io_task_isolated(
+        [](Io io, maya::Sink<Msg> out, std::stop_token, ThreadId id, Thread::Import im) {
+            std::optional<Thread> keep;
+            try { keep = deps(io).load_thread(id); } catch (...) {}
+            std::optional<Thread> fresh;
+            try { fresh = foreign::read_session(io, im); } catch (...) {}
+            if (!fresh) {
+                // The file is gone or unreadable: open what was imported
+                // before, if anything, so the user still gets their thread.
+                out.send(Msg{ThreadLoaded{keep ? std::move(*keep) : Thread{}}});
+                return;
+            }
+            if (keep && keep->imported && fresh->id == keep->id) {
+                // Unchanged since the import: nothing to merge.
+                if (keep->imported->size == fresh->imported->size
+                    && keep->imported->mtime == fresh->imported->mtime) {
+                    out.send(Msg{ThreadLoaded{std::move(*keep)}});
+                    return;
+                }
+                // Re-read after more was said in the other tool. Turns added
+                // in agentty since the import stay on the end.
+                const std::size_t from = std::min<std::size_t>(keep->imported->messages,
+                                                               keep->messages.size());
+                const std::size_t base = fresh->messages.size();
+                for (std::size_t i = from; i < keep->messages.size(); ++i)
+                    fresh->messages.push_back(std::move(keep->messages[i]));
+                for (const auto& rec : keep->compactions)
+                    if (rec.up_to_index > from) {
+                        auto r = rec;
+                        r.up_to_index = r.up_to_index - from + base;
+                        if (r.up_to_index <= fresh->messages.size())
+                            fresh->compactions.push_back(std::move(r));
+                    }
+                if (keep->user_named()) {
+                    fresh->title        = keep->title;
+                    fresh->renamed_at   = keep->renamed_at;
+                    fresh->name_is_auto = keep->name_is_auto;
+                }
+                fresh->created_at        = keep->created_at;
+                fresh->rag_mode_override = keep->rag_mode_override;
+                persistence::summarise_for_picker(fresh->messages, *fresh);
+                if (keep->updated_at > fresh->updated_at) fresh->updated_at = keep->updated_at;
+            }
+            deps(io).save_thread(*fresh);
+            out.send(Msg{ThreadLoaded{std::move(*fresh)}});
+        },
+        std::move(id), std::move(im));
+}
+
+Cmd load_foreign_peek_async(ThreadId id, Thread::Import im) {
+    return cmd::io_task_isolated(
+        [](Io io, maya::Sink<Msg> out, std::stop_token, ThreadId id, Thread::Import im) {
+            std::optional<std::vector<ui::PeekTurn>> turns;
+            try {
+                if (auto t = foreign::read_session(io, im)) turns = ui::peek_turns_of(*t);
+            } catch (...) {}
+            out.send(Msg{ThreadPeekLoaded{std::move(id), std::move(turns)}});
+        },
+        std::move(id), std::move(im));
 }
 
 Cmd load_thread_async(ThreadId id) {

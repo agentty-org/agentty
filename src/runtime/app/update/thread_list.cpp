@@ -10,6 +10,7 @@
 #include <chrono>
 #include <climits>
 #include <limits>
+#include <unordered_set>
 #include <utility>
 
 #include <maya/core/overload.hpp>
@@ -17,6 +18,7 @@
 
 #include "agentty/runtime/app/cmd_factory.hpp"
 #include "agentty/runtime/app/deps.hpp"
+#include "agentty/foreign/names.hpp"
 #include "agentty/io/persistence.hpp"   // new_id: a pure function, called directly
 #include "agentty/provider/selection.hpp"
 #include "agentty/runtime/login.hpp"
@@ -30,6 +32,40 @@
 #include "agentty/tool/util/utf8.hpp"   // safe_utf8_cut: the rename draft cap
 
 namespace pn = agentty::ui::panel;
+
+namespace agentty::app::detail {
+
+namespace {
+
+// Put the not-yet-opened foreign sessions into the picker list. A session
+// already opened is a native thread with the same id, so it's skipped here;
+// that thread's row stands for it. Keeps recency order.
+void merge_foreign(Model& m) {
+    std::erase_if(m.d.threads, [](const Thread& t) { return t.foreign_only; });
+    if (m.d.foreign.sessions.empty() || !m.d.ui().foreign_sessions) return;
+    std::unordered_set<std::string> have;
+    have.reserve(m.d.threads.size());
+    for (const auto& t : m.d.threads) have.insert(t.id.value);
+    bool added = false;
+    for (const auto& s : m.d.foreign.sessions)
+        if (!have.contains(s.id.value)) { m.d.threads.push_back(s); added = true; }
+    if (added)
+        std::ranges::stable_sort(m.d.threads, std::greater<>{}, &Thread::updated_at);
+}
+
+// The session behind an imported thread: does its file look changed since?
+// Compared against the last scan, not the disk, so the reducer stays pure.
+[[nodiscard]] bool session_moved_on(const Model& m, const Thread& t) {
+    if (!t.imported) return false;
+    for (const auto& s : m.d.foreign.sessions)
+        if (s.id == t.id && s.imported)
+            return s.imported->size != t.imported->size || s.imported->mtime != t.imported->mtime;
+    return false;
+}
+
+}  // namespace
+
+}  // namespace agentty::app::detail
 
 namespace agentty::app::detail {
 
@@ -73,7 +109,7 @@ constexpr std::size_t kSummaryBatch = 12;
     if (m.s.summaries_filling) return Cmd::none();
     std::vector<ThreadId> ids;
     for (const auto& t : m.d.threads) {
-        if (t.message_count == 0 && t.preview.empty() && !t.summary_tried)
+        if (t.message_count == 0 && t.preview.empty() && !t.summary_tried && !t.foreign_only)
             ids.push_back(t.id);
         if (ids.size() == kSummaryBatch) break;
     }
@@ -257,6 +293,11 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                 m.s.threads_loading = true;
                 cmd = cmd::load_threads_async();
             }
+            // Other agents' sessions too. Unchanged files aren't re-read.
+            if (!m.s.foreign_loading && m.d.ui().foreign_sessions) {
+                m.s.foreign_loading = true;
+                cmd = Cmd::batch(std::move(cmd), cmd::load_foreign_sessions_async(m.d.foreign));
+            }
             // Open AT the current thread, not row 0 — the user's mental
             // anchor is "where am I", and cycling from there (↑ newer /
             // ↓ older) mirrors the Alt+←/→ quick-cycle order.
@@ -359,6 +400,10 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             if (!p || p->peek_id != e.id.value) return Cmd::none();
             if (m.ui.peek_loading == e.id.value) return Cmd::none();
             m.ui.peek_loading = e.id.value;
+            // A session not opened yet has no agentty file: read the source.
+            for (const auto& t : m.d.threads)
+                if (t.id == e.id && t.foreign_only && t.imported)
+                    return cmd::load_foreign_peek_async(std::move(e.id), *t.imported);
             return cmd::load_thread_peek_async(std::move(e.id));
         },
         [&](ThreadPeekLoaded& e) -> Cmd {
@@ -439,8 +484,18 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                 // is switching INTO doesn't re-pay the handshake (the pool's
                 // idle TTL has usually evicted it during composer breathing
                 // room). Returned, not performed.
-                cmd = Cmd::batch(cmd::prewarm_provider(m),
-                                 cmd::load_thread_async(meta.id));
+                Cmd load;
+                if (meta.imported && (meta.foreign_only || session_moved_on(m, meta))) {
+                    // A Codex / Claude Code session: import it on first open,
+                    // or re-read it when more was said there since.
+                    load = cmd::open_foreign_async(meta.id, *meta.imported);
+                    if (meta.foreign_only)
+                        set_status_toast(m, "opening " + foreign::display_name(meta.imported->source)
+                                                + " session\xe2\x80\xa6", std::chrono::seconds{2});
+                } else {
+                    load = cmd::load_thread_async(meta.id);
+                }
+                cmd = Cmd::batch(cmd::prewarm_provider(m), std::move(load));
             }
             m.ui.panel.close<pn::ThreadList>();
             return cmd;
@@ -759,6 +814,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                         it != m.d.threads.end())
                         t.summary_tried = it->summary_tried;
             m.d.threads = std::move(e.threads);
+            merge_foreign(m);
             ++m.d.threads_rev;
             m.s.threads_loading = false;
             // Old threads have no preview yet: fill them in, a batch at a
@@ -772,6 +828,23 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                 return Cmd::batch(std::move(fill), sync_peek(m));
             }
             return fill;
+        },
+        [&](ForeignSessionsLoaded& e) -> Cmd {
+            m.s.foreign_loading = false;
+            ThreadId was;
+            if (const auto* p = m.ui.panel.get<pn::ThreadList>())
+                if (const int at = picked_thread(m, *p); at >= 0)
+                    was = m.d.threads[static_cast<std::size_t>(at)].id;
+            m.d.foreign = std::move(e.scan);
+            merge_foreign(m);
+            ++m.d.threads_rev;
+            if (auto* p = m.ui.panel.get<pn::ThreadList>()) {
+                const int sz = visible_count(m, *p);
+                const int at = was.value.empty() ? -1 : visible_index_of(m, *p, was);
+                p->index = at >= 0 ? at : (sz > 0 ? std::clamp(p->index, 0, sz - 1) : 0);
+                return sync_peek(m);
+            }
+            return Cmd::none();
         },
         [&](ThreadSummariesFilled& e) -> Cmd {
             m.s.summaries_filling = false;
@@ -818,6 +891,20 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             };
             m.d.current = std::move(e.thread);
             m.d.saved_fps.clear();
+            // An opened session is a saved agentty thread from here on: its
+            // picker row stops being a foreign placeholder, and the scan's
+            // copy follows its size so the next open doesn't re-import.
+            if (m.d.current.imported) {
+                Thread h = persistence::thread_header(m.d.current);
+                if (auto it = std::ranges::find(m.d.threads, m.d.current.id, &Thread::id);
+                    it != m.d.threads.end())
+                    *it = std::move(h);
+                else
+                    m.d.threads.insert(m.d.threads.begin(), std::move(h));
+                for (auto& s : m.d.foreign.sessions)
+                    if (s.id == m.d.current.id) s.imported = m.d.current.imported;
+                ++m.d.threads_rev;
+            }
             // A rename is stored by the writer, which may still be busy with
             // an earlier save, so a load right after one can read the old
             // title from disk. Keep whichever title was renamed more recently.

@@ -22,12 +22,14 @@
 
 #include <maya/dsl.hpp>
 #include <maya/element/element.hpp>
+#include <maya/element/text.hpp>   // maya::string_width
 #include <maya/render/cache_id.hpp>
 #include <maya/widget/conversation.hpp>
 #include <maya/widget/turn.hpp>
 
 #include "agentty/domain/conversation.hpp"
 #include "agentty/domain/ui_live.hpp"   // compact_turns: the seam's height
+#include "agentty/foreign/names.hpp"     // import_seam_row's "from Codex"
 #include "agentty/runtime/view/palette.hpp"
 
 namespace agentty::ui {
@@ -136,6 +138,55 @@ inline bool compaction_boundary_at(
             && rec.up_to_index <= total) return true;
     }
     return false;
+}
+
+// Where a thread imported from another tool ends and agentty takes over:
+// "→ continued in agentty · from Codex". One row, same rules as the
+// compaction divider (both builders call this, so the bytes can't drift).
+inline maya::Element import_seam_row(std::string source_name) {
+    using namespace maya::dsl;
+    return maya::detail::component([source_name](int w, int /*h*/) -> maya::Element {
+        if (w <= 0) return blank().build();
+        const std::string glyph = "\xe2\x86\x92";   // →
+        const std::string label = "continued in agentty";
+        const std::string from  = "from " + source_name;
+        const int label_cells = 2 + static_cast<int>(label.size()) + 3
+                              + static_cast<int>(maya::string_width(from));
+        const int rule_total  = w - label_cells - 4;
+        if (rule_total < 4) {
+            return h(text("   "),
+                     text(glyph + " ", maya::Style{}.with_fg(accent)),
+                     text(label, maya::Style{}.with_fg(text_secondary).with_dim())).build();
+        }
+        const int left  = rule_total / 2;
+        const int right = rule_total - left;
+        std::string lrule, rrule;
+        for (int i = 0; i < left; ++i)  lrule += "\xe2\x94\x88";   // ┈
+        for (int i = 0; i < right; ++i) rrule += "\xe2\x94\x88";
+        return h(
+            text(std::move(lrule), maya::Style{}.with_fg(muted).with_dim()),
+            text("  "),
+            text(glyph, maya::Style{}.with_fg(accent)),
+            text(" "),
+            text(label, maya::Style{}.with_fg(text_secondary).with_dim()),
+            text(" \xc2\xb7 ", maya::Style{}.with_fg(muted).with_dim()),
+            text(from, maya::Style{}.with_fg(muted).with_dim()),
+            text("  "),
+            text(std::move(rrule), maya::Style{}.with_fg(muted).with_dim())
+        ).build();
+    })
+    .hash_id(maya::CacheIdBuilder{}
+        .add(std::string_view{"agentty.import.seam.v1"})
+        .add(std::string_view{source_name})
+        .build());
+}
+
+// The message index the import seam sits before, or SIZE_MAX for none: the
+// first message added after the import, once there is one.
+inline std::size_t import_seam_index(const Thread& t) noexcept {
+    if (!t.imported || t.imported->messages == 0) return SIZE_MAX;
+    const std::size_t at = t.imported->messages;
+    return at < t.messages.size() ? at : SIZE_MAX;
 }
 
 } // namespace agentty::ui

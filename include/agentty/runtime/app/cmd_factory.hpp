@@ -379,6 +379,20 @@ struct LoopBreak {
 // because looking at a thread doesn't open it.
 [[nodiscard]] Cmd load_thread_peek_async(ThreadId id);
 
+// List Codex / Claude Code sessions on this machine for the picker, off the
+// UI thread, and send ForeignSessionsLoaded. `previous` is the last scan;
+// files that haven't changed since aren't read again.
+[[nodiscard]] Cmd load_foreign_sessions_async(foreign::Scan previous);
+
+// Open another agent's session: read it whole, save it as an agentty thread
+// and send ThreadLoaded. When it was imported before (an agentty thread with
+// this id exists), the turns added in agentty since are kept after the
+// refreshed session.
+[[nodiscard]] Cmd open_foreign_async(ThreadId id, Thread::Import im);
+
+// Peek turns for a session not opened yet.
+[[nodiscard]] Cmd load_foreign_peek_async(ThreadId id, Thread::Import im);
+
 // Fill the picker summary for a batch of old threads off the UI thread and
 // send ThreadSummariesFilled. The reducer starts the next batch when this
 // one lands, so only one runs at a time.

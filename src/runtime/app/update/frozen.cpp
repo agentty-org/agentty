@@ -710,6 +710,12 @@ std::size_t build_blocks(const Model& m, std::size_t from, std::size_t to,
                 push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true, sep_key("gap"));
             push(compaction_divider_row(), 1, /*sep=*/true, sep_key("compaction"));
         }
+        if (i == ui::import_seam_index(m.d.current)) {
+            if (!first_overall)
+                push(gap_row(), static_cast<std::size_t>(gap_rows()), /*sep=*/true, sep_key("gap"));
+            const std::string from = foreign::display_name(m.d.current.imported->source);
+            push(ui::import_seam_row(from), 1, /*sep=*/true, sep_key("import:" + from));
+        }
 
         const Message& head = m.d.current.messages[i];
 

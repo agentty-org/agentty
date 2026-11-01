@@ -1,0 +1,1250 @@
+// foreign/sessions.cpp — read Codex and Claude Code sessions as threads.
+//
+// Both tools write one JSON object per line. Unknown lines and fields are
+// skipped, never fatal: neither format is documented, and both change.
+
+#include "agentty/foreign/sessions.hpp"
+
+#include "agentty/io/persistence.hpp"
+#include "agentty/util/base64.hpp"
+#include "agentty/util/home_dir.hpp"
+#include "agentty/util/logx.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <unordered_map>
+
+namespace agentty::foreign {
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
+
+ThreadId thread_id_for(Source s, std::string_view session_id) {
+    // FNV-1a 64 over "<tool>:<session>", then a finaliser so near-identical
+    // ids spread. 16 hex, the same shape persistence::new_id makes.
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::string_view part) {
+        for (unsigned char c : part) { h ^= c; h *= 1099511628211ull; }
+    };
+    mix(key_of(s));
+    mix(":");
+    mix(session_id);
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out(16, '0');
+    for (int i = 15; i >= 0; --i) { out[static_cast<std::size_t>(i)] = kHex[h & 0xf]; h >>= 4; }
+    return ThreadId{std::move(out)};
+}
+
+namespace {
+
+using Clock = std::chrono::system_clock;
+
+// "2026-07-27T13:57:26.936Z" → time_point. Zero on anything else.
+Clock::time_point parse_time(std::string_view s) {
+    if (s.size() < 19) return {};
+    auto num = [&](std::size_t at, std::size_t n) {
+        int v = 0;
+        for (std::size_t i = at; i < at + n; ++i) {
+            if (s[i] < '0' || s[i] > '9') return -1;
+            v = v * 10 + (s[i] - '0');
+        }
+        return v;
+    };
+    const int Y = num(0, 4), Mo = num(5, 2), D = num(8, 2);
+    const int h = num(11, 2), mi = num(14, 2), se = num(17, 2);
+    if (Y < 0 || Mo < 1 || D < 1 || h < 0 || mi < 0 || se < 0) return {};
+    int ms = 0;
+    if (s.size() > 20 && s[19] == '.') {
+        std::size_t i = 20, n = 0;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+            if (n < 3) ms = ms * 10 + (s[i] - '0');
+            ++i; ++n;
+        }
+        for (; n < 3; ++n) ms *= 10;
+    }
+    // days_from_civil (Howard Hinnant), UTC.
+    const int y = Y - (Mo <= 2);
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = static_cast<unsigned>((153 * (Mo + (Mo > 2 ? -3 : 9)) + 2) / 5 + D - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const long long days = static_cast<long long>(era) * 146097 + static_cast<long long>(doe) - 719468;
+    const long long secs = days * 86400 + h * 3600 + mi * 60 + se;
+    return Clock::time_point{std::chrono::duration_cast<Clock::duration>(
+        std::chrono::seconds{secs} + std::chrono::milliseconds{ms})};
+}
+
+[[nodiscard]] std::string str(const json& j, const char* k) {
+    if (!j.is_object()) return {};
+    auto it = j.find(k);
+    return it != j.end() && it->is_string() ? it->get<std::string>() : std::string{};
+}
+
+[[nodiscard]] const json* obj(const json& j, const char* k) {
+    if (!j.is_object()) return nullptr;
+    auto it = j.find(k);
+    return it != j.end() && it->is_object() ? &*it : nullptr;
+}
+
+[[nodiscard]] const json* arr(const json& j, const char* k) {
+    if (!j.is_object()) return nullptr;
+    auto it = j.find(k);
+    return it != j.end() && it->is_array() ? &*it : nullptr;
+}
+
+// A data: URL image → ImageContent. nullopt for remote URLs or junk.
+std::optional<ImageContent> data_url_image(std::string_view url) {
+    if (!url.starts_with("data:")) return std::nullopt;
+    const auto semi = url.find(';');
+    const auto comma = url.find(',');
+    if (semi == std::string_view::npos || comma == std::string_view::npos || semi > comma)
+        return std::nullopt;
+    if (url.substr(semi, comma - semi) != ";base64") return std::nullopt;
+    std::string raw = util::base64_decode(url.substr(comma + 1));
+    if (raw.empty()) return std::nullopt;
+    return ImageContent{std::string{url.substr(5, semi - 5)}, std::move(raw)};
+}
+
+// Lines that are scaffolding the tool injects, not something the user typed.
+[[nodiscard]] bool injected_user_text(std::string_view t) {
+    while (!t.empty() && (t.front() == ' ' || t.front() == '\n')) t.remove_prefix(1);
+    static constexpr std::string_view kTags[] = {
+        "<environment_context>", "<user_instructions>", "<permissions instructions>",
+        "<collaboration_mode>", "<multi_agent_mode>", "<turn_aborted>", "<user_shell_command>",
+        "# AGENTS.md instructions", "<command-name>", "<local-command-stdout>",
+        "<local-command-stderr>", "<command-message>", "<system-reminder>",
+        "Caveat: The messages below were generated by the user while running local commands",
+    };
+    for (auto tag : kTags) if (t.starts_with(tag)) return true;
+    return false;
+}
+
+// Provider APIs take tool names and call ids of [A-Za-z0-9_-], at most 64.
+// Imported ones are replayed as past calls, so keep them inside that.
+[[nodiscard]] std::string wire_safe(std::string s, std::string_view fallback) {
+    for (char& c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') c = '_';
+    if (s.size() > 64) s.resize(64);
+    return s.empty() ? std::string{fallback} : s;
+}
+
+[[nodiscard]] ToolUse done_tool(std::string id, std::string name, json args,
+                                std::string output, bool failed) {
+    ToolUse tc;
+    tc.id   = ToolCallId{wire_safe(std::move(id), "call")};
+    tc.name = ToolName{wire_safe(std::move(name), "tool")};
+    tc.args = std::move(args);
+    const auto base = std::chrono::steady_clock::time_point{std::chrono::milliseconds{1}};
+    if (failed) tc.status = ToolUse::Failed{base, base, std::move(output)};
+    else        tc.status = ToolUse::Done{base, base, std::move(output)};
+    return tc;
+}
+
+void set_output(ToolUse& tc, std::string output, bool failed,
+                std::vector<ImageContent> images = {},
+                std::chrono::milliseconds took = std::chrono::milliseconds{0}) {
+    const auto base = std::chrono::steady_clock::time_point{std::chrono::milliseconds{1}};
+    const auto end  = base + took;
+    if (failed) tc.status = ToolUse::Failed{base, end, std::move(output)};
+    else {
+        ToolUse::Done d{base, end, std::move(output)};
+        d.executing_since = base;
+        d.images = std::move(images);
+        tc.status = std::move(d);
+    }
+}
+
+// A tool call that never got a result in the file (the session was cut off).
+void mark_unfinished(std::vector<Message>& msgs) {
+    for (auto& m : msgs)
+        for (auto& tc : m.tool_calls)
+            if (!tc.is_terminal())
+                set_output(tc, "(no result recorded in the original session)", true);
+}
+
+// ── Codex ────────────────────────────────────────────────────────────────
+
+// Codex's code-mode wraps tool calls in a JS script:
+//   const r = await tools.exec_command({"cmd":"…","workdir":"…"});
+//   const patch = "*** Begin Patch…"; await tools.apply_patch(patch);
+// Pull the first call's name and its JSON argument back out.
+struct ScriptCall {
+    std::string name;
+    json        args;
+    int         count = 0;   // tool calls in the script
+};
+
+// A JS string literal starting at `i` (on the quote) → its value.
+std::optional<std::string> js_string(std::string_view s, std::size_t& i) {
+    const char q = s[i];
+    if (q != '"' && q != '\'' && q != '`') return std::nullopt;
+    if (q == '"') {
+        // A JSON string is a JS string; let nlohmann decode the escapes.
+        std::size_t j = i + 1;
+        while (j < s.size() && s[j] != '"') j += s[j] == '\\' ? 2 : 1;
+        if (j >= s.size()) return std::nullopt;
+        json v = json::parse(s.substr(i, j - i + 1), nullptr, false);
+        i = j + 1;
+        if (!v.is_string()) return std::nullopt;
+        return v.get<std::string>();
+    }
+    std::string out;
+    std::size_t j = i + 1;
+    for (; j < s.size() && s[j] != q; ++j) {
+        if (s[j] == '\\' && j + 1 < s.size()) {
+            const char c = s[++j];
+            out += c == 'n' ? '\n' : c == 't' ? '\t' : c;
+        } else {
+            out += s[j];
+        }
+    }
+    if (j >= s.size()) return std::nullopt;
+    i = j + 1;
+    return out;
+}
+
+// The balanced {...} or [...] starting at `i`, skipping strings.
+std::string_view balanced(std::string_view s, std::size_t i) {
+    const char open = s[i], close = open == '{' ? '}' : ']';
+    int depth = 0;
+    for (std::size_t j = i; j < s.size(); ++j) {
+        const char c = s[j];
+        if (c == '"' || c == '\'' || c == '`') {
+            const char q = c;
+            for (++j; j < s.size() && s[j] != q; ++j) if (s[j] == '\\') ++j;
+            continue;
+        }
+        if (c == open) ++depth;
+        else if (c == close && --depth == 0) return s.substr(i, j - i + 1);
+    }
+    return {};
+}
+
+// JS object/array literal → JSON: quotes bare keys, drops trailing commas,
+// and fills shorthand properties (`{ plan }`) from `consts`.
+json js_object(std::string_view lit,
+               const std::map<std::string, json, std::less<>>* consts = nullptr) {
+    json v = json::parse(lit, nullptr, false);
+    if (!v.is_discarded()) return v;
+    std::string out;
+    out.reserve(lit.size() + 32);
+    for (std::size_t i = 0; i < lit.size(); ++i) {
+        const char c = lit[i];
+        if (c == '"' || c == '\'') {
+            std::size_t j = i;
+            auto s = js_string(lit, j);
+            if (!s) return json{};
+            out += json(*s).dump();
+            i = j - 1;
+            continue;
+        }
+        if ((std::isalpha(static_cast<unsigned char>(c)) || c == '_')
+            && !out.empty() && (out.back() == '{' || out.back() == ',' || out.back() == ' '
+                                || out.back() == '\n')) {
+            std::size_t j = i;
+            while (j < lit.size() && (std::isalnum(static_cast<unsigned char>(lit[j])) || lit[j] == '_')) ++j;
+            std::size_t k = j;
+            while (k < lit.size() && lit[k] == ' ') ++k;
+            const std::string_view word = lit.substr(i, j - i);
+            if (k < lit.size() && lit[k] == ':') {
+                out += '"';
+                out.append(word);
+                out += '"';
+                i = j - 1;
+                continue;
+            }
+            // Shorthand property: `plan` means `plan: plan`.
+            if (consts && k < lit.size() && (lit[k] == ',' || lit[k] == '}')) {
+                std::size_t b = out.size();
+                while (b > 0 && (out[b - 1] == ' ' || out[b - 1] == '\n')) --b;
+                if (b > 0 && (out[b - 1] == '{' || out[b - 1] == ',')) {
+                    if (auto f = consts->find(word); f != consts->end()) {
+                        out += json(std::string{word}).dump();
+                        out += ':';
+                        out += f->second.dump();
+                        i = j - 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out += c;
+    }
+    // Trailing commas are legal JS, not JSON.
+    std::string clean;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (out[i] == ',') {
+            std::size_t k = i + 1;
+            while (k < out.size() && (out[k] == ' ' || out[k] == '\n')) ++k;
+            if (k < out.size() && (out[k] == '}' || out[k] == ']')) continue;
+        }
+        clean += out[i];
+    }
+    return json::parse(clean, nullptr, false);
+}
+
+ScriptCall parse_script(std::string_view src) {
+    ScriptCall sc;
+    // Named string/array consts the call may refer to (`patch`, `plan`).
+    std::map<std::string, json, std::less<>> consts;
+    for (std::size_t p = 0; (p = src.find("const ", p)) != std::string_view::npos;) {
+        p += 6;
+        std::size_t e = p;
+        while (e < src.size() && (std::isalnum(static_cast<unsigned char>(src[e])) || src[e] == '_')) ++e;
+        std::string name{src.substr(p, e - p)};
+        while (e < src.size() && (src[e] == ' ' || src[e] == '=')) ++e;
+        if (e >= src.size()) break;
+        if (src[e] == '"' || src[e] == '\'' || src[e] == '`') {
+            if (auto v = js_string(src, e)) consts[name] = *v;
+        } else if (src[e] == '[' || src[e] == '{') {
+            if (auto lit = balanced(src, e); !lit.empty()) consts[name] = js_object(lit);
+        }
+    }
+    for (std::size_t p = 0; (p = src.find("tools.", p)) != std::string_view::npos;) {
+        p += 6;
+        std::size_t e = p;
+        while (e < src.size() && (std::isalnum(static_cast<unsigned char>(src[e])) || src[e] == '_')) ++e;
+        if (e >= src.size() || src[e] != '(') continue;
+        ++sc.count;
+        if (sc.count > 1) continue;
+        sc.name.assign(src.substr(p, e - p));
+        std::size_t a = e + 1;
+        while (a < src.size() && src[a] == ' ') ++a;
+        if (a < src.size() && (src[a] == '{' || src[a] == '[')) {
+            if (auto lit = balanced(src, a); !lit.empty()) sc.args = js_object(lit, &consts);
+        } else if (a < src.size() && (src[a] == '"' || src[a] == '\'' || src[a] == '`')) {
+            if (auto v = js_string(src, a)) sc.args = *v;
+        } else {
+            std::size_t b = a;
+            while (b < src.size() && (std::isalnum(static_cast<unsigned char>(src[b])) || src[b] == '_')) ++b;
+            if (auto it = consts.find(src.substr(a, b - a)); it != consts.end()) sc.args = it->second;
+        }
+    }
+    return sc;
+}
+
+// "*** Update File: /x/y.cpp" — the first file a Codex patch touches.
+std::string patch_first_path(std::string_view patch) {
+    for (std::string_view tag : {"*** Update File: ", "*** Add File: ", "*** Delete File: "}) {
+        if (auto p = patch.find(tag); p != std::string_view::npos) {
+            p += tag.size();
+            const auto e = patch.find('\n', p);
+            return std::string{patch.substr(p, e == std::string_view::npos ? e : e - p)};
+        }
+    }
+    return {};
+}
+
+// Codex tool → agentty tool name + args, so the timeline renders it with
+// agentty's own cards. Unknown tools keep their name and arguments.
+void map_codex_tool(std::string& name, json& args) {
+    if (name == "exec_command" || name == "shell" || name == "local_shell") {
+        json a = json::object();
+        std::string cmd;
+        if (args.is_object()) {
+            if (auto c = args.find("cmd"); c != args.end()) {
+                if (c->is_string()) cmd = c->get<std::string>();
+                else if (c->is_array()) for (const auto& p : *c)
+                    if (p.is_string()) cmd += (cmd.empty() ? "" : " ") + p.get<std::string>();
+            }
+            if (cmd.empty())
+                if (auto c = args.find("command"); c != args.end()) {
+                    if (c->is_string()) cmd = c->get<std::string>();
+                    else if (c->is_array()) {
+                        // ["bash","-lc","…"] → the script itself.
+                        std::vector<std::string> parts;
+                        for (const auto& p : *c) if (p.is_string()) parts.push_back(p.get<std::string>());
+                        if (parts.size() == 3 && (parts[1] == "-lc" || parts[1] == "-c")) cmd = parts[2];
+                        else for (const auto& p : parts) cmd += (cmd.empty() ? "" : " ") + p;
+                    }
+                }
+            if (auto w = str(args, "workdir"); !w.empty()) a["cd"] = w;
+        }
+        a["command"] = cmd;
+        name = "shell";
+        args = std::move(a);
+        return;
+    }
+    if (name == "apply_patch") {
+        const std::string patch = args.is_string() ? args.get<std::string>()
+                                 : str(args, "input").empty() ? str(args, "patch")
+                                                              : str(args, "input");
+        args = json{{"path", patch_first_path(patch)}, {"patch", patch}};
+        return;
+    }
+    if (name == "update_plan") {
+        json todos = json::array();
+        const json* plan = args.is_array() ? &args : arr(args, "plan");
+        if (plan)
+            for (const auto& s : *plan)
+                if (s.is_object())
+                    todos.push_back({{"content", str(s, "step")},
+                                     {"status", str(s, "status")}});
+        name = "todo";
+        args = json{{"todos", std::move(todos)}};
+        return;
+    }
+    if (name == "view_image") {
+        name = "read";
+        args = json{{"path", str(args, "path")}};
+        return;
+    }
+    if (name == "web__run" || name == "web_search") {
+        std::string q;
+        if (const json* sq = arr(args, "search_query"); sq && !sq->empty())
+            q = str((*sq)[0], "q");
+        if (q.empty()) q = str(args, "query");
+        name = "web_search";
+        args = json{{"query", q}};
+        return;
+    }
+}
+
+// Codex output: a string, or [{type:input_text,text}, {type:input_image}].
+std::string codex_output_text(const json& o, std::vector<ImageContent>* images) {
+    if (o.is_string()) return o.get<std::string>();
+    std::string out;
+    if (o.is_array())
+        for (const auto& part : o) {
+            const std::string t = str(part, "type");
+            if (t == "input_text" || t == "output_text" || t == "text") out += str(part, "text");
+            else if (t == "input_image" && images)
+                if (auto img = data_url_image(str(part, "image_url"))) images->push_back(std::move(*img));
+        }
+    else if (o.is_object()) out = str(o, "content").empty() ? o.dump() : str(o, "content");
+    return out;
+}
+
+// Drop Codex's script header ("Script completed\nWall time 1.2 seconds\n
+// Output:\n"), keeping the wall time.
+std::string strip_script_header(std::string s, bool& failed, std::chrono::milliseconds& took) {
+    if (s.starts_with("Script failed")) failed = true;
+    if (s.starts_with("Script ")) {
+        if (auto w = s.find("Wall time "); w != std::string::npos && w < 80) {
+            const double secs = std::strtod(s.c_str() + w + 10, nullptr);
+            if (secs > 0 && secs < 86400 * 7)
+                took = std::chrono::milliseconds{static_cast<long long>(secs * 1000.0)};
+        }
+        if (auto p = s.find("Output:\n"); p != std::string::npos && p < 200) s.erase(0, p + 8);
+    }
+    return s;
+}
+
+}  // namespace
+
+Parsed parse_codex(std::string_view text, ParseOptions opt) {
+    Parsed out;
+    std::vector<Message>& msgs = out.messages;
+    std::unordered_map<std::string, std::pair<std::size_t, std::size_t>> by_call;   // call → (msg, tool)
+    std::string reasoning;   // summary text waiting for the next assistant message
+    std::string model;
+    std::optional<Message::Telemetry> pending_usage;
+    std::optional<std::pair<std::size_t, std::size_t>> pending_patch;   // (msg, tool)
+    std::string patch_diff;
+
+    auto assistant = [&]() -> Message& {
+        // Calls and text from one model turn share a message until the
+        // user speaks or a tool result arrives.
+        if (msgs.empty() || msgs.back().role != Role::Assistant
+            || std::ranges::any_of(msgs.back().tool_calls, [](const ToolUse& t) { return t.is_terminal(); })) {
+            Message m;
+            m.role = Role::Assistant;
+            if (!model.empty()) m.served_model = ModelId{model};
+            msgs.push_back(std::move(m));
+        }
+        return msgs.back();
+    };
+    auto take_reasoning = [&](Message& m) {
+        if (reasoning.empty()) return;
+        if (!m.thinking.empty()) m.thinking += "\n\n";
+        m.thinking += std::move(reasoning);
+        reasoning.clear();
+    };
+
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        std::size_t nl = text.find('\n', pos);
+        if (nl == std::string_view::npos) nl = text.size();
+        const std::string_view line = text.substr(pos, nl - pos);
+        pos = nl + 1;
+        if (line.empty()) continue;
+        json d = json::parse(line, nullptr, false);
+        if (!d.is_object()) continue;
+        const std::string type = str(d, "type");
+        const json* p = obj(d, "payload");
+        if (!p) continue;
+        const auto ts = parse_time(str(d, "timestamp"));
+        if (ts != Clock::time_point{}) {
+            if (out.started == Clock::time_point{}) out.started = ts;
+            out.updated = ts;
+        }
+
+        if (type == "session_meta") {
+            out.session_id = str(*p, "id");
+            if (out.session_id.empty()) out.session_id = str(*p, "session_id");
+            out.cwd = str(*p, "cwd");
+            // Runs started by other programs through `codex exec` or the app
+            // server are not the user's conversations.
+            const std::string orig = str(*p, "originator");
+            if (orig == "codex_exec" || orig == "codex_sdk_ts" || orig == "codex_sdk_py") out.skip = true;
+            if (const json* src = obj(*p, "source"); src && src->contains("subagent")) out.skip = true;
+            continue;
+        }
+        if (type == "turn_context") {
+            if (auto mdl = str(*p, "model"); !mdl.empty()) model = mdl;
+            continue;
+        }
+        if (type == "compacted") {
+            // Codex's own summary of everything before this point. Keep the
+            // turns on screen; tell the model to use the summary instead.
+            std::string summary = str(*p, "message");
+            if (summary.empty())
+                if (const json* rh = arr(*p, "replacement_history"))
+                    for (const auto& r : *rh)
+                        if (str(r, "type") == "compaction_summary" || str(r, "type") == "summary")
+                            summary += codex_output_text(r.value("content", json{}), nullptr);
+            if (!summary.empty() && !msgs.empty()) {
+                Thread::CompactionRecord rec;
+                rec.up_to_index = msgs.size();
+                rec.summary     = std::move(summary);
+                rec.created_at  = ts;
+                out.compactions.push_back(std::move(rec));
+            }
+            continue;
+        }
+        if (type == "event_msg") {
+            const std::string et = str(*p, "type");
+            if (et == "patch_apply_end") {
+                // The diff Codex actually applied. It follows the patch call;
+                // render it the way agentty's own edit output looks.
+                std::string diff;
+                if (const json* ch = obj(*p, "changes"))
+                    for (auto f = ch->begin(); f != ch->end(); ++f) {
+                        diff += "--- " + f.key() + "\n+++ " + f.key() + "\n";
+                        diff += str(*f, "unified_diff");
+                        if (!diff.ends_with('\n')) diff += '\n';
+                    }
+                const bool ok = p->value("success", true);
+                std::string first_file;
+                if (const json* ch = obj(*p, "changes"); ch && !ch->empty()) first_file = ch->begin().key();
+                // Newest apply_patch touching that file, else just the newest.
+                auto is_patch = [](const ToolUse& x) { return x.name.value == "apply_patch"; };
+                ToolUse* hit = nullptr;
+                std::size_t hit_m = 0, hit_t = 0;
+                for (std::size_t mi = msgs.size(); mi-- > 0 && !hit;) {
+                    auto& tcs = msgs[mi].tool_calls;
+                    for (std::size_t ti = tcs.size(); ti-- > 0;) {
+                        if (!is_patch(tcs[ti])) continue;
+                        const auto patch = str(tcs[ti].args, "patch");
+                        if (first_file.empty() || patch.find(first_file) != std::string::npos) {
+                            hit = &tcs[ti]; hit_m = mi; hit_t = ti;
+                            break;
+                        }
+                    }
+                }
+                if (hit && ok && !diff.empty()) {
+                    const std::string fenced = "```diff\n" + diff + "```";
+                    if (hit->is_done()) {
+                        // Its output line came first: swap in the real diff.
+                        set_output(*hit, fenced, false);
+                    } else {
+                        pending_patch = {hit_m, hit_t};
+                        patch_diff = fenced;
+                    }
+                }
+                continue;
+            }
+            if (et == "token_count") {
+                if (const json* info = obj(*p, "info"))
+                    if (const json* last = obj(*info, "last_token_usage")) {
+                        Message::Telemetry t;
+                        auto u32 = [&](const char* k) {
+                            auto it = last->find(k);
+                            return it != last->end() && it->is_number_unsigned()
+                                       ? static_cast<std::uint32_t>(std::min<std::uint64_t>(it->get<std::uint64_t>(), UINT32_MAX))
+                                       : 0u;
+                        };
+                        const std::uint32_t cached = u32("cached_input_tokens");
+                        const std::uint32_t input  = u32("input_tokens");
+                        t.cache_read       = cached;
+                        t.input_tokens     = input > cached ? input - cached : 0;
+                        t.output_tokens    = u32("output_tokens");
+                        t.reasoning_tokens = u32("reasoning_output_tokens");
+                        pending_usage = t;
+                    }
+            } else if (et == "task_complete" || et == "turn_aborted") {
+                // The usage of a turn belongs to its last reply.
+                for (auto it = msgs.rbegin(); it != msgs.rend(); ++it)
+                    if (it->role == Role::Assistant) {
+                        if (pending_usage) it->telemetry = pending_usage;
+                        if (et == "turn_aborted" && it->text.empty() && it->tool_calls.empty())
+                            it->text = "(interrupted)";
+                        break;
+                    }
+                pending_usage.reset();
+            }
+            continue;
+        }
+        if (type != "response_item") continue;
+
+        const std::string it = str(*p, "type");
+        if (it == "message") {
+            const std::string role = str(*p, "role");
+            if (role != "user" && role != "assistant") continue;   // developer/system
+            std::string body;
+            std::vector<ImageContent> images;
+            if (const json* content = arr(*p, "content"))
+                for (const auto& c : *content) {
+                    const std::string ct = str(c, "type");
+                    if (ct == "input_text" || ct == "output_text" || ct == "text") {
+                        if (!body.empty() && !body.ends_with('\n')) body += '\n';
+                        body += str(c, "text");
+                    } else if (ct == "input_image" && opt.images) {
+                        if (auto img = data_url_image(str(c, "image_url"))) images.push_back(std::move(*img));
+                    }
+                }
+            if (role == "user") {
+                if (injected_user_text(body)) continue;
+                // Codex writes the image tag before the text it labels.
+                if (auto a = body.find("<image name="); a != std::string::npos)
+                    if (auto b = body.find("</image>", a); b != std::string::npos)
+                        body.erase(a, b + 8 - a);
+                Message m;
+                m.role = Role::User;
+                m.text = std::move(body);
+                m.images = std::move(images);
+                if (ts != Clock::time_point{}) m.timestamp = ts;
+                if (m.text.empty() && m.images.empty()) continue;
+                msgs.push_back(std::move(m));
+            } else {
+                Message& m = assistant();
+                take_reasoning(m);
+                if (!m.text.empty()) m.text += "\n\n";
+                m.text += body;
+                if (ts != Clock::time_point{}) m.timestamp = ts;
+            }
+            continue;
+        }
+        if (it == "reasoning") {
+            // Only the readable summary. encrypted_content only works for the
+            // account and model that made it.
+            if (const json* sum = arr(*p, "summary"))
+                for (const auto& s : *sum) {
+                    const std::string t = str(s, "text");
+                    if (t.empty()) continue;
+                    if (!reasoning.empty()) reasoning += "\n\n";
+                    reasoning += t;
+                }
+            continue;
+        }
+        if (it == "function_call" || it == "custom_tool_call" || it == "local_shell_call") {
+            std::string name = str(*p, "name");
+            json args;
+            const std::string call_id = str(*p, "call_id");
+            if (it == "custom_tool_call") {
+                const std::string input = str(*p, "input");
+                if (name == "exec") {
+                    // Code mode: unwrap the script to the call inside it.
+                    ScriptCall sc = parse_script(input);
+                    if (sc.count == 1 && !sc.name.empty()) {
+                        name = sc.name;
+                        args = std::move(sc.args);
+                    } else {
+                        // A script with several calls, or none (Codex reading
+                        // its own tool list): show the script itself.
+                        name = "codex_script";
+                        args = json{{"script", input}};
+                    }
+                } else {
+                    args = name == "apply_patch" ? json(input) : json{{"input", input}};
+                }
+            } else if (it == "local_shell_call") {
+                name = "shell";
+                if (const json* act = obj(*p, "action")) args = *act;
+            } else {
+                args = json::parse(str(*p, "arguments"), nullptr, false);
+                if (args.is_discarded()) args = json{{"arguments", str(*p, "arguments")}};
+            }
+            // `wait` polls a yielded exec; its output belongs to that call.
+            if (name == "wait") {
+                by_call[call_id] = {SIZE_MAX, 0};
+                continue;
+            }
+            map_codex_tool(name, args);
+            Message& m = assistant();
+            take_reasoning(m);
+            m.tool_calls.push_back(done_tool(call_id.empty() ? "codex_" + std::to_string(m.tool_calls.size()) : call_id,
+                                             name, std::move(args), {}, false));
+            // Re-open as pending until its output line arrives.
+            m.tool_calls.back().status = ToolUse::Pending{};
+            by_call[call_id] = {msgs.size() - 1, m.tool_calls.size() - 1};
+            continue;
+        }
+        if (it == "function_call_output" || it == "custom_tool_call_output" || it == "local_shell_call_output") {
+            const std::string call_id = str(*p, "call_id");
+            std::vector<ImageContent> images;
+            bool failed = false;
+            std::chrono::milliseconds took{0};
+            std::string output = codex_output_text(p->value("output", json{}), opt.images ? &images : nullptr);
+            output = strip_script_header(std::move(output), failed, took);
+            auto found = by_call.find(call_id);
+            if (found == by_call.end()) continue;
+            if (found->second.first == SIZE_MAX) {
+                // A `wait` result: append to the newest still-running call.
+                for (auto m = msgs.rbegin(); m != msgs.rend(); ++m) {
+                    bool hit = false;
+                    for (auto t = m->tool_calls.rbegin(); t != m->tool_calls.rend(); ++t)
+                        if (t->is_done() && t->output().find("Script running") != std::string::npos) {
+                            // The poll's wall time is the rest of the run.
+                            const auto before = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::get<ToolUse::Done>(t->status).finished_at
+                                - std::get<ToolUse::Done>(t->status).started_at);
+                            set_output(*t, std::move(output), failed, {}, before + took);
+                            hit = true;
+                            break;
+                        }
+                    if (hit) break;
+                }
+                continue;
+            }
+            auto& [mi, ti] = found->second;
+            if (mi >= msgs.size() || ti >= msgs[mi].tool_calls.size()) continue;
+            // A patch whose applied diff was already seen keeps that diff as
+            // its output; Codex's own reply here is just "Success".
+            if (pending_patch && pending_patch->first == mi && pending_patch->second == ti
+                && !patch_diff.empty() && !failed) {
+                output = std::move(patch_diff);
+                pending_patch.reset();
+            }
+            set_output(msgs[mi].tool_calls[ti], std::move(output), failed, std::move(images), took);
+            continue;
+        }
+    }
+    // Trailing reasoning with no reply after it.
+    if (!reasoning.empty() && !msgs.empty() && msgs.back().role == Role::Assistant)
+        take_reasoning(msgs.back());
+    if (pending_usage)
+        for (auto it = msgs.rbegin(); it != msgs.rend(); ++it)
+            if (it->role == Role::Assistant) { it->telemetry = pending_usage; break; }
+    mark_unfinished(msgs);
+    return out;
+}
+
+// ── Claude Code ──────────────────────────────────────────────────────────
+
+namespace {
+
+// Claude Code tool → agentty tool name + args.
+void map_claude_tool(std::string& name, json& args) {
+    if (!args.is_object()) return;
+    if (name == "Bash") {
+        name = "shell";
+        args = json{{"command", str(args, "command")},
+                    {"display_description", str(args, "description")}};
+        return;
+    }
+    if (name == "Read") {
+        json a{{"path", str(args, "file_path")}};
+        if (auto o = args.find("offset"); o != args.end()) a["offset"] = *o;
+        if (auto l = args.find("limit"); l != args.end()) a["limit"] = *l;
+        name = "read";
+        args = std::move(a);
+        return;
+    }
+    if (name == "Write") {
+        name = "write";
+        args = json{{"path", str(args, "file_path")}, {"content", str(args, "content")}};
+        return;
+    }
+    if (name == "Edit") {
+        name = "edit";
+        args = json{{"path", str(args, "file_path")},
+                    {"edits", json::array({{{"old_text", str(args, "old_string")},
+                                            {"new_text", str(args, "new_string")}}})}};
+        return;
+    }
+    if (name == "MultiEdit") {
+        json edits = json::array();
+        if (const json* es = arr(args, "edits"))
+            for (const auto& e : *es)
+                edits.push_back({{"old_text", str(e, "old_string")}, {"new_text", str(e, "new_string")}});
+        name = "edit";
+        args = json{{"path", str(args, "file_path")}, {"edits", std::move(edits)}};
+        return;
+    }
+    if (name == "Grep") {
+        json a{{"pattern", str(args, "pattern")}};
+        if (auto p = str(args, "path"); !p.empty()) a["path"] = p;
+        if (auto g = str(args, "glob"); !g.empty()) a["glob"] = g;
+        name = "grep";
+        args = std::move(a);
+        return;
+    }
+    if (name == "Glob") {
+        json a{{"pattern", str(args, "pattern")}};
+        if (auto p = str(args, "path"); !p.empty()) a["path"] = p;
+        name = "glob";
+        args = std::move(a);
+        return;
+    }
+    if (name == "LS") {
+        name = "list_dir";
+        args = json{{"path", str(args, "path")}};
+        return;
+    }
+    if (name == "TodoWrite") {
+        json todos = json::array();
+        if (const json* ts = arr(args, "todos"))
+            for (const auto& t : *ts)
+                todos.push_back({{"content", str(t, "content")}, {"status", str(t, "status")}});
+        name = "todo";
+        args = json{{"todos", std::move(todos)}};
+        return;
+    }
+    if (name == "WebFetch") { name = "web_fetch"; args = json{{"url", str(args, "url")}}; return; }
+    if (name == "WebSearch") { name = "web_search"; args = json{{"query", str(args, "query")}}; return; }
+    if (name == "Task" || name == "Agent") {
+        name = "task";
+        args = json{{"description", str(args, "description")},
+                    {"prompt", str(args, "prompt")},
+                    {"subagent_type", str(args, "subagent_type")}};
+        return;
+    }
+}
+
+std::string claude_result_text(const json& c, std::vector<ImageContent>* images) {
+    if (c.is_string()) return c.get<std::string>();
+    std::string out;
+    if (c.is_array())
+        for (const auto& part : c) {
+            const std::string t = str(part, "type");
+            if (t == "text") {
+                if (!out.empty()) out += '\n';
+                out += str(part, "text");
+            } else if (t == "image" && images) {
+                if (const json* src = obj(part, "source"); src && str(*src, "type") == "base64") {
+                    std::string raw = util::base64_decode(str(*src, "data"));
+                    if (!raw.empty()) images->emplace_back(str(*src, "media_type"), std::move(raw));
+                }
+            }
+        }
+    return out;
+}
+
+}  // namespace
+
+Parsed parse_claude(std::string_view text, ParseOptions opt) {
+    Parsed out;
+    // Every message line by uuid; the conversation is the chain from the
+    // newest leaf back to the root, so rewound branches drop out.
+    struct Line { json j; std::string parent; };
+    std::unordered_map<std::string, Line> lines;
+    std::vector<std::string> order;
+    std::string summary_title;
+    std::vector<std::pair<std::string, std::string>> summaries;   // leafUuid, text
+
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        std::size_t nl = text.find('\n', pos);
+        if (nl == std::string_view::npos) nl = text.size();
+        const std::string_view raw = text.substr(pos, nl - pos);
+        pos = nl + 1;
+        if (raw.empty()) continue;
+        json d = json::parse(raw, nullptr, false);
+        if (!d.is_object()) continue;
+        const std::string type = str(d, "type");
+        if (type == "summary") {
+            summaries.emplace_back(str(d, "leafUuid"), str(d, "summary"));
+            continue;
+        }
+        if (type == "custom-title" || type == "ai-title") {
+            if (auto t = str(d, "customTitle"); !t.empty()) summary_title = t;
+            else if (auto t2 = str(d, "aiTitle"); !t2.empty() && summary_title.empty()) summary_title = t2;
+            continue;
+        }
+        if (type != "user" && type != "assistant") continue;
+        if (d.value("isSidechain", false)) continue;
+        if (out.session_id.empty()) out.session_id = str(d, "sessionId");
+        if (out.cwd.empty()) out.cwd = str(d, "cwd");
+        // SDK and ACP runs (agentty itself spawns these) are not the
+        // user's own Claude Code sessions.
+        const std::string ep = str(d, "entrypoint");
+        if (ep.starts_with("sdk") || ep == "claude-agent-acp" || ep == "acp") out.skip = true;
+        std::string uuid = str(d, "uuid");
+        if (uuid.empty()) continue;
+        std::string parent = str(d, "parentUuid");
+        order.push_back(uuid);
+        lines.emplace(std::move(uuid), Line{std::move(d), std::move(parent)});
+    }
+    if (!summary_title.empty()) out.title = summary_title;
+    else if (!summaries.empty()) out.title = summaries.back().second;
+
+    // The newest line in file order is the live leaf.
+    std::vector<const json*> chain;
+    if (!order.empty()) {
+        std::string at = order.back();
+        std::size_t guard = 0;
+        while (!at.empty() && guard++ < lines.size() + 1) {
+            auto f = lines.find(at);
+            if (f == lines.end()) break;
+            chain.push_back(&f->second.j);
+            at = f->second.parent;
+        }
+        std::reverse(chain.begin(), chain.end());
+    }
+
+    std::vector<Message>& msgs = out.messages;
+    std::unordered_map<std::string, std::pair<std::size_t, std::size_t>> by_id;
+    std::string last_msg_id;   // Claude Code splits one reply into a line per block
+
+    for (const json* dp : chain) {
+        const json& d = *dp;
+        const auto ts = parse_time(str(d, "timestamp"));
+        if (ts != Clock::time_point{}) {
+            if (out.started == Clock::time_point{}) out.started = ts;
+            out.updated = ts;
+        }
+        const json* m = obj(d, "message");
+        if (!m) continue;
+        const std::string role = str(*m, "role");
+        const json content = m->value("content", json{});
+
+        if (role == "user") {
+            if (d.value("isCompactSummary", false)) {
+                // The summary Claude Code wrote when it compacted. Turns stay on
+                // screen; the model gets the summary instead of them.
+                const std::string s = content.is_string() ? content.get<std::string>()
+                                                          : claude_result_text(content, nullptr);
+                if (!s.empty() && !msgs.empty()) {
+                    Thread::CompactionRecord rec;
+                    rec.up_to_index = msgs.size();
+                    rec.summary     = s;
+                    rec.created_at  = ts;
+                    out.compactions.push_back(std::move(rec));
+                }
+                continue;
+            }
+            if (d.value("isMeta", false)) continue;
+            std::string body;
+            std::vector<ImageContent> images;
+            bool had_result = false;
+            if (content.is_string()) body = content.get<std::string>();
+            else if (content.is_array())
+                for (const auto& c : content) {
+                    const std::string ct = str(c, "type");
+                    if (ct == "text") {
+                        if (!body.empty()) body += '\n';
+                        body += str(c, "text");
+                    } else if (ct == "image" && opt.images) {
+                        if (const json* src = obj(c, "source"); src && str(*src, "type") == "base64") {
+                            std::string raw = util::base64_decode(str(*src, "data"));
+                            if (!raw.empty()) images.emplace_back(str(*src, "media_type"), std::move(raw));
+                        }
+                    } else if (ct == "tool_result") {
+                        had_result = true;
+                        auto f = by_id.find(str(c, "tool_use_id"));
+                        if (f == by_id.end()) continue;
+                        auto [mi, ti] = f->second;
+                        std::vector<ImageContent> rimg;
+                        std::string res = claude_result_text(c.value("content", json{}),
+                                                             opt.images ? &rimg : nullptr);
+                        set_output(msgs[mi].tool_calls[ti], std::move(res),
+                                   c.value("is_error", false), std::move(rimg));
+                    }
+                }
+            if (had_result && body.empty() && images.empty()) continue;
+            if (injected_user_text(body)) continue;
+            if (body.empty() && images.empty()) continue;
+            Message um;
+            um.role = Role::User;
+            um.text = std::move(body);
+            um.images = std::move(images);
+            if (ts != Clock::time_point{}) um.timestamp = ts;
+            msgs.push_back(std::move(um));
+            last_msg_id.clear();
+            continue;
+        }
+        if (role != "assistant") continue;
+        if (d.value("isApiErrorMessage", false)) continue;
+        const std::string mid = str(*m, "id");
+        if (msgs.empty() || msgs.back().role != Role::Assistant || mid.empty() || mid != last_msg_id) {
+            // A new reply, unless the last one still has unanswered calls.
+            const bool open_calls = !msgs.empty() && msgs.back().role == Role::Assistant
+                && std::ranges::any_of(msgs.back().tool_calls, [](const ToolUse& t) { return !t.is_terminal(); });
+            if (!open_calls || mid != last_msg_id) {
+                Message am;
+                am.role = Role::Assistant;
+                if (auto mdl = str(*m, "model"); !mdl.empty() && mdl != "<synthetic>")
+                    am.served_model = ModelId{mdl};
+                msgs.push_back(std::move(am));
+            }
+        }
+        last_msg_id = mid;
+        Message& am = msgs.back();
+        if (ts != Clock::time_point{}) am.timestamp = ts;
+        if (const json* u = obj(*m, "usage")) {
+            Message::Telemetry t;
+            auto u32 = [&](const char* k) {
+                auto it = u->find(k);
+                return it != u->end() && it->is_number_unsigned()
+                           ? static_cast<std::uint32_t>(std::min<std::uint64_t>(it->get<std::uint64_t>(), UINT32_MAX))
+                           : 0u;
+            };
+            t.input_tokens   = u32("input_tokens");
+            t.output_tokens  = u32("output_tokens");
+            t.cache_read     = u32("cache_read_input_tokens");
+            t.cache_creation = u32("cache_creation_input_tokens");
+            am.telemetry = t;
+        }
+        if (!content.is_array()) continue;
+        for (const auto& c : content) {
+            const std::string ct = str(c, "type");
+            if (ct == "text") {
+                if (!am.text.empty()) am.text += "\n\n";
+                am.text += str(c, "text");
+            } else if (ct == "thinking") {
+                // Readable text only; the signature is tied to Anthropic's key
+                // for that model and is dropped.
+                if (!am.thinking.empty()) am.thinking += "\n\n";
+                am.thinking += str(c, "thinking");
+            } else if (ct == "tool_use") {
+                std::string name = str(c, "name");
+                json args = c.value("input", json::object());
+                map_claude_tool(name, args);
+                ToolUse tc;
+                tc.id     = ToolCallId{wire_safe(str(c, "id"), "call")};
+                tc.name   = ToolName{wire_safe(std::move(name), "tool")};
+                tc.args   = std::move(args);
+                tc.status = ToolUse::Pending{};
+                am.tool_calls.push_back(std::move(tc));
+                by_id[str(c, "id")] = {msgs.size() - 1, am.tool_calls.size() - 1};
+            }
+        }
+    }
+    // Drop assistant shells left empty by skipped error lines.
+    std::erase_if(msgs, [](const Message& mm) {
+        return mm.role == Role::Assistant && mm.text.empty() && mm.thinking.empty()
+            && mm.tool_calls.empty();
+    });
+    // Erasing shifts indices; recompute compaction cut points by clamping.
+    for (auto& rec : out.compactions) rec.up_to_index = std::min(rec.up_to_index, msgs.size());
+    mark_unfinished(msgs);
+    return out;
+}
+
+// ── Thread assembly ──────────────────────────────────────────────────────
+
+Thread to_thread(Source src, Parsed p, const fs::path& file, std::uint64_t size,
+                 std::int64_t mtime) {
+    Thread t;
+    t.id = thread_id_for(src, p.session_id.empty() ? file.filename().string() : p.session_id);
+    t.imported = Thread::Import{std::string{key_of(src)}, p.session_id, file.string(), size, mtime};
+    t.workspace = p.cwd;
+    t.created_at = p.started != Clock::time_point{} ? p.started : Clock::now();
+    t.updated_at = p.updated != Clock::time_point{} ? p.updated : t.created_at;
+    t.messages = std::move(p.messages);
+    t.imported->messages = static_cast<std::uint32_t>(t.messages.size());
+    // Compactions must cover at least one message and leave the tail.
+    for (auto& rec : p.compactions)
+        if (rec.up_to_index > 0 && rec.up_to_index <= t.messages.size())
+            t.compactions.push_back(std::move(rec));
+    persistence::summarise_for_picker(t.messages, t);
+    if (!p.title.empty()) {
+        t.title = persistence::clean_title(p.title);
+        t.name_is_auto = true;
+    } else {
+        for (const auto& m : t.messages)
+            if (m.typed_by_user() && !m.text.empty()) {
+                t.title = persistence::title_from_first_message(m.text);
+                break;
+            }
+    }
+    // Never ask a model to rename it; it already has the name the user saw.
+    t.auto_titled = true;
+    return t;
+}
+
+fs::path sessions_root(Source s, const fs::path& home) {
+    if (s == Source::Codex) {
+        if (const char* c = std::getenv("CODEX_HOME"); c && *c) return fs::path{c} / "sessions";
+        return home.empty() ? fs::path{} : home / ".codex" / "sessions";
+    }
+    if (const char* c = std::getenv("CLAUDE_CONFIG_DIR"); c && *c) return fs::path{c} / "projects";
+    return home.empty() ? fs::path{} : home / ".claude" / "projects";
+}
+
+namespace {
+
+std::int64_t mtime_secs(const fs::path& p) {
+    std::error_code ec;
+    const auto ft = fs::last_write_time(p, ec);
+    if (ec) return 0;
+    const auto sys = std::chrono::time_point_cast<std::chrono::seconds>(
+        ft - fs::file_time_type::clock::now() + Clock::now());
+    return sys.time_since_epoch().count();
+}
+
+std::optional<std::string> slurp(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) return std::nullopt;
+    return std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+struct Header {
+    Thread thread;   // messages empty
+    bool   skip = false;
+};
+
+Header read_header(Source src, const fs::path& file, std::uint64_t size, std::int64_t mtime) {
+    Header h;
+    auto text = slurp(file);
+    if (!text) { h.skip = true; return h; }
+    Parsed p = src == Source::Codex ? parse_codex(*text, {.images = false})
+                                    : parse_claude(*text, {.images = false});
+    h.skip = p.skip || p.messages.empty()
+          || std::ranges::none_of(p.messages, [](const Message& m) { return m.typed_by_user(); });
+    Thread t = to_thread(src, std::move(p), file, size, mtime);
+    t.messages.clear();
+    t.compactions.clear();
+    t.foreign_only = true;
+    h.thread = std::move(t);
+    return h;
+}
+
+}  // namespace
+
+Scan list_sessions(Io, const Scan& previous) {
+    const fs::path home = util::home_dir_or_empty();
+    // What the last scan saw, by path, so unchanged files aren't re-read.
+    std::unordered_map<std::string, const Thread*> seen;
+    std::unordered_map<std::string, const Thread::Import*> seen_skip;
+    for (const auto& t : previous.sessions)
+        if (t.imported) seen.emplace(t.imported->path, &t);
+    for (const auto& s : previous.skipped) seen_skip.emplace(s.path, &s);
+
+    Scan out;
+    for (Source src : {Source::Codex, Source::ClaudeCode}) {
+        const fs::path root = sessions_root(src, home);
+        std::error_code ec;
+        if (root.empty() || !fs::is_directory(root, ec)) continue;
+        // Codex nests by date (YYYY/MM/DD); Claude Code by project dir.
+        const int leaf_depth = src == Source::Codex ? 3 : 1;
+        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+             !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (it.depth() >= leaf_depth) it.disable_recursion_pending();
+            const auto& e = *it;
+            if (it.depth() != leaf_depth || e.path().extension() != ".jsonl") continue;
+            if (!e.is_regular_file(ec)) { ec.clear(); continue; }
+            const std::string key = e.path().string();
+            const auto size = static_cast<std::uint64_t>(e.file_size(ec));
+            if (ec || size == 0) { ec.clear(); continue; }
+            const std::int64_t mt = mtime_secs(e.path());
+            if (auto f = seen.find(key);
+                f != seen.end() && f->second->imported->size == size
+                && f->second->imported->mtime == mt) {
+                out.sessions.push_back(*f->second);
+                continue;
+            }
+            if (auto f = seen_skip.find(key);
+                f != seen_skip.end() && f->second->size == size && f->second->mtime == mt) {
+                out.skipped.push_back(*f->second);
+                continue;
+            }
+            Header h = read_header(src, e.path(), size, mt);
+            if (h.skip)
+                out.skipped.push_back({std::string{key_of(src)}, {}, key, size, mt, 0});
+            else
+                out.sessions.push_back(std::move(h.thread));
+        }
+    }
+    std::ranges::sort(out.sessions, std::greater<>{}, &Thread::updated_at);
+    AGT_LOG(Persist, Debug, "foreign", "list: {} session(s), {} skipped",
+            out.sessions.size(), out.skipped.size());
+    return out;
+}
+
+std::optional<Thread> read_session(Io, const Thread::Import& im) {
+    const auto src = parse_source(im.source);
+    if (!src) return std::nullopt;
+    const fs::path file{im.path};
+    std::error_code ec;
+    const auto size = fs::file_size(file, ec);
+    if (ec) return std::nullopt;
+    auto text = slurp(file);
+    if (!text) return std::nullopt;
+    Parsed p = *src == Source::Codex ? parse_codex(*text) : parse_claude(*text);
+    if (p.messages.empty()) return std::nullopt;
+    return to_thread(*src, std::move(p), file, size, mtime_secs(file));
+}
+
+int cli(Io io, const std::vector<std::string>& argv) {
+    int dump = -1;
+    for (std::size_t i = 0; i < argv.size(); ++i) {
+        if (argv[i] == "--dump" && i + 1 < argv.size()) dump = std::atoi(argv[i + 1].c_str());
+        else if (argv[i] == "-h" || argv[i] == "--help") {
+            std::printf("usage: agentty sessions [--dump N]\n\n"
+                        "Codex and Claude Code sessions on this machine, newest first.\n"
+                        "Open them from ^J in agentty to continue them there.\n");
+            return 0;
+        }
+    }
+    const Scan s = list_sessions(io, {});
+    if (s.sessions.empty()) {
+        std::printf("no Codex or Claude Code sessions found\n");
+        return 0;
+    }
+    if (dump < 0) {
+        int n = 0;
+        for (const auto& t : s.sessions) {
+            const auto age = std::chrono::duration_cast<std::chrono::hours>(
+                Clock::now() - t.updated_at).count();
+            std::printf("%3d  %-11s %4u msgs  %5lldh ago  %s\n      %s\n", n++,
+                        display_name(t.imported->source).c_str(), t.message_count,
+                        static_cast<long long>(age), t.title.c_str(), t.workspace.c_str());
+        }
+        if (!s.skipped.empty())
+            std::printf("\n%zu other file(s) skipped (subagent or SDK runs, empty)\n",
+                        s.skipped.size());
+        return 0;
+    }
+    if (dump >= static_cast<int>(s.sessions.size())) {
+        std::fprintf(stderr, "no session %d\n", dump);
+        return 1;
+    }
+    auto t = read_session(io, *s.sessions[static_cast<std::size_t>(dump)].imported);
+    if (!t) { std::fprintf(stderr, "could not read it\n"); return 1; }
+    std::printf("%s · %zu messages · %zu compaction(s) · id %s\n\n", t->title.c_str(),
+                t->messages.size(), t->compactions.size(), t->id.value.c_str());
+    auto clip = [](std::string s, std::size_t n) {
+        for (auto& c : s) if (c == '\n') c = ' ';
+        if (s.size() > n) { s.resize(n); s += "…"; }
+        return s;
+    };
+    for (std::size_t i = 0; i < t->messages.size(); ++i) {
+        const auto& m = t->messages[i];
+        for (const auto& rec : t->compactions)
+            if (rec.up_to_index == i) std::printf("  ≡ compacted (%zu chars)\n", rec.summary.size());
+        std::printf("%s", m.role == Role::User ? "you " : "bot ");
+        if (!m.thinking.empty()) std::printf("[think %zu] ", m.thinking.size());
+        if (!m.images.empty()) std::printf("[%zu img] ", m.images.size());
+        std::printf("%s\n", clip(m.text, 100).c_str());
+        for (const auto& tc : m.tool_calls)
+            std::printf("     %s %-12s %s → %s\n", tc.is_failed() ? "✗" : "✓",
+                        tc.name.value.c_str(), clip(tc.args.dump(), 70).c_str(),
+                        clip(tc.output(), 50).c_str());
+    }
+    return 0;
+}
+
+}  // namespace agentty::foreign

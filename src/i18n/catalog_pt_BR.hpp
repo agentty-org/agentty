@@ -39,6 +39,7 @@ inline constexpr std::string_view kPortugueseBR = R"JSON({
   "appearance.prose_width":  { "text": "Largura do texto" },
   "appearance.compact":      { "text": "Turnos compactos" },
   "appearance.thread_preview": { "text": "Prévia da conversa" },
+  "appearance.foreign_sessions": { "text": "Sessões do Codex e Claude" },
   "appearance.motion":       { "text": "Animação" },
   "appearance.content":      { "text": "Conteúdo" },
   "appearance.syntax":       { "text": "Realce de sintaxe" },
@@ -47,6 +48,7 @@ inline constexpr std::string_view kPortugueseBR = R"JSON({
   "appearance.help.prose_width": { "text": "quebrar o texto em N colunas · 0 = largura total" },
   "appearance.help.compact":     { "text": "remover a linha em branco entre os turnos" },
   "appearance.help.thread_preview": { "text": "mostrar a conversa selecionada no ^J" },
+  "appearance.help.foreign_sessions": { "text": "listar no ^J para continuar aqui" },
   "appearance.help.syntax":      { "text": "colorir os blocos de código por linguagem" },
 
   "sandbox.read_paths":  { "text": "Também legível" },

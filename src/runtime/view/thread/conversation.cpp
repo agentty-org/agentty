@@ -87,6 +87,9 @@ void build_live_tail(const Model& m, int& running_turn,
     auto compaction_boundary = [&](std::size_t idx) {
         return compaction_boundary_at(m.d.current.compactions, idx, total);
     };
+    const std::size_t seam_at = import_seam_index(m.d.current);
+    const std::string seam_from = m.d.current.imported
+        ? foreign::display_name(m.d.current.imported->source) : std::string{};
 
     bool first_in_tail = true;
     std::size_t i = start;
@@ -112,6 +115,10 @@ void build_live_tail(const Model& m, int& running_turn,
         if (compaction_boundary(i)) {
             if (!first_overall) out.push_back(gap_row());   // space ABOVE
             out.push_back(compaction_divider_row());
+        }
+        if (i == seam_at) {
+            if (!first_overall) out.push_back(gap_row());
+            out.push_back(import_seam_row(seam_from));
         }
 
         if (!first_overall) {

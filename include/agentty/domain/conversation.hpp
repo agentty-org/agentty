@@ -987,6 +987,23 @@ struct Thread {
     // parent thread's id. Empty for a normal thread. Persisted so the thread
     // list can show a "forked from …" hint and the history stays traceable.
     std::string forked_from;
+    // Set on a thread that came from another agent's session (Codex, Claude
+    // Code). `source` is the tool key, `path` the session file, and size and
+    // mtime what that file was when it was read, so a later change can be
+    // picked up. `messages` is how many of the thread's messages came from
+    // the session; anything after them was added in agentty. Persisted.
+    struct Import {
+        std::string   source;
+        std::string   session_id;
+        std::string   path;
+        std::uint64_t size  = 0;
+        std::int64_t  mtime = 0;
+        std::uint32_t messages = 0;
+    };
+    std::optional<Import> imported;
+    // Runtime only: a picker row for a session not opened yet. Its id is the
+    // one opening it will use; there's no agentty file behind it.
+    bool foreign_only = false;
     // Per-thread proactive-RAG override. Absent = inherit the global RAG
     // mode; engaged = this thread's own behaviour. Set by the fork picker.
     //

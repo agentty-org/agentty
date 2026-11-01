@@ -961,6 +961,24 @@ parse_thread_meta_only(const json& j) {
     t.id = ThreadId{std::move(id_str)};
     t.title = j.value("title", "");
     t.forked_from = j.value("forked_from", "");
+    if (const auto it = j.find("imported"); it != j.end() && it->is_object()) {
+        Thread::Import im;
+        auto str = [&](const char* k) {
+            auto f = it->find(k);
+            return f != it->end() && f->is_string() ? f->get<std::string>() : std::string{};
+        };
+        im.source     = str("source");
+        im.session_id = str("session_id");
+        im.path       = str("path");
+        if (auto f = it->find("size"); f != it->end() && f->is_number_unsigned())
+            im.size = f->get<std::uint64_t>();
+        if (auto f = it->find("mtime"); f != it->end() && f->is_number_integer())
+            im.mtime = f->get<std::int64_t>();
+        if (auto f = it->find("messages"); f != it->end() && f->is_number_unsigned())
+            im.messages = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(f->get<std::uint64_t>(), UINT32_MAX));
+        if (!im.source.empty()) t.imported = std::move(im);
+    }
     // On-disk form is unchanged: key absent = inherit, else the RagMode's
     // integer. Anything outside the enum is treated as "inherit" rather than
     // cast blindly — a corrupt or future value must not become a mode.
@@ -1283,9 +1301,25 @@ struct IndexEntry {
     std::string workspace;
     std::string preview;
     std::uint32_t message_count = 0;
+    std::string import_source;   // foreign tool key, "" for a native thread
+    std::string import_session;
+    std::string import_path;
+    long long   import_size  = 0;
+    long long   import_mtime = 0;
+    long long   import_messages = 0;
     long long   mtime      = 0;   // file last_write_time, ns since clock epoch
     long long   size       = -1;  // file size in bytes; -1 == unknown (pre-v2)
 };
+
+void set_import(IndexEntry& ie, const Thread& t) {
+    if (!t.imported) return;
+    ie.import_source  = t.imported->source;
+    ie.import_session = t.imported->session_id;
+    ie.import_path    = t.imported->path;
+    ie.import_size    = static_cast<long long>(t.imported->size);
+    ie.import_mtime   = t.imported->mtime;
+    ie.import_messages = t.imported->messages;
+}
 
 // The file's last-write time, in SECONDS since the UNIX epoch.
 //
@@ -1380,6 +1414,14 @@ std::unordered_map<std::string, IndexEntry> read_thread_index_locked() {
             ie.preview    = e.value("preview", std::string{});
             ie.message_count = static_cast<std::uint32_t>(
                 std::clamp<long long>(e.value("message_count", 0LL), 0, UINT32_MAX));
+            if (auto im = e.find("imported"); im != e.end() && im->is_object()) {
+                ie.import_source  = im->value("source", std::string{});
+                ie.import_session = im->value("session_id", std::string{});
+                ie.import_path    = im->value("path", std::string{});
+                ie.import_size    = im->value("size", 0LL);
+                ie.import_mtime   = im->value("mtime", 0LL);
+                ie.import_messages = im->value("messages", 0LL);
+            }
             ie.mtime      = e.value("mtime", 0LL);
             // Absent in v1 indexes — -1 means "unknown", which the
             // freshness check treats as a miss so the entry gets
@@ -1408,6 +1450,10 @@ void write_thread_index_locked(const std::unordered_map<std::string, IndexEntry>
         if (!e.workspace.empty()) ej["workspace"] = e.workspace;
         if (!e.preview.empty())   ej["preview"]   = e.preview;
         if (e.message_count > 0)  ej["message_count"] = e.message_count;
+        if (!e.import_source.empty())
+            ej["imported"] = {{"source", e.import_source}, {"session_id", e.import_session},
+                              {"path", e.import_path}, {"size", e.import_size},
+                              {"mtime", e.import_mtime}, {"messages", e.import_messages}};
         ej["mtime"]      = e.mtime;
         ej["size"]       = e.size;
         threads[id] = std::move(ej);
@@ -1433,6 +1479,12 @@ Thread thread_from_index(const std::string& id, const IndexEntry& e) {
     t.workspace     = e.workspace;
     t.preview       = e.preview;
     t.message_count = e.message_count;
+    if (!e.import_source.empty())
+        t.imported = Thread::Import{e.import_source, e.import_session, e.import_path,
+                                    static_cast<std::uint64_t>(std::max(0LL, e.import_size)),
+                                    e.import_mtime,
+                                    static_cast<std::uint32_t>(std::clamp<long long>(
+                                        e.import_messages, 0, UINT32_MAX))};
     return t;
 }
 
@@ -1467,6 +1519,7 @@ void reindex_thread(const lock_levels::below_file_lane& cap, const Thread& t) {
     ie.workspace     = t.workspace;
     ie.preview       = t.preview;
     ie.message_count = t.message_count;
+    set_import(ie, t);
     ie.mtime      = mt;
     ie.size       = sz;
     with_thread_index(cap, [](const maya::held<lock_levels::file_lane>&, persistence::Held,
@@ -1580,6 +1633,7 @@ std::vector<Thread> load_all_threads(Io, const lock_levels::below_file_lane& cap
             ie.workspace     = loaded->workspace;
             ie.preview       = loaded->preview;
             ie.message_count = loaded->message_count;
+            set_import(ie, *loaded);
             ie.mtime      = mt;
             ie.size       = sz;
             fresh.emplace(id, std::move(ie));
@@ -1622,6 +1676,13 @@ json thread_meta_to_json(const Thread& t) {
     j["id"] = t.id;
     j["title"] = t.title;
     if (!t.forked_from.empty()) j["forked_from"] = t.forked_from;
+    if (t.imported)
+        j["imported"] = {{"source", t.imported->source},
+                         {"session_id", t.imported->session_id},
+                         {"path", t.imported->path},
+                         {"size", t.imported->size},
+                         {"mtime", t.imported->mtime},
+                         {"messages", t.imported->messages}};
     if (t.rag_mode_override)
         j["rag_mode_override"] = static_cast<int>(*t.rag_mode_override);
     j["created_at"] = std::chrono::duration_cast<std::chrono::seconds>(
@@ -2300,6 +2361,7 @@ Thread thread_header(const Thread& t) {
     h.id                = t.id;
     h.title             = t.title;
     h.forked_from       = t.forked_from;
+    h.imported          = t.imported;
     h.rag_mode_override = t.rag_mode_override;
     h.created_at        = t.created_at;
     h.updated_at        = t.updated_at;
@@ -2923,6 +2985,7 @@ store::Settings load_settings_from_disk() {
             s.ui.syntax        = u.value("syntax", true);
             s.ui.compact_turns = u.value("compact_turns", false);
             s.ui.thread_preview = u.value("thread_preview", true);
+            s.ui.foreign_sessions = u.value("foreign_sessions", true);
         }
         auto favs = j.value("favorite_models", std::vector<std::string>{});
         for (auto& f : favs) s.favorite_models.push_back(ModelId{std::move(f)});
@@ -3361,6 +3424,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         u["syntax"]        = s.ui.syntax;
         u["compact_turns"] = s.ui.compact_turns;
         u["thread_preview"] = s.ui.thread_preview;
+        u["foreign_sessions"] = s.ui.foreign_sessions;
         j["ui"] = std::move(u);
     }
     json favs = json::array();

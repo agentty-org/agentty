@@ -68,6 +68,7 @@ std::string tool_display_name(const std::string& n) {
     if (n == "tool_search")         return "Tool Search";
     if (n == "mcp__resources__read") return "MCP Resource";
     if (n == "mcp__prompts__get")    return "MCP Prompt";
+    if (n == "codex_script")         return "Codex Script";
     // Fallback for any UNMAPPED tool name (MCP-provided tools, a raw name the
     // model emitted, future built-ins not yet in the table above): Title-Case
     // it so the timeline is visually consistent — no tool ever renders as a

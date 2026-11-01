@@ -50,6 +50,7 @@ inline constexpr std::string_view kGerman = R"JSON({
   "appearance.prose_width":  { "text": "Textbreite" },
   "appearance.compact":      { "text": "Kompakte Züge" },
   "appearance.thread_preview": { "text": "Thread-Vorschau" },
+  "appearance.foreign_sessions": { "text": "Codex- & Claude-Sitzungen" },
   "appearance.motion":       { "text": "Animation" },
   "appearance.content":      { "text": "Inhalt" },
   "appearance.syntax":       { "text": "Syntaxhervorhebung" },
@@ -58,6 +59,7 @@ inline constexpr std::string_view kGerman = R"JSON({
   "appearance.help.prose_width": { "text": "Fließtext bei N Spalten umbrechen · 0 = volle Breite" },
   "appearance.help.compact":     { "text": "Leerzeile zwischen den Zügen weglassen" },
   "appearance.help.thread_preview": { "text": "den markierten Thread in ^J zeigen" },
+  "appearance.help.foreign_sessions": { "text": "in ^J zeigen, um hier weiterzumachen" },
   "appearance.help.syntax":      { "text": "Codeblöcke nach Sprache einfärben" },
 
   "sandbox.read_paths":  { "text": "Auch lesbar" },

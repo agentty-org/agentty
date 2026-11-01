@@ -123,6 +123,8 @@ struct Prefs {
     // The framed preview of the highlighted thread in ^J. Off gives the
     // list the whole panel.
     bool       thread_preview = true;
+    // List Codex / Claude Code sessions in ^J so they can be continued here.
+    bool       foreign_sessions = true;
 
     Motion     motion      = Motion::Full;
 

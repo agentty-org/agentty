@@ -126,6 +126,7 @@
 #include "agentty/config/inventory.hpp"   // config::cmd_config
 #if defined(AGENTTY_MCP)
 #include "agentty/mcp/import.hpp"         // mcp::import_::cli
+#include "agentty/foreign/sessions.hpp"   // foreign::cli
 #endif
 #include "agentty/tool/commands.hpp"
 #include "agentty/runtime/slash.hpp"   // `agentty run "/name"`
@@ -1028,6 +1029,13 @@ Args parse_args(int argc, char** argv) {
             for (int j = i + 1; j < argc; ++j)
                 out.plugin_argv.emplace_back(argv[j]);
             return out;
+        } else if (a == "sessions") {
+            // `agentty sessions [--dump N]` — list Codex / Claude Code
+            // sessions agentty can continue.
+            out.subcommand = std::move(a);
+            for (int j = i + 1; j < argc; ++j)
+                out.plugin_argv.emplace_back(argv[j]);
+            return out;
         } else if (a == "airgap") {
             // Hand the remaining argv tail to the airgap subcommand verbatim
             // so it can run its own flag parsing without re-implementing
@@ -1501,6 +1509,8 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         if (const char* e = std::getenv("AGENTTY_RAG_EVAL_K"); e && std::atoi(e) > 0) k = std::atoi(e);
         return rag::bench::eval(args.cli_bench_root, k);
     }
+    if (args.subcommand == "sessions")
+        return foreign::cli(::agentty::IoAccess::grant(), args.plugin_argv);
     if (args.subcommand == "airgap") {
         // --clipboard-relay starts the paste agent: give it Settings → Paste.
         clipboard_configure(persistence::load_settings(::agentty::IoAccess::grant()).paste);
