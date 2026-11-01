@@ -695,7 +695,7 @@ TEST_CASE("threads: rename paste is one line, capped, and renames the open threa
     CHECK(m.d.current.title == fx.renamed_threads[0].title);
 }
 
-TEST_CASE("threads: rename edits at the caret; arrows, Home/End and Delete work") {
+TEST_CASE("threads: rename edits at the caret, and arrows, Home/End and Delete work") {
     install_stub_deps();
     Model m;
     Thread th;

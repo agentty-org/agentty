@@ -180,7 +180,7 @@ TEST_CASE("paste: an image still arriving shows progress, and can't be sent half
     CHECK(m.s.status.find("didn't arrive whole") != std::string::npos);
 }
 
-TEST_CASE("paste: an image in pieces that finishes late still decodes; a stale stall check is ignored") {
+TEST_CASE("paste: an image in pieces that finishes late still decodes, and a stale stall check is ignored") {
     const std::string data(4000, 'A');
     const std::string head = "richpaste:1:image/png::3000::";
     Model m;
@@ -189,9 +189,18 @@ TEST_CASE("paste: an image in pieces that finishes late still decodes; a stale s
     m = send(std::move(m), Msg{ComposerPaste{data.substr(2000), true, false, /*continues_paste=*/true}});
     // The old check fires after the block completed: nothing to mark.
     m = send(std::move(m), Msg{ArmoredPasteStall{first}});
-    REQUIRE(m.ui.composer.attachments.size() == 1);
-    CHECK(m.ui.composer.attachments[0].kind == Attachment::Kind::Image);
-    CHECK(!m.ui.composer.attachments[0].stalled);
+    // The paste chip is emptied and the image added (the same shape as the
+    // in-pieces case above): one image, not stalled, no paste text left.
+    const Attachment* image = nullptr;
+    bool paste_left = false;
+    for (const auto& a : m.ui.composer.attachments) {
+        if (a.kind == Attachment::Kind::Image) image = &a;
+        if (a.kind == Attachment::Kind::Paste && a.byte_count > 0) paste_left = true;
+    }
+    REQUIRE(image != nullptr);
+    CHECK(!image->stalled);
+    CHECK_FALSE(paste_left);
+    CHECK(m.ui.composer.text.find(attachment::make_placeholder(0)) == std::string::npos);
 }
 
 TEST_CASE("paste: an image-as-text cut short and followed by text says so") {
