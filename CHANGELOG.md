@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.39] - 2026-11-01
+
 ### Fixed
 - **Resizing the terminal keeps the whole conversation in scrollback.** A
   width change (dragging the window edge, a cmux or tmux split, a sidebar
