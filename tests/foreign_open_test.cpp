@@ -141,19 +141,28 @@ TEST_CASE("foreign sessions: listed in ^J, opened, refreshed, and hideable") {
     drive(m, ThreadsLoaded{{native}});
     CHECK(std::ranges::find(m.d.threads, sid, &Thread::id) != m.d.threads.end());
 
-    // ^O narrows to other tools' sessions and back.
+    // Tab cycles all → Codex & Claude → all (no threads in this folder, so
+    // that step is skipped); Shift+Tab goes back.
     {
         auto* pp = m.ui.panel.get<pn::ThreadList>();
         REQUIRE(pp != nullptr);
-        drive(m, ThreadListForeignToggle{});
+        drive(m, ThreadListScopeToggle{+1});
         CHECK(pp->only_foreign);
         const auto only = ui::visible_threads(m.d.threads, "", "", true, true);
         REQUIRE(only.size() == 1);
         CHECK(m.d.threads[static_cast<std::size_t>(only[0])].id == sid);
-        drive(m, ThreadListForeignToggle{});
+        drive(m, ThreadListScopeToggle{+1});
         CHECK(!pp->only_foreign);
-        CHECK(ui::visible_threads(m.d.threads, "", "", true, false).size() == 2);
-        pp->index = 0;
+        CHECK(pp->all_workspaces);
+        drive(m, ThreadListScopeToggle{-1});
+        CHECK(pp->only_foreign, "Shift+Tab steps back");
+        drive(m, ThreadListScopeToggle{-1});
+        CHECK(!pp->only_foreign);
+        // Jump to the bottom and back to the top.
+        drive(m, ThreadListJump{ThreadListJump::Where::End});
+        CHECK(pp->index == 1);
+        drive(m, ThreadListJump{ThreadListJump::Where::Home});
+        CHECK(pp->index == 0);
     }
 
     // 2. Enter on it imports it.

@@ -604,7 +604,16 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev, bool renaming) {
     s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
             switch (*sk) {
-                case SpecialKey::Tab:   return Msg{ThreadListScopeToggle{}};
+                // Tab: all → this folder → Codex & Claude → all. Shift+Tab back.
+                case SpecialKey::Tab:     return Msg{ThreadListScopeToggle{e.mods.shift ? -1 : +1}};
+                case SpecialKey::BackTab: return Msg{ThreadListScopeToggle{-1}};
+                // Shift+↑↓ jump to the top / bottom (for keyboards without Home/End).
+                case SpecialKey::Up:
+                    if (e.mods.shift) return Msg{ThreadListJump{ThreadListJump::Where::Home}};
+                    return std::nullopt;
+                case SpecialKey::Down:
+                    if (e.mods.shift) return Msg{ThreadListJump{ThreadListJump::Where::End}};
+                    return std::nullopt;
                 case SpecialKey::Left:  return Msg{ThreadPeekScroll{-1, e.mods.shift}};
                 case SpecialKey::Right: return Msg{ThreadPeekScroll{+1, e.mods.shift}};
                 default:                return std::nullopt;
@@ -616,7 +625,6 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev, bool renaming) {
             case U'n': return Msg{NewThread{}};
             case U'd': return Msg{ThreadListDelete{}};
             case U'r': return Msg{ThreadListRenameStart{}};
-            case U'o': return Msg{ThreadListForeignToggle{}};
             default:   return std::nullopt;
         }
     };

@@ -361,30 +361,34 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             }
             return sync_peek(m);
         },
-        [&](ThreadListScopeToggle) -> Cmd {
+        [&](ThreadListScopeToggle& e) -> Cmd {
             auto* p = m.ui.panel.get<pn::ThreadList>();
             if (!p) return Cmd::none();
-            // Keep the cursor on the same thread if it's in the new scope.
-            const int was = picked_thread(m, *p);
-            p->all_workspaces = !ui::effective_all(m.d.threads, m.env.cwd, p->all_workspaces);
-            p->confirm_remove.clear();
-            const int at = was < 0 ? -1 : visible_index_of(
-                m, *p, m.d.threads[static_cast<std::size_t>(was)].id);
-            p->index = std::max(0, at);
-            m.ui.thread_list_scroll.y = 0;
-            return sync_peek(m);
-        },
-        [&](ThreadListForeignToggle) -> Cmd {
-            auto* p = m.ui.panel.get<pn::ThreadList>();
-            if (!p) return Cmd::none();
-            // Nothing to narrow to: say why instead of showing an empty list.
-            if (!p->only_foreign && ui::foreign_thread_count(m.d.threads) == 0)
+            // The scopes, in Tab order. One that would list nothing (no
+            // threads in this folder, no other-tool sessions) is skipped.
+            enum Scope { All, Folder, Foreign };
+            const bool has_folder  = ui::workspace_thread_count(m.d.threads, m.env.cwd) > 0;
+            const bool has_foreign = ui::foreign_thread_count(m.d.threads) > 0;
+            std::vector<Scope> ring{All};
+            if (has_folder)  ring.push_back(Folder);
+            if (has_foreign) ring.push_back(Foreign);
+            if (ring.size() == 1)
                 return set_status_toast(m, m.s.foreign_loading
                         ? "still looking for Codex / Claude Code sessions\xe2\x80\xa6"
-                        : "no Codex or Claude Code sessions found",
+                        : "only one list here: no other folders or tools have threads",
                     std::chrono::seconds{3});
+            const Scope now = p->only_foreign ? Foreign
+                            : !ui::effective_all(m.d.threads, m.env.cwd, p->all_workspaces) ? Folder
+                            : All;
+            const auto at_now = std::ranges::find(ring, now);
+            const int i = at_now == ring.end() ? 0 : static_cast<int>(at_now - ring.begin());
+            const int n = static_cast<int>(ring.size());
+            const Scope next = ring[static_cast<std::size_t>(((i + e.delta) % n + n) % n)];
+
+            // Keep the cursor on the same thread if it's in the new scope.
             const int was = picked_thread(m, *p);
-            p->only_foreign = !p->only_foreign;
+            p->all_workspaces = next != Folder;
+            p->only_foreign   = next == Foreign;
             p->confirm_remove.clear();
             const int at = was < 0 ? -1 : visible_index_of(
                 m, *p, m.d.threads[static_cast<std::size_t>(was)].id);

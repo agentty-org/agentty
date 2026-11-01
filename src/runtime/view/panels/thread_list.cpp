@@ -119,9 +119,11 @@ Element thread_list_panel(const Model& m) {
     const bool renaming = !picker->renaming.empty();
 
     Panel::Config cfg;
-    cfg.title      = all ? " Threads \xc2\xb7 all " : " Threads \xc2\xb7 " + workspace_name(m.env.cwd) + " ";
-    if (picker->only_foreign)
-        cfg.title = cfg.title.substr(0, cfg.title.size() - 1) + " \xc2\xb7 Codex & Claude ";
+    // The title names the scope in force; the Tab hint names the next one.
+    const std::string here_name = workspace_name(m.env.cwd);
+    const std::string scope_name = picker->only_foreign ? std::string{"Codex & Claude"}
+                                 : all ? std::string{"all"} : here_name;
+    cfg.title      = " Threads \xc2\xb7 " + scope_name + " ";
     cfg.accent     = info;
     cfg.min_width  = kPanelStandard;
     cfg.viewport_h = panel_viewport_h();
@@ -180,7 +182,7 @@ Element thread_list_panel(const Model& m) {
             fg_italic(muted)));
     } else if (visible.empty()) {
         std::string why = picker->query.empty()
-            ? std::string{"  no Codex or Claude Code sessions here \xc2\xb7 ^O for all"}
+            ? std::string{"  no Codex or Claude Code sessions here \xc2\xb7 Tab for more"}
             : "  no thread matches \"" + picker->query + "\"";
         cfg.prebuilt.push_back(text(std::move(why), fg_italic(muted)));
     } else {
@@ -285,11 +287,22 @@ Element thread_list_panel(const Model& m) {
     std::vector<Hint> keys{
         {"type", "filter", 5},
         {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓
+        {"Home/End", "jump", 2},
     };
-    // Only offer a scope to switch to when this folder has threads.
-    if (here > 0) keys.push_back({"Tab", all ? "this folder" : "all", 3});
-    if (n_foreign > 0 || picker->only_foreign)
-        keys.push_back({"^O", picker->only_foreign ? "all threads" : "Codex & Claude", 3});
+    // Tab steps all → this folder → Codex & Claude, skipping empty ones;
+    // the hint names where it goes next.
+    {
+        std::vector<std::string> ring{"all"};
+        if (here > 0) ring.push_back("this folder");
+        if (n_foreign > 0) ring.push_back("Codex & Claude");
+        if (ring.size() > 1) {
+            const std::string now = picker->only_foreign ? "Codex & Claude"
+                                  : all ? "all" : "this folder";
+            auto it = std::ranges::find(ring, now);
+            const std::size_t i = it == ring.end() ? 0 : static_cast<std::size_t>(it - ring.begin());
+            keys.push_back({"Tab", ring[(i + 1) % ring.size()], 3});
+        }
+    }
     keys.push_back({"Enter", "open", 5});
     keys.push_back({"^N", "new", 3});
     keys.push_back({"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 3});
