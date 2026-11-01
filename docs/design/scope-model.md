@@ -298,6 +298,41 @@ without a code change, which an allow-list of known keys can never do. The
 decoded `command`/`url` on `Found` exist only to display the server and to
 reject an entry with no transport at all.
 
+### Codex is the exception: it has its own schema
+
+Codex keeps servers in TOML under `[mcp_servers.<name>]` with its own field
+names, so its entries can't be copied as they are. `import.cpp` translates
+them (`util/toml_lite` reads the file) and records anything with no
+agentty equivalent in `Found::notes`, which the scan prints under the
+server. Secrets held in env vars (`bearer_token_env_var`,
+`env_http_headers`) are reported, never resolved into the file: writing a
+token to disk is a choice the user makes, not one an import makes for them.
+
+## Other tools' conversations: read live, adopt on open
+
+The same rule decides what to do with Codex and Claude Code session files.
+Reading a conversation executes nothing, so it's read live: `^J` lists
+them straight from `~/.codex/sessions` and `~/.claude/projects`, and the
+other tool's files are never written.
+
+Continuing one is different, because it turns into agentty state. Opening
+a session (`src/foreign/sessions.cpp`) parses it into a normal `Thread` and
+saves it, with `Thread::imported` recording the source, the file, the size
+and mtime it had, and how many messages came from it. Two choices fall out
+of that:
+
+- **The id is a function of the session**, `thread_id_for(source,
+  session_id)`. Opening it twice reaches the same thread, so there are no
+  duplicates and no lookup table to keep.
+- **Re-reading is a merge, not a replace.** When the file has grown since
+  the import, it's parsed again and the turns added in agentty (everything
+  past `imported->messages`) go back on the end. Neither tool's turns are
+  lost.
+
+What isn't carried over is anything bound to an account: Codex's encrypted
+reasoning and Claude Code's thinking signatures only replay against the
+model and key that made them, so only their readable text comes across.
+
 ## Where it lives
 
 - `include/agentty/scope/scope.hpp` — the types + the two inline fold

@@ -3,7 +3,7 @@ title: "agentty vs Claude Code: an honest comparison (2026)"
 description: "A candid, side-by-side comparison of agentty and Claude Code — speed, footprint, cost, providers, sandboxing, and when to pick each. From the agentty team."
 competitor: "Claude Code"
 verdict: "If you want the official, batteries-included Anthropic experience, use Claude Code. If you want a single 16.7 MB native binary with millisecond startup, provider choice (Claude, OpenAI, Groq, Ollama…), and a sandbox by default, agentty is the leaner, faster, open-source pick."
-updated: "2026-08-19"
+updated: "2026-11-01"
 ---
 
 # agentty vs Claude Code
@@ -23,6 +23,7 @@ Both are terminal-first coding agents. Claude Code is Anthropic's official CLI; 
 | Editor | Runs in Zed over ACP | — |
 | License | Open source (MIT) | Proprietary |
 | Sign-in | Your Claude Pro/Max, or API keys | Your Claude account |
+| Past sessions | Lists your Claude Code and Codex sessions; open one and continue it | Its own only |
 
 ## Where Claude Code wins
 
@@ -35,6 +36,7 @@ Both are terminal-first coding agents. Claude Code is Anthropic's official CLI; 
 - **Provider freedom.** Point it at OpenAI, Groq, OpenRouter, Cerebras, or a fully local Ollama model. You aren't locked to one vendor.
 - **Security posture.** Shell and build commands run in a sandbox by default, and you can air-gap an entire session over SSH with one command.
 - **Open source.** Read the code, self-host, and contribute.
+- **Nothing to leave behind.** Your Claude Code conversations, `CLAUDE.md`, `.claude/` skills and commands come along, and your MCP servers import in one command. See [Coming from Codex or Claude Code](/docs/switching).
 
 ## Cost
 

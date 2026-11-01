@@ -16,7 +16,7 @@ Everything you can do without leaving the home row.
 | [[Esc]] | Cancel the current turn / reject a permission / close a modal (does NOT quit) |
 | [[S-Tab]] | Cycle permission profile (Write → Ask → Minimal) |
 | [[Ctrl+K]] | Command palette |
-| [[Ctrl+J]] | Thread list (opens at the current thread) |
+| [[Ctrl+J]] | Thread list (opens at the current thread). Includes your [Codex and Claude Code sessions](/docs/switching) |
 | [[Ctrl+N]] | New thread |
 | [[Alt+←/→]] | Quick-cycle to the adjacent thread (← newer, → older) |
 | [[Ctrl+←/→]] | Quick-cycle threads (empty composer, idle session) |
@@ -148,6 +148,22 @@ There are two ways to work with the queue:
 
 The composer placeholder hints `press ↑ to edit queued — type to queue
 another…` when relevant.
+
+## Thread list ([[Ctrl+J]])
+
+| Key | Action |
+|---|---|
+| type | Filter by title or first message |
+| [[↑]] / [[↓]] | Move |
+| [[Home]] / [[End]], or [[Shift+↑]] / [[Shift+↓]] | Jump to the top / bottom |
+| [[PgUp]] / [[PgDn]] | Move a page |
+| [[Tab]] / [[S-Tab]] | Cycle the list: all → this folder → Codex & Claude. A list with nothing in it is skipped |
+| [[←]] / [[→]] | Scroll the preview a turn at a time; [[Shift+←]] / [[Shift+→]] go to the first / latest |
+| [[Enter]] | Open. On a Codex or Claude Code session, bring it in and continue it here |
+| [[Ctrl+R]] | Rename the highlighted thread |
+| [[Ctrl+D]] | Delete it (press twice; any other key cancels) |
+| [[Ctrl+N]] | Start a new thread |
+| [[Esc]] | Clear the filter; press again to close |
 
 ## Review pane ([[Ctrl+R]])
 

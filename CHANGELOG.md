@@ -4,6 +4,34 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Continue your Codex and Claude Code conversations.** They show up in
+  the thread list (Ctrl+J), marked `↗` with the tool's name. Enter brings
+  one in as an agentty thread you can keep talking in, on any model. Tool
+  calls show with agentty's own cards (Codex patches with the diff it
+  applied), readable reasoning, token counts and compactions carry over,
+  and encrypted or signed reasoning is dropped. If you go back to the other
+  tool and carry on, opening it again here picks that up and keeps your
+  agentty turns after it. A `→ continued in agentty` line marks where
+  agentty took over. The other tool's files are never changed.
+  Turn the list off in Appearance → Codex & Claude sessions.
+- **`agentty sessions`** lists those sessions; `--dump N` shows how one
+  reads as an agentty thread.
+- **`agentty mcp import --from codex`** copies MCP servers from Codex's
+  `config.toml`. Secrets held in environment variables aren't written to
+  disk; the import says which server needs them.
+- **Thread list:** Tab cycles all → this folder → Codex & Claude, Shift+Tab
+  goes back, and empty lists are skipped. Shift+↑/↓ jump to the top and
+  bottom, like Home/End, and the hint row lists them.
+
+### Changed
+- **`CLAUDE.md` is read where Claude Code keeps it:** `~/.claude/CLAUDE.md`
+  (or `$CLAUDE_CONFIG_DIR`), plus `./.claude/CLAUDE.md` next to
+  `./CLAUDE.md`. `~/CLAUDE.md` still works when the new one is missing.
+- **`~/.codex/AGENTS.md`** (or `$CODEX_HOME`) is used as global guidance
+  when there's no `~/.agentty/AGENTS.md` or `~/.agents/AGENTS.md`.
+- MCP servers honour `cwd` from `mcp.json`.
+
 ## [0.9.39] - 2026-11-01
 
 ### Fixed

@@ -187,8 +187,10 @@ Both files are plain JSONL you can inspect or hand-edit. Project scope is only o
 agentty appends up to three user-authored guidance files to the system prompt (each capped at 64 KiB, mtime-cached). The paths match Claude Code, so an existing setup works as-is:
 
 - `~/.claude/CLAUDE.md` — user tier, every workspace (`$CLAUDE_CONFIG_DIR` if set). `~/CLAUDE.md` is still read when that file doesn't exist.
-- `<project>/CLAUDE.md` and `<project>/.claude/CLAUDE.md` — project tier; both are read when both exist.
+- `<project>/CLAUDE.md` and `<project>/.claude/CLAUDE.md` — project tier; when both exist they're joined, `./CLAUDE.md` first.
 - `<project>/CLAUDE.local.md` — local tier (gitignore it for personal notes).
+
+Moving over from Claude Code or Codex? [Coming from Codex or Claude Code](/docs/switching) covers your instructions, skills, MCP servers and past conversations in one place.
 
 ## AGENTS.md guidance
 

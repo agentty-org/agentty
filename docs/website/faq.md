@@ -12,6 +12,10 @@ Quick answers to the questions people ask most.
 
 Yes — OAuth against your existing Pro/Max plan is supported (no extra billing, same account). But it's not the only path or even the recommended one: agentty is bring-your-own-model, so most people run it with an API key or a local Ollama model. See [Authentication](/docs/authentication).
 
+## Can I bring my Codex or Claude Code conversations?
+
+Yes. They show up in the thread list ([[Ctrl+J]]) next to agentty's own threads. Open one and keep going, on any model you like. Your `CLAUDE.md` and `AGENTS.md` files, skills and slash commands are read from where those tools keep them, and `agentty mcp import` copies your MCP servers. Nothing in the other tool is changed. See [Coming from Codex or Claude Code](/docs/switching).
+
 ## Will using my Claude subscription with agentty get my account banned?
 
 The honest answer: agentty is a third-party client, so it carries the same footing as any third-party client that speaks to Anthropic's API. What agentty actually does is deliberately unexotic — it completes the **same OAuth flow** and uses the **same `CLAUDE_CODE_OAUTH_TOKEN`** mechanism Claude Code itself uses, sends ordinary Messages-API requests over HTTPS, and adds nothing that spoofs, scrapes, or circumvents rate limits. Credentials live only in `~/.agentty/credentials/credentials.json` (mode `0600`); nothing is sent anywhere except Anthropic.

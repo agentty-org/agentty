@@ -10,6 +10,8 @@ slug: vs-claude-code
 
 If you already like Claude Code's workflow but want it faster, dependency-free, model-agnostic, and sandboxed, agentty is built for you.
 
+**You don't start from scratch.** Your Claude Code conversations show up in agentty's thread list ([[Ctrl+J]]), and you can open one and keep going, on Claude or any other model. Your `CLAUDE.md` files, `.claude/` skills, subagents and slash commands are read from where Claude Code keeps them, and `agentty mcp import --from claude` copies your MCP servers. See [Coming from Codex or Claude Code](/docs/switching).
+
 ## At a glance
 
 | | agentty | Claude Code |
@@ -26,6 +28,7 @@ If you already like Claude Code's workflow but want it faster, dependency-free, 
 | **Platforms** | Linux, macOS, Windows (x86_64 + aarch64), Termux/Android | macOS, Linux, Windows (WSL) |
 | **License** | MIT (open source) | Proprietary |
 | **MCP tools** | Yes | Yes |
+| **Your Claude Code history** | Open any past Claude Code (or Codex) session and continue it, on any model | — |
 | **Compaction cost** | Background summarization runs on the cheapest capable model on your provider | Not publicly documented |
 | **Tool execution** | Independent calls run in parallel; read-only tools start speculatively mid-stream ([details](/docs/performance#speculative-tool-execution)) | Sequential per turn |
 

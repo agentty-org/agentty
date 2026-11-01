@@ -79,6 +79,7 @@ approve itself.
 - `~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, `~/.codex/AGENTS.md`: read live as
   guidance, same as Claude Code and Codex read them.
 - `~/.codex/config.toml`: only through `agentty mcp import --from codex`.
+- `~/.codex/sessions/` and `~/.claude/projects/` (or `$CODEX_HOME`, `$CLAUDE_CONFIG_DIR`): Codex and Claude Code conversations, listed in [[Ctrl+J]]. Opening one saves an agentty copy under `threads/`; the original is never changed. See [Coming from Codex or Claude Code](/docs/switching).
 
 ### Outside both roots
 

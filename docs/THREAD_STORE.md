@@ -19,7 +19,8 @@ the one this project was originally supposed to end with.
 ~/.agentty/threads/
   <id>.jsonl        one message per line, appended, never rewritten
   <id>.ofs          one 8-byte LE offset per message  (20 KB for 2519)
-  <id>.meta.json    title, timestamps, fork provenance, compactions
+  <id>.meta.json    title, timestamps, fork provenance, import provenance,
+                    compactions
   blobs/<hash>      images, tool output, attachments — content-addressed
   index.json        picker cache: which threads exist  (pre-existing)
 
@@ -37,6 +38,13 @@ Four properties follow from that shape, and they are the whole design:
 
 **No new dependency.** `<fstream>`, `<filesystem>`, and the JSON
 libraries already in the tree. SQLite was measured and rejected (§6.2).
+
+A thread opened from a Codex or Claude Code session is an ordinary thread
+in this store. Its meta and its `index.json` entry carry an `imported`
+object (`source`, `session_id`, `path`, `size`, `mtime`, `messages`) so the
+picker can label it and a later open can tell whether the session grew.
+The id is derived from the session, so it never collides with a random one.
+See `docs/design/scope-model.md` for why sessions are adopted, not linked.
 
 ---
 

@@ -98,16 +98,19 @@ SSE deltas drip into the screen at ⅛ buffer per tick (clamped 32–256 chars),
 
 ## Appearance
 
-[[Ctrl+K]] → **Appearance** opens a form with eleven look-and-feel knobs. Changes apply immediately — there is no apply step — and persist to your user config, not the project's, because a light terminal is a property of your eyes rather than of the repo you happen to be in.
+[[Ctrl+K]] → **Appearance** opens a form with fourteen look-and-feel knobs. Changes apply immediately — there is no apply step — and persist to your user config, not the project's, because a light terminal is a property of your eyes rather than of the repo you happen to be in.
 
 | Setting | Options |
 |---|---|
+| Language | the interface language |
 | Scheme | `native` + 615 built-ins, via a fuzzy browser |
 | Colors | auto / truecolor / 256 / 16 / mono |
 | Background | auto / dark / light |
 | Density | compact / normal / roomy |
 | Prose width | 0–200 columns (0 = no cap) |
 | Compact turns | on / off |
+| Thread preview | on / off: the card above the [[Ctrl+J]] list showing the highlighted thread |
+| Codex & Claude sessions | on / off: list [those sessions](/docs/switching) in [[Ctrl+J]] |
 | Motion | full / reduced / off |
 | Syntax highlighting | on / off |
 | Tool output | collapsed / preview / full |

@@ -94,6 +94,33 @@ Per-server policy is explicit:
 MCP consumption is lazy and opt-in — with no `.agentty/mcp.json` present, startup is a single `stat()` that returns nothing, so there is zero overhead when you aren't using it.
 :::
 
+## Importing from other tools
+
+Already set up MCP servers in another tool? Copy them over instead of retyping them:
+
+```bash
+agentty mcp import                  # what each tool offers, found on this machine
+agentty mcp import --from codex     # copy them into ~/.agentty/mcp.json
+agentty mcp import --from claude --dry-run
+```
+
+| `--from` | reads |
+|---|---|
+| `claude` | `~/.claude.json` (this project's servers) and `./.mcp.json` |
+| `codex` | `~/.codex/config.toml` (or `$CODEX_HOME`) and `./.codex/config.toml` |
+| `cursor` | `~/.cursor/mcp.json` and `./.cursor/mcp.json` |
+| `vscode` | `./.vscode/mcp.json` |
+| `junie` | `~/.junie/mcp/mcp.json` and `./.junie/mcp/mcp.json` |
+
+It's a copy, not a link: agentty never reads another tool's MCP config on its own, because those servers start programs, and the other tool editing its file shouldn't change what agentty runs. After the import there's one list, in `mcp.json`, and nothing else to keep in sync. A server name agentty already has is left alone unless you pass `--force`. `agentty config mcp` lists other tools' configs it found but doesn't read, with the import command for each.
+
+JSON configs are copied as they are. Codex's TOML is translated field by field: `command`, `args`, `env`, `cwd`, `url`, `http_headers`, `tool_timeout_sec` / `startup_timeout_sec`, `disabled_tools` and `enabled = false` all carry over. Two things don't, and the import prints a note under the server they belong to:
+
+- **Secrets in environment variables** (`bearer_token_env_var`, `env_http_headers`). agentty won't write a token into a file for you. Add the header by hand, or use `agentty mcp-login` if the server supports OAuth.
+- **`enabled_tools`**, since agentty only has `tools.exclude`.
+
+Coming from Codex or Claude Code for good? [This page](/docs/switching) covers bringing over your conversations and instructions too.
+
 ## Authorizing an OAuth-gated server
 
 Some hosted MCP servers require OAuth (MCP spec **2026-07-28** authorization). When you run agentty against one, an unauthorized call returns an actionable error instead of hanging. Authorize once with:

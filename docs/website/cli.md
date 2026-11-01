@@ -32,6 +32,7 @@ agentty --sandbox on                   # require an OS sandbox for bash/diagnost
 | `agentty status` | Print which auth source will be used. |
 | `agentty airgap user@host` | Run the agent on a remote host through an SSH SOCKS tunnel. |
 | `agentty acp` | Run headless as an [Agent Client Protocol](/docs/acp) agent for Zed (JSON-RPC over stdio). |
+| `agentty sessions` | List the Codex and Claude Code sessions agentty can continue, newest first. `--dump N` prints how session `N` reads as an agentty thread. Open them from [[Ctrl+J]]. See [Coming from Codex or Claude Code](/docs/switching). |
 | `agentty paste` | Print the clipboard: text as text, images and files saved and their paths printed. Works locally and over ssh. See [Clipboard & Images](/docs/clipboard). |
 | `agentty paste setup` | Once, on the machine you type on: adds the ssh hook to `~/.ssh/config` and starts the clipboard agent, so Ctrl+V over ssh reads that machine's clipboard. |
 | `agentty paste doctor` | Show the paste settings in effect, the agent, the display, every forwarded socket, and what a paste returns right now. |
@@ -41,6 +42,7 @@ agentty --sandbox on                   # require an OS sandbox for bash/diagnost
 | `agentty mcp-login <server>` | Authorize an OAuth-gated MCP server from `mcp.json` (OAuth 2.1 + PKCE via your browser). |
 | `agentty mcp-logout <server>` | Remove a stored MCP server token. |
 | `agentty mcp-status` | List configured MCP servers and their authorization state. |
+| `agentty mcp import [--from junie\|claude\|cursor\|vscode\|codex]` | Copy another tool's MCP servers into `~/.agentty/mcp.json`. With no `--from`, lists what each tool offers. `--dry-run` shows the change, `--force` replaces a server agentty already has. See [MCP](/docs/mcp#importing-from-other-tools). |
 | `agentty plugin add\|list\|remove\|approve` | Manage [plugins](/docs/plugins) — a plugin *is* an MCP server (any language). e.g. `agentty plugin add today --python today.py`, `--uvx pkg`, `--npx pkg`, `--http <url>`, or `-- cmd args`; `--project` targets the repo config. Plugins never run until approved. |
 | `agentty hooks [list]` | Show configured lifecycle [hooks](/docs/hooks) + approval state. `agentty hooks approve` inspects and approves the active hooks file (hooks never run unapproved; any change re-gates). |
 | `agentty skills` | List discovered [Agent Skills](/docs/skills) with spec-lint diagnostics (exit 1 on warnings — CI-friendly). |

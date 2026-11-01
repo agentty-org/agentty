@@ -27,7 +27,29 @@ Threads are global: the directory is flat and a thread isn't bound to the worksp
 
 Press [[Ctrl+J]] to open the thread list and switch between past conversations. [[Ctrl+N]] starts a new thread. [[Ctrl+R]] renames the highlighted thread: its title opens for editing, [[Enter]] saves and [[Esc]] cancels. Saving an empty title clears your name and goes back to the automatic one. `/rename <title>` renames the open thread from the composer. Deleting a thread removes all its files; its blobs go in the next daily sweep if no other thread uses them.
 
-A new thread is named after the first line of its first message. After the first reply, agentty asks the cheap utility model (the one compaction uses) for a 3 to 6 word title and swaps it in, the way chat apps name a chat. A toast says when that happens, and the thread list marks those names `auto`. It is asked once per thread, even if it fails, and never replaces a name you set. Forks keep their `Fork:` name, and threads from before this feature keep the name they had. Turn it off in Settings → **Chat names**, or with `"auto_title": false` in `settings.json`.
+In the thread list:
+
+| Key | Action |
+|---|---|
+| type | Filter by title or first message |
+| [[↑]] / [[↓]] | Move |
+| [[Home]] / [[End]], or [[Shift+↑]] / [[Shift+↓]] | Jump to the top / bottom |
+| [[PgUp]] / [[PgDn]] | Move a page |
+| [[Tab]] / [[S-Tab]] | Cycle the list: all → this folder → Codex & Claude (empty ones are skipped) |
+| [[←]] / [[→]] | Scroll the preview a turn at a time; with Shift, to the first / latest |
+| [[Enter]] | Open |
+| [[Ctrl+R]] | Rename |
+| [[Ctrl+D]] | Delete (press twice) |
+| [[Ctrl+N]] | New thread |
+| [[Esc]] | Clear the filter, then close |
+
+The title of the panel says which list you're on, and the hint row says where [[Tab]] goes next. With **Appearance → Thread preview** on, a card above the list shows the highlighted thread's turns.
+
+## Conversations from Codex and Claude Code
+
+The thread list also shows your Codex and Claude Code sessions, marked `↗` with the tool's name on the right. [[Enter]] on one brings it in as an agentty thread you can keep talking in, on any model. A `→ continued in agentty` line marks where agentty took over, and opening it again later picks up anything you said in the other tool since. See **[Coming from Codex or Claude Code](/docs/switching)** for what comes across and how.
+
+A new thread is named after the first line of its first message. After the first reply, agentty asks the cheap utility model (the one compaction uses) for a 3 to 6 word title and swaps it in, the way chat apps name a chat. A toast says when that happens, and the thread list marks those names `auto`. It is asked once per thread, even if it fails, and never replaces a name you set. Forks keep their `Fork:` name, threads brought in from Codex or Claude Code keep the name they had there, and threads from before this feature keep the name they had. Turn it off in Settings → **Chat names**, or with `"auto_title": false` in `settings.json`.
 
 Threads are kept until you delete them. To expire old ones automatically:
 

@@ -18,6 +18,7 @@ It's **bring-your-own-model**: point it at **OpenAI, DeepSeek, Google Gemini, xA
 - You need to run an agent on an **air-gapped host** through an SSH tunnel.
 - You want shell calls **sandboxed by default**, not as an afterthought.
 - You want the agent to **find the right code by meaning**, locally: built-in [search](/docs/retrieval) that never sends your repo anywhere.
+- You're **coming from Codex or Claude Code** and want to keep your conversations and setup: [open them here and carry on](/docs/switching).
 
 :::tip
 Already convinced? Jump straight to [Installation](/docs/installation) or the [Quick Start](/docs/quick-start).

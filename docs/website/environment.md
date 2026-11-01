@@ -285,3 +285,10 @@ Standard variables consulted for platform behaviour, listed for completeness:
 `COLUMNS` / `LINES` · `DISPLAY` / `WAYLAND_DISPLAY` / `XDG_SESSION_TYPE` ·
 `SSH_CONNECTION` / `SSH_CLIENT` / `SSH_TTY` / `SSH_AUTH_SOCK` ·
 `MOSH_CONNECTION` / `MOSH_KEY` / `MOSH_SERVER_PID` · `INSIDE_EMACS`.
+
+Other tools' locations, so their files are found where they are:
+
+| Variable | Used for |
+|----------|----------|
+| `CODEX_HOME` | Where Codex keeps its sessions, `AGENTS.md` and `config.toml`. Default `~/.codex`. See [Coming from Codex or Claude Code](/docs/switching). |
+| `CLAUDE_CONFIG_DIR` | Where Claude Code keeps its sessions (`projects/`) and personal `CLAUDE.md`. Default `~/.claude`. |
