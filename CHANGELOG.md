@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.41] - 2026-11-02
+
 ### Changed
 - **OpenRouter:** reasoning models keep their reasoning between tool
   calls (`reasoning_details` are saved with the thread and sent back, but
