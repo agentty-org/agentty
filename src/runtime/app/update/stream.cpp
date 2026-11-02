@@ -650,7 +650,7 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
                 // re-checked every Tick) runs the now-shape-neutral
                 // settle_message_md + freeze afterwards. Height stays
                 // locked because the ramp is dense-frame animated here
-                // (non-SSH only).
+                // (any terminal with sync output, SSH included).
                 auto& cache =
                     m.ui.view_cache.message_md(m.d.current.id, last.id);
                 if (!cache.streaming)

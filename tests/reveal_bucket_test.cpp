@@ -33,9 +33,7 @@
 // ── What this pins ──────────────────────────────────────────────────────
 //
 // The reveal bucket depends on sync-output support ONLY. Being remote must
-// not change it. The Tick subscription still throttles for the wire — that
-// is the right place for a bandwidth decision — so this does not undo the
-// ssh cadence work, it just stops it reaching the typewriter.
+// not change it, and it doesn't change the Tick either any more.
 
 #include "agtest.hpp"
 
@@ -99,25 +97,17 @@ TEST_CASE("reveal bucket: ssh does NOT throttle the typewriter") {
     INFO("reveal bucket local=", local, " remote=", remote);
 }
 
-TEST_CASE("reveal bucket: the Tick still throttles for the wire") {
-    // The other half of the contract, and why this is not a revert: the ssh
-    // cadence work was right about BANDWIDTH, and that decision stays on the
-    // Tick subscription where it belongs.
-    //
-    // streaming_tick_period used to be memoised per process from getenv, so
-    // this could only assert a floor. It is a pure function of the launch
-    // environment now (Model::Env), so the remote case is just an input.
-    //
-    // Sync support comes from the SAME place reveal_bucket_ms() reads it (the
-    // real terminal), so the two sides of the comparison below describe one
-    // terminal. Hardcoding it would compare a 33 ms tick against the 100 ms
-    // bucket of a terminal with no sync — a pair that can't exist.
+TEST_CASE("reveal bucket: ssh doesn't slow the tick either") {
+    // The ssh floor on the tick made the end-of-turn glide 2-3 frames, so a
+    // reply that landed in one burst still pasted at message_stop. Being
+    // remote changes nothing now; Motion=Off is how to cut repaints.
     const bool sync = maya::ansi::env_supports_synchronized_output();
     agentty::Model::Env local;   local.synchronized_output  = sync;
     agentty::Model::Env remote;  remote.synchronized_output = sync; remote.remote = true;
     const auto period = agentty::app::streaming_tick_period(local);
     CHECK(period.count() >= 33);
-    CHECK(agentty::app::streaming_tick_period(remote).count() >= 80);   // the SSH floor
+    CHECK(agentty::app::streaming_tick_period(remote) == period);
+    CHECK(remote.reveal_end_glide() == local.reveal_end_glide());
 
     // The tick may be SLOWER than the bucket (the bucket only decides
     // whether a wake yields a new hash). It must never be faster, which

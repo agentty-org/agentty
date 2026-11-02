@@ -48,11 +48,11 @@ namespace {
 // Model, not the process, and subscribe() and visual_hash() agree because
 // they read the same field.
 std::chrono::milliseconds streaming_tick_period(const Model::Env& env) noexcept {
-    const auto base = env.synchronized_output
+    // SSH doesn't slow the tick any more: it made the end-of-turn glide
+    // 2-3 frames, i.e. a paste. Motion=Off is the way to cut repaints.
+    return env.synchronized_output
         ? std::chrono::milliseconds(33)
         : std::chrono::milliseconds(100);
-    if (env.remote) return std::max(base, std::chrono::milliseconds(80));
-    return base;
 }
 
 // True when the last message still carries in-flight wire bytes

@@ -1012,19 +1012,12 @@ struct Model {
         std::string cwd;
         std::string home;
 
-        // The end-of-turn reveal glide (the design contract: end-of-turn is
-        // a visible catch-up, never a paste) needs a DENSE frame cadence to
-        // hold the live height steady mid-ramp, so it requires both signals
-        // streaming_tick_period() derives its cadence from:
-        //   - not remote: remote frames land >=80 ms apart, with wire jitter
-        //     on top;
-        //   - synchronized output: without it the tick is 100 ms, so a 200 ms
-        //     ramp is ~2 frames, the same sparse-frame height-drift geometry
-        //     (the stranded-duplicate bug) as SSH.
-        // Everywhere sparse, the immediate finish is used.
-        // AGENTTY_NO_REVEAL_GLIDE=1 forces the immediate finish everywhere.
+        // Glide the reveal to the end at message_stop instead of pasting the
+        // rest. Needs synchronized output (without it a 200 ms ramp is ~2
+        // frames and the height drifts). Motion=Off or
+        // AGENTTY_NO_REVEAL_GLIDE=1 turn it off.
         [[nodiscard]] bool reveal_end_glide() const noexcept {
-            return !no_reveal_glide && !remote && synchronized_output;
+            return !no_reveal_glide && synchronized_output;
         }
     } env;
 
