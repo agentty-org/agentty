@@ -166,3 +166,27 @@ TEST_CASE("routing: the changes-strip chords follow the live model") {
     CHECK_MESSAGE(!is_reject(route(m, ctrl_x)),
                   "hiding the strip disarms ^X on the very next key");
 }
+
+// ^/ is the byte 0x1F, the same as ^_. Plain terminals send the raw byte;
+// kitty sends ctrl+'/'; tmux with extended keys turns the byte into ctrl+'_'
+// once the app asks for modifyOtherKeys. All three must open the picker.
+TEST_CASE("routing: every way ^/ arrives opens the model picker") {
+    install_stub_deps();
+    auto key = [](char32_t c, bool ctrl) {
+        maya::KeyEvent ev;
+        ev.key = maya::CharKey{c};
+        ev.mods.ctrl = ctrl;
+        return ev;
+    };
+    for (const auto& ev : {key(0x1F, false), key(U'/', true), key(U'_', true)}) {
+        Model m;
+        REQUIRE(press(m, ev));
+        CHECK(m.ui.panel.get<pn::Models>() != nullptr);
+
+        // In the open picker the same key is handled (scopes to a provider),
+        // not typed into the filter.
+        CHECK(route(m, ev).has_value());
+        CHECK(press(m, ev));
+        CHECK(m.ui.panel.get<pn::Models>() != nullptr);
+    }
+}

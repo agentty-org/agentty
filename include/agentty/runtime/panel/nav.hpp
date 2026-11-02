@@ -107,6 +107,9 @@ struct CharView {
     const bool raw_ctrl = (v.raw >= 0x01 && v.raw <= 0x1A);
     if (raw_ctrl) v.c = U'a' + (v.raw - 1);
     v.ctrl = ev.mods.ctrl || raw_ctrl;
+    // ctrl+/ and ctrl+_ are the same byte (0x1F). tmux re-encodes it as
+    // ctrl+_ once the app asks for modifyOtherKeys, so fold both to ctrl+/.
+    if (v.raw == 0x1F || (v.ctrl && v.raw == U'_')) { v.c = U'/'; v.ctrl = true; }
     return v;
 }
 

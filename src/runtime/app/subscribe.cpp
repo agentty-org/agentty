@@ -479,7 +479,7 @@ std::optional<Msg> on_fused_picker(const KeyEvent& ev) {
         // the list to the highlighted row's provider — press again to clear.
         // Close is Esc (the fused picker is the only model surface now, so ^/
         // no longer needs to toggle a second one shut).
-        if (v->raw == 0x1F || (v->ctrl && v->c == U'/'))
+        if (v->ctrl && v->c == U'/')
             return Msg{ModelsScopeProvider{}};
         if (v->ctrl) {
             switch (v->c) {
@@ -548,7 +548,7 @@ std::optional<Msg> on_provider_picker(const KeyEvent& ev) {
         }
         const auto v = nav::char_view(e);
         if (!v) return std::nullopt;
-        if (v->raw == 0x1F || (v->ctrl && v->c == U'/'))
+        if (v->ctrl && v->c == U'/')
             return Msg{OpenModels{}};                       // cross-hop
         if (v->ctrl && (v->c == U'd' || v->c == U'D'))
             return Msg{ProvidersDelete{}};
@@ -975,13 +975,10 @@ std::optional<Msg> on_global(const KeyEvent& ev) {
         // turns it into Enter before we ever see it as a CharKey.)
         const bool raw_ctrl = (c >= 0x01 && c <= 0x1A);
         if (raw_ctrl) c = U'a' + (c - 1);
-        // Ctrl-/ arrives as the raw byte 0x1F on legacy terminals (it sits
-        // just past the 0x01..0x1A letter range above, so raw_ctrl misses
-        // it and no ctrl modifier is reported). Map it to '/' with ctrl
-        // implied so the model picker's primary key fires without needing
-        // the kitty / modifyOtherKeys protocol. Mirrors on_provider_picker,
-        // which already special-cases 0x1F.
-        const bool ctrl_slash = (c == 0x1F);
+        // Ctrl-/ is the byte 0x1F (same as Ctrl-_) on legacy terminals, with
+        // no ctrl flag. tmux with extended keys re-encodes that byte as
+        // ctrl+_. Both mean ^/ here.
+        const bool ctrl_slash = (c == 0x1F) || (ev.mods.ctrl && c == U'_');
         if (ctrl_slash) c = U'/';
         // 0x09 (Ctrl-I / Tab) and 0x0D (Ctrl-M / Enter) are excluded:
         // those are unconditionally Tab / Enter on legacy terminals and
