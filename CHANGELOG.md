@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.42] - 2026-11-02
+
 ### Fixed
 - Over SSH, the end of a reply animates again instead of appearing all
   at once. SSH used to turn off the end-of-turn glide and slow screen
