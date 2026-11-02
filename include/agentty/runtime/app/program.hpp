@@ -4,16 +4,20 @@
 // Forwards to the per-domain reducer / view / subscribe.  The init function
 // reads settings + recent threads through the Store seam.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <thread>
 #include <variant>
 
+#include <maya/core/executor.hpp>
 #include <maya/maya.hpp>
 
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/mem.hpp"
 #include "agentty/runtime/app/update/internal.hpp"  // detail::live_tail_reveal_settled
 #include "agentty/runtime/view/composer.hpp"        // composer_uses_hardware_caret
 #include "agentty/runtime/model.hpp"
@@ -714,6 +718,14 @@ struct AgenttyApp {
     // Replay limits: none by default (AGENTTY_REPLAY_ROWS sets one; 0 = off).
     static std::pair<int, std::size_t> scrollback_limits(const Model& m) {
         return ::agentty::app::detail::scrollback_replay_limits(m);
+    }
+    // A replay of a long thread churns through ~100 MB of scratch on the
+    // worker pool. mimalloc keeps freed pages per thread, so collect on
+    // every worker as well as here, or most of it stays mapped.
+    static void scrollback_after() {
+        maya::exec::parallel_for(std::max(1u, std::thread::hardware_concurrency()) * 4,
+                                 [](std::size_t) { ::agentty::release_to_kernel(); });
+        ::agentty::release_to_kernel();
     }
     // The live prefix sits inside AppLayout's padding(1) and Conversation's
     // padding(0, 1): two columns each side. Replayed history gets the same
