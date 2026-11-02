@@ -37,6 +37,18 @@ TEST_CASE("status wins over message prose") {
     CHECK(classify_stream_error("Bad Gateway", 502) == ErrorClass::Transient);
     CHECK(classify_stream_error("Service Unavailable", 503) == ErrorClass::Transient);
     CHECK(classify_stream_error("overloaded_error", 529) == ErrorClass::Transient);
+    // A bare 500 is the provider's fault too; it used to end the turn.
+    CHECK(classify_stream_error("Internal Server Error", 500) == ErrorClass::Transient);
+    CHECK(classify_stream_error("whatever", 520) == ErrorClass::Transient);   // Cloudflare
+    // 501 is the one 5xx that never succeeds on a retry.
+    CHECK(classify_stream_error("Not Implemented", 501) == ErrorClass::Terminal);
+    // 402 is a billing wall: never retried.
+    CHECK(classify_stream_error("Payment Required", 402) == ErrorClass::Terminal);
+    // Same wall carried on a 429: still not worth waiting for.
+    CHECK(classify_stream_error("insufficient_quota: You exceeded your current quota", 429)
+          == ErrorClass::Terminal);
+    // A real 429 still retries.
+    CHECK(classify_stream_error("rate_limit_exceeded", 429) == ErrorClass::RateLimit);
 
     // A terminal 400 whose message happens to contain a "transient-looking"
     // word ("connection") must NOT be mis-retried — the status is decisive.
@@ -62,6 +74,17 @@ TEST_CASE("status-zero falls back to substring sniff") {
     // Genuinely unknown prose with no status → Terminal.
     CHECK(classify_stream_error("invalid request: missing field", 0)
           == ErrorClass::Terminal);
+
+    // Server-side failures as SSE error text.
+    CHECK(classify_stream_error("api_error: Internal server error", 0) == ErrorClass::Transient);
+    CHECK(classify_stream_error("server_error: The server had an error", 0) == ErrorClass::Transient);
+    CHECK(classify_stream_error("slow_down", 0) == ErrorClass::RateLimit);
+    // Out of credit beats "429" in the same text: OpenAI sends
+    // insufficient_quota as a 429 and it never clears by waiting.
+    CHECK(classify_stream_error("429 insufficient_quota: You exceeded your current quota", 0)
+          == ErrorClass::Terminal);
+    // A token count is not a status code.
+    CHECK(classify_stream_error("limit is 5000 tokens", 0) == ErrorClass::Terminal);
 }
 
 // ── The two paths agree where they overlap ────────────────────────────
@@ -92,7 +115,7 @@ TEST_CASE("wire error types map to the status that means the same thing") {
     // Anthropic's published taxonomy.
     CHECK(wire_error_type_status("rate_limit_error")     == 429);
     CHECK(wire_error_type_status("overloaded_error")     == 503);
-    CHECK(wire_error_type_status("api_error")            == 503);
+    CHECK(wire_error_type_status("api_error")            == 500);
     CHECK(wire_error_type_status("authentication_error") == 401);
     CHECK(wire_error_type_status("permission_error")     == 403);
     CHECK(wire_error_type_status("invalid_request_error")== 400);
@@ -102,9 +125,13 @@ TEST_CASE("wire error types map to the status that means the same thing") {
     // The OpenAI/Responses spellings for the same conditions. Both dialects
     // surface errors this way; one table is one fewer place to drift.
     CHECK(wire_error_type_status("rate_limit_exceeded")     == 429);
-    CHECK(wire_error_type_status("insufficient_quota")      == 429);
-    CHECK(wire_error_type_status("server_error")            == 503);
+    CHECK(wire_error_type_status("insufficient_quota")      == 402);
+    CHECK(wire_error_type_status("server_error")            == 500);
     CHECK(wire_error_type_status("context_length_exceeded") == 413);
+    CHECK(wire_error_type_status("server_is_overloaded")    == 503);
+    CHECK(wire_error_type_status("slow_down")               == 429);
+    CHECK(wire_error_type_status("timeout_error")           == 504);
+    CHECK(wire_error_type_status("billing_error")           == 402);
 
     // Unknown means NO OPINION, not Terminal. 0 tells the caller to keep
     // its existing string-sniff rather than inventing a classification —
@@ -668,4 +695,32 @@ TEST_CASE("retry-after: hours means quota, and a quota is terminal") {
     e.kind        = agentty::http::HttpErrorKind::Status;
     e.http_status = 429;
     CHECK(P::classify(e) == P::ErrorClass::RateLimit);
+}
+
+TEST_CASE("context overflow: every provider's wording, and the real limit") {
+    CHECK(is_context_overflow("prompt is too long: 210000 tokens > 200000 maximum"));
+    CHECK(is_context_overflow("This model's maximum context length is 128000 tokens."));
+    CHECK(is_context_overflow("Your input exceeds the context window of this model."));
+    CHECK(is_context_overflow("request exceeds the available context size (8192 tokens)"));
+    CHECK(is_context_overflow("request_too_large"));
+    CHECK(!is_context_overflow("rate_limit_exceeded"));
+
+    CHECK(context_limit_from_overflow("prompt is too long: 210000 tokens > 200000 maximum") == 200000);
+    CHECK(context_limit_from_overflow(
+              "This model's maximum context length is 128000 tokens. However, you requested 150000")
+          == 128000);
+    CHECK(context_limit_from_overflow(
+              "the request exceeds the available context size (8192 tokens)") == 8192);
+    // No number: no guess.
+    CHECK(context_limit_from_overflow("Your input exceeds the context window of this model.") == 0);
+}
+
+TEST_CASE("optional fields: a host that rejects one is learned, not fatal") {
+    CHECK(parse_rejected_field("Unknown field: reasoning_details", 400) == OptionalField::ReasoningDetails);
+    CHECK(parse_rejected_field("Extra inputs are not permitted: extra_content", 422) == OptionalField::ExtraContent);
+    CHECK(parse_rejected_field("cache_control is not supported", 400) == OptionalField::CacheControl);
+    CHECK(parse_rejected_field("Unrecognized request argument supplied: session_id", 400) == OptionalField::SessionId);
+    CHECK(parse_rejected_field("unknown parameter 'reasoning'", 400) == OptionalField::Reasoning);
+    // A wrong value is a real error, not something to drop.
+    CHECK(parse_rejected_field("reasoning_details must be an array", 400) == OptionalField::None);
 }

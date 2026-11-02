@@ -75,9 +75,11 @@ enum class ErrorClass {
             if (e.http_status == 401 || e.http_status == 403)
                 return ErrorClass::Auth;
             if (e.http_status == 429) return ErrorClass::RateLimit;
-            if (e.http_status == 408 || e.http_status == 502
-             || e.http_status == 503 || e.http_status == 504
-             || e.http_status == 529)
+            // 408 and every 5xx (500 included) are the server's problem, not
+            // the request's: the same request can succeed on a retry. 501
+            // (not implemented) is the one 5xx that never will.
+            if (e.http_status == 408
+             || (e.http_status >= 500 && e.http_status <= 599 && e.http_status != 501))
                 return ErrorClass::Transient;
             return ErrorClass::Terminal;
         case K::Body:
@@ -122,13 +124,29 @@ enum class ErrorClass {
      || contains("not authenticated"))
         return ErrorClass::Auth;
 
+    // Out of credit. Checked before rate limits: OpenAI sends
+    // insufficient_quota as a 429, and retrying a billing wall only delays
+    // telling the user.
+    if (contains("insufficient_quota")
+     || contains("billing_error")
+     || contains("credit balance")
+     || contains("payment_required")
+     || contains("credit_balance_exhausted"))
+        return ErrorClass::Terminal;
+
     // Rate limit — Anthropic's "rate_limit_error" or HTTP 429.
-    if (contains("rate_limit") || contains("429"))
+    if (contains("rate_limit") || contains("429") || contains("slow_down"))
         return ErrorClass::RateLimit;
 
     // Overload / server / network — transient.
     if (contains("overloaded")
      || contains("overload_error")
+     || contains("server_is_overloaded")
+     || contains("api_error")             // Anthropic's internal 500
+     || contains("server_error")          // OpenAI's internal 500
+     || contains("internal_server_error")
+     || contains("timeout_error")
+     || contains("HTTP 500")
      || contains("502")
      || contains("503")
      || contains("504")
@@ -158,8 +176,22 @@ enum class ErrorClass {
 // happens to contain the word "connection" is no longer mis-retried as
 // Transient. When status == 0, behaviour is byte-identical to the old
 // classify(message) call.
+// Does this error say the account is out of credit? Matched on the providers'
+// stable error codes, so a retry can't fix it whatever the status was.
+[[nodiscard]] inline bool is_billing_error(std::string_view msg) noexcept {
+    for (std::string_view k : {"insufficient_quota", "billing_error",
+                               "payment_required", "credit_balance_exhausted",
+                               "credit balance is too low"})
+        if (msg.find(k) != std::string_view::npos) return true;
+    return false;
+}
+
 [[nodiscard]] inline ErrorClass classify_stream_error(
         std::string_view message, int http_status) noexcept {
+    // Out of credit is never worth a retry, whatever status carried it:
+    // OpenAI sends insufficient_quota as a 429, which the status alone would
+    // retry six times before telling the user.
+    if (is_billing_error(message)) return ErrorClass::Terminal;
     if (http_status != 0) {
         return classify(agentty::http::HttpError{
             agentty::http::HttpErrorKind::Status, http_status, std::string{}});
@@ -219,8 +251,40 @@ enum class ErrorClass {
     return lower_contains("prompt is too long")
         || lower_contains("context_length_exceeded")
         || lower_contains("maximum context length")
+        || lower_contains("exceeds the context window")
         || lower_contains("exceeds the available context size")
-        || lower_contains("exceed_context_size");
+        || lower_contains("exceed_context_size")
+        || lower_contains("request_too_large");
+}
+
+// The model's real context limit, when the overflow message states it.
+// Anthropic: "prompt is too long: 210000 tokens > 200000 maximum"
+// OpenAI:    "maximum context length is 128000 tokens"
+// llama.cpp: "exceeds the available context size (8192 tokens)"
+// 0 when there's no number to trust.
+[[nodiscard]] inline long context_limit_from_overflow(std::string_view m) noexcept {
+    auto number_before = [&](std::size_t end) -> long {
+        std::size_t b = end;
+        while (b > 0 && m[b - 1] >= '0' && m[b - 1] <= '9') --b;
+        long v = 0;
+        for (std::size_t i = b; i < end && i - b < 10; ++i) v = v * 10 + (m[i] - '0');
+        return v;
+    };
+    auto number_after = [&](std::size_t at) -> long {
+        while (at < m.size() && m[at] == ' ') ++at;
+        long v = 0;
+        for (std::size_t n = 0; at < m.size() && m[at] >= '0' && m[at] <= '9' && n < 10; ++at, ++n)
+            v = v * 10 + (m[at] - '0');
+        return v;
+    };
+    if (auto p = m.find(" maximum"); p != std::string_view::npos)
+        if (long v = number_before(p > 7 && m.substr(p - 7, 7) == " tokens" ? p - 7 : p); v > 0)
+            return v;
+    if (auto p = m.find("maximum context length is"); p != std::string_view::npos)
+        if (long v = number_after(p + 25); v > 0) return v;
+    if (auto p = m.find("context size ("); p != std::string_view::npos)
+        if (long v = number_after(p + 14); v > 0) return v;
+    return 0;
 }
 
 // ── Vision rejection → learned capability / entitlement ────────────────
@@ -339,17 +403,29 @@ enum class VisionRejection : std::uint8_t {
 // SAME turn without the field.
 enum class OptionalField : std::uint8_t {
     None = 0,
-    PromptCacheKey = 1u << 0,
-    StreamOptions  = 1u << 1,
+    PromptCacheKey   = 1u << 0,
+    StreamOptions    = 1u << 1,
+    // Replayed reasoning / signatures and cache hints. Each makes a model
+    // better or cheaper; none is worth a dead turn on a host that rejects it.
+    ReasoningDetails = 1u << 2,
+    ExtraContent     = 1u << 3,
+    CacheControl     = 1u << 4,
+    Reasoning        = 1u << 5,   // OpenRouter's {reasoning:{effort}}
+    SessionId        = 1u << 6,
 };
 [[nodiscard]] constexpr std::uint8_t bit(OptionalField f) noexcept {
     return static_cast<std::uint8_t>(f);
 }
 [[nodiscard]] constexpr std::string_view wire_name(OptionalField f) noexcept {
     switch (f) {
-        case OptionalField::PromptCacheKey: return "prompt_cache_key";
-        case OptionalField::StreamOptions:  return "stream_options";
-        case OptionalField::None:           break;
+        case OptionalField::PromptCacheKey:   return "prompt_cache_key";
+        case OptionalField::StreamOptions:    return "stream_options";
+        case OptionalField::ReasoningDetails: return "reasoning_details";
+        case OptionalField::ExtraContent:     return "extra_content";
+        case OptionalField::CacheControl:     return "cache_control";
+        case OptionalField::Reasoning:        return "reasoning";
+        case OptionalField::SessionId:        return "session_id";
+        case OptionalField::None:             break;
     }
     return {};
 }
@@ -381,7 +457,11 @@ enum class OptionalField : std::uint8_t {
     bool says_unknown = false;
     for (auto w : kRejectionWords) if (icontains(w)) { says_unknown = true; break; }
     if (!says_unknown) return OptionalField::None;
-    for (auto f : {OptionalField::PromptCacheKey, OptionalField::StreamOptions})
+    // Longest names first: "reasoning" is a prefix of "reasoning_details".
+    for (auto f : {OptionalField::PromptCacheKey, OptionalField::StreamOptions,
+                   OptionalField::ReasoningDetails, OptionalField::ExtraContent,
+                   OptionalField::CacheControl, OptionalField::SessionId,
+                   OptionalField::Reasoning})
         if (icontains(wire_name(f))) return f;
     return OptionalField::None;
 }
@@ -579,12 +659,24 @@ enum class ReasoningEcho : std::uint8_t {
 [[nodiscard]] inline int wire_error_type_status(std::string_view type) noexcept {
     // Rate limiting — the server is shedding load on purpose.
     if (type == "rate_limit_error" || type == "rate_limit_exceeded"
-     || type == "insufficient_quota")
+     || type == "slow_down")
         return 429;
+    // Out of credit. Never retried: every attempt gets the same answer.
+    // (insufficient_quota used to sit with the 429s above, so a billing wall
+    // was retried six times before the user saw it.)
+    if (type == "insufficient_quota" || type == "billing_error"
+     || type == "payment_required_error" || type == "credit_balance_exhausted"
+     || type == "payment_required")
+        return 402;
     // Overload / transient server-side — same request will likely work.
-    if (type == "overloaded_error" || type == "api_error"
-     || type == "server_error" || type == "service_unavailable")
+    if (type == "overloaded_error" || type == "server_is_overloaded"
+     || type == "service_unavailable")
         return 503;
+    if (type == "api_error" || type == "server_error"
+     || type == "internal_server_error")
+        return 500;
+    if (type == "timeout_error" || type == "request_timed_out")
+        return 504;
     // Auth — credentials, not the request.
     if (type == "authentication_error" || type == "invalid_api_key")
         return 401;

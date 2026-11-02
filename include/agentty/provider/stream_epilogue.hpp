@@ -202,6 +202,12 @@ struct StreamOutcome {
     // synthesises a StreamToolUseEnd here so the reducer's salvage path runs
     // on partial tool JSON even when the peer died mid-tool-use.
     std::function<void()>                        on_any_end;
+    // The dialect always sends a terminal event (Anthropic message_stop,
+    // Responses response.completed, Chat [DONE]). When it does and the
+    // connection closes cleanly without one, the reply was cut off in
+    // transit: report that, so the turn is retried instead of silently
+    // ending half way. Off for dialects where a plain close is normal.
+    bool                                         expects_terminal_event = false;
 };
 
 // The WHOLE post-loop of a streaming transport, unified. Classify the loop
@@ -310,6 +316,14 @@ inline StreamResult finish_stream(StreamOutcome o) {
                              std::nullopt, {}, 0, o.non_replayable);
             return tr;
         case StreamEnd::CleanClose:
+            if (o.expects_terminal_event) {
+                tr.error = std::string{"the reply was cut off before it finished "
+                                       "(connection closed early)"};
+                AGT_LOG(Wire, Warn, "stream.cut_off", "status={}", o.http_status);
+                finish_turn_once(terminated, sink, o.stop, tr.error,
+                                 std::nullopt, {}, 0, o.non_replayable);
+                return tr;
+            }
             finish_turn_once(terminated, sink, o.stop, std::nullopt,
                              std::nullopt, o.before_finish);
             return tr;

@@ -479,6 +479,17 @@ struct ModelCapabilities {
         return generation >= 5;
     }
 
+    // Opus 5 and Haiku 5.5 think when a request leaves `thinking` out, so
+    // "off" has to be said: thinking:{type:"disabled"}. Earlier models
+    // treat a missing field as off. Fable and Mythos also think by default
+    // but reject "disabled" with a 400, so they're excluded (it can't be
+    // turned off there). Matches Zed's requires_explicit_thinking_opt_out.
+    [[nodiscard]] constexpr bool needs_explicit_thinking_off() const noexcept {
+        if (family == Family::Opus)  return generation == 5 && revision == 0;
+        if (family == Family::Haiku) return generation == 5 && revision == 5;
+        return false;
+    }
+
     // ── Context-window detection (the 1M-window question) ────────────────
     // Verified against the Claude Code binary's model catalog (each entry
     // carries `context: {window:200000, supports_1m_beta, supports_1m_suffix}`).

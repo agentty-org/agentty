@@ -1511,6 +1511,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 a->last_event_at = m.now;
             if (auto* tcp = find_streaming_tool(e.id)) {
                 auto& tc = *tcp;
+                if (!e.extra_content.is_null()) tc.extra_content = std::move(e.extra_content);
                 // Empty args_streaming is legitimate for argumentless tools;
                 // args was seeded to {} at StreamToolUseStart.
                 if (!tc.args_streaming.empty()) {
@@ -1767,7 +1768,9 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // sends ciphertext the new backend cannot decrypt, and the
                 // whole request 400s (openclaw#72602).
                 msg.reasoning_site = e.site;
-                if (msg.reasoning_encrypted.empty())
+                // OpenRouter sends one JSON array per turn; joining two would
+                // corrupt it. The newest is the complete one.
+                if (msg.reasoning_encrypted.empty() || e.site == "openrouter")
                     msg.reasoning_encrypted = std::move(e.encrypted);
                 else {
                     msg.reasoning_encrypted.push_back('\n');
@@ -2248,6 +2251,69 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     && err_ctx->last_failure_at.time_since_epoch().count() != 0
                     && now - err_ctx->last_failure_at >= provider::kRetryDecayWindow) {
                     prior_transient = 0;
+                }
+            }
+
+            // ── Replayed reasoning rejected: drop it, retry without ────────────
+            // A Responses backend 400s with invalid_encrypted_content when
+            // the encrypted reasoning we replay is no longer readable to it
+            // (a rotated key, an account switch, an expired blob). The
+            // reasoning is an optimisation; the turn is not. Clear every
+            // stored blob in this thread and resend once.
+            if (err_ctx && !has_committed && prior_transient < provider::kMaxRetries
+                && e.message.find("invalid_encrypted_content") != std::string::npos) {
+                std::size_t dropped = 0;
+                for (auto& msg : m.d.current.messages)
+                    if (!msg.reasoning_encrypted.empty()) {
+                        msg.reasoning_encrypted.clear();
+                        msg.reasoning_site.clear();
+                        ++dropped;
+                    }
+                if (dropped > 0) {
+                    AGT_LOG(Model, Warn, "reasoning.dropped",
+                            "invalid_encrypted_content: cleared {} message(s)", dropped);
+                    if (!reschedule_streaming(m.s.phase, [&](phase::Active& c) {
+                            c.transient_retries = prior_transient + 1;
+                            c.last_failure_at   = m.now;
+                            c.retry             = retry::Scheduled{};
+                        }))
+                        return Cmd::none();
+                    auto toast = set_status_toast(
+                        m, "saved reasoning no longer readable \xe2\x80\x94 resent without it",
+                        std::chrono::seconds{6});
+                    return Cmd::batch(save_current_whole(m), std::move(toast),
+                                      Cmd::after(std::chrono::milliseconds{50},
+                                                 Msg{RetryStream{}}));
+                }
+            }
+
+            // ── Request didn't fit: learn the real window, resend trimmed ────
+            // The model's window is smaller than we believed (a router
+            // serving a short-context variant, a stale catalog). When the
+            // error states the real limit, take it as the window; the
+            // soft-trim on the next send then fits the request. Without
+            // this the turn just died with a 400.
+            if (err_ctx && !m.s.compacting && !has_committed
+                && prior_transient < provider::kMaxRetries
+                && provider::is_context_overflow(e.message)) {
+                const long limit = provider::context_limit_from_overflow(e.message);
+                if (limit >= 4096 && limit < m.s.context_max) {
+                    AGT_LOG(Model, Warn, "context.learned",
+                            "overflow: window {} -> {}", m.s.context_max, limit);
+                    m.s.context_max = static_cast<int>(limit);
+                    if (!reschedule_streaming(m.s.phase, [&](phase::Active& c) {
+                            c.transient_retries = prior_transient + 1;
+                            c.last_failure_at   = m.now;
+                            c.retry             = retry::Scheduled{};
+                        }))
+                        return Cmd::none();
+                    auto toast = set_status_toast(
+                        m, "model window is " + std::to_string(limit / 1000)
+                               + "k \xe2\x80\x94 trimmed older turns and resent",
+                        std::chrono::seconds{6});
+                    return Cmd::batch(std::move(toast),
+                                      Cmd::after(std::chrono::milliseconds{50},
+                                                 Msg{RetryStream{}}));
                 }
             }
 

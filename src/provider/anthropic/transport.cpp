@@ -476,6 +476,10 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             body["thinking"]      = std::move(thinking);
             body["output_config"] = json{{"effort", req.effort}};
         }
+    } else if (ModelCapabilities::from_id(wire_model_id(req.model)).needs_explicit_thinking_off()) {
+        // Effort is off, but this model thinks unless told not to. Leaving
+        // `thinking` out would bill reasoning the user turned off.
+        body["thinking"] = json{{"type", "disabled"}};
     }
     // Splice marker for the messages array. nlohmann gives the dumped
     // form `"messages":<unique-string>"`; we string-replace the
@@ -620,6 +624,8 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
                 ctx.sink(StreamToolUseEnd{ToolCallId{b.id}});
             ctx.tool_blocks.clear();
         },
+        // Anthropic always ends a reply with message_stop.
+        .expects_terminal_event = true,
     });
 }
 

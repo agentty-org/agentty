@@ -272,6 +272,19 @@ TEST_CASE("gpt5 codex caps") {
 // enabled+budget_tokens body; 4.6+/4.7/4.8 + flagship 5 need adaptive.
 // Sending adaptive to 4.5 400s ("adaptive thinking is not supported on this
 // model") — the exact bug this pins.
+TEST_CASE("anthropic thinking: which models need an explicit off") {
+    using MC = agentty::ModelCapabilities;
+    CHECK(MC::from_id("claude-opus-5").needs_explicit_thinking_off());
+    CHECK(MC::from_id("claude-haiku-5-5").needs_explicit_thinking_off());
+    // Off by default on older models: leaving the field out is enough.
+    CHECK(!MC::from_id("claude-opus-4-8").needs_explicit_thinking_off());
+    CHECK(!MC::from_id("claude-sonnet-4-6").needs_explicit_thinking_off());
+    // Fable / Mythos think by default but 400 on "disabled".
+    CHECK(!MC::from_id("claude-fable-5").needs_explicit_thinking_off());
+    CHECK(!MC::from_id("claude-mythos-5").needs_explicit_thinking_off());
+    CHECK(!MC::from_id("gpt-5.5").needs_explicit_thinking_off());
+}
+
 TEST_CASE("anthropic thinking mode: adaptive vs enabled by revision") {
     using agentty::ModelCapabilities;
     auto adaptive = [](const char* id) {
