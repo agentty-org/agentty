@@ -4,6 +4,35 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **OpenRouter:** reasoning models keep their reasoning between tool
+  calls (`reasoning_details` are saved with the thread and sent back, but
+  not for `anthropic/*` models). Claude through OpenRouter now uses prompt
+  caching. Effort is sent as OpenRouter's `reasoning.effort`, so it reaches
+  every model, and a conversation stays on one backend so its cache holds.
+- **Gemini 3:** tool calls keep their thought signature and send it back,
+  so multi-step tool use no longer fails with a 400.
+- **Copilot:** only the messages you type count as premium requests; tool
+  result rounds are marked as such.
+- **ChatGPT sign-in:** a rejected token is refreshed and the request sent
+  again once. A login that's gone for good says why (expired, refreshed
+  elsewhere, or revoked). Tokens refresh 5 minutes early and at least
+  every 8 days. Login falls back to port 1457 when 1455 is busy.
+- Opus 5 and Haiku 5.5 have thinking turned off when effort is off.
+
+### Fixed
+- Every 5xx is retried; a plain 500 used to end the turn.
+- Billing errors are never retried, even when they come as a 429.
+- A reply cut off in transit is retried instead of quietly stopping half
+  way.
+- Saved reasoning the server can't read anymore is dropped and the request
+  sent again.
+- When an "input too long" error gives the model's real limit, agentty
+  uses it and resends trimmed.
+- Refusals and safety-filter stops show as refusals.
+- If a host rejects one of the new optional fields, agentty remembers that
+  for the host and leaves it out.
+
 ## [0.9.40] - 2026-11-01
 
 ### Added
