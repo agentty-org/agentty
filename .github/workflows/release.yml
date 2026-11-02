@@ -1211,7 +1211,9 @@ jobs:
   publish-winget:
     name: publish to winget
     needs: [prepare, checksums-final, build-windows]
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+    # always(): winget only needs the windows build, so a failed mac or linux
+    # leg upstream must not skip it.
+    if: ${{ always() && needs.build-windows.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     env:
       V: ${{ needs.prepare.outputs.version }}
