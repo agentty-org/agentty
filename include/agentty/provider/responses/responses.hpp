@@ -103,6 +103,13 @@ struct Site {
     // Turn a non-2xx response into an actionable diagnostic. Hosts phrase
     // their own remediation ("run `agentty login`…" vs entitlement wording).
     std::string (*explain_http_error)(int status, std::string_view body);
+
+    // The server answered 401 to `rejected_token`. Refresh the credential
+    // once (whatever its expiry said) and return a new Target to resend to,
+    // or an error to show. Null for hosts with nothing to refresh.
+    std::expected<Target, std::string> (*reauthorize)(const maya::unlocked& cap,
+                                                       provider::Request& req,
+                                                       const Target& rejected) = nullptr;
 };
 
 // Stream one turn against `site`. Owns the whole lifecycle: authorise, build

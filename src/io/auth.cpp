@@ -166,7 +166,11 @@ std::string OAuthError::render() const {
         case OAuthErrorKind::MissingToken: kind_str = "missing token";break;
         case OAuthErrorKind::Superseded:   kind_str = "superseded";   break;
     }
-    return "[" + std::string{kind_str} + "] " + detail;
+    // A machine-readable "status=NNN " prefix is for classification only.
+    std::string_view shown = detail;
+    if (shown.starts_with("status="))
+        if (auto sp = shown.find(' '); sp != std::string_view::npos) shown.remove_prefix(sp + 1);
+    return "[" + std::string{kind_str} + "] " + std::string{shown};
 }
 
 // ---------------------------------------------------------------------------

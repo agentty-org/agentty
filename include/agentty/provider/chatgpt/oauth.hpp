@@ -25,6 +25,9 @@ struct OAuthConfig {
     // local callback server MUST bind 1455 and serve /auth/callback.
     static constexpr const char* redirect_uri  = "http://localhost:1455/auth/callback";
     static constexpr int         callback_port = 1455;
+    // Used when 1455 is taken (a Codex login left running). Also on OpenAI's
+    // redirect allow-list for this client; codex-rs falls back to it too.
+    static constexpr int         callback_fallback_port = 1457;
     static constexpr const char* callback_path = "/auth/callback";
 
     static constexpr const char* scopes =

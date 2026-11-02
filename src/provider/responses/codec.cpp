@@ -396,6 +396,7 @@ struct StreamCtx {
     // ciphertext is going back to the backend that can decrypt it.
     std::string site;
     bool saw_function_call = false;
+    bool saw_refusal = false;
     bool terminated = false;
     // ── Argument-routing health, counted for the whole response ────────
     //
@@ -604,6 +605,18 @@ void dispatch(StreamCtx& ctx, std::string_view data) {
         ctx.sink(StreamTextDelta{j.value("delta", std::string{})});
         return;
     }
+    // The model declined. Its refusal text is the only explanation the user
+    // gets, so show it like any reply, and end the turn as a refusal.
+    if (type == "response.refusal.delta") {
+        ctx.saw_refusal = true;
+        if (!ctx.text_block_open) ctx.text_block_open = true;
+        ctx.sink(StreamTextDelta{j.value("delta", std::string{})});
+        return;
+    }
+    if (type == "response.refusal.done") {
+        ctx.saw_refusal = true;
+        return;
+    }
     if (type == "response.reasoning_summary_text.delta"
         || type == "response.reasoning_text.delta") {
         ++ctx.thinking_deltas;
@@ -773,7 +786,9 @@ void dispatch(StreamCtx& ctx, std::string_view data) {
         emit_usage(ctx, resp.value("usage", json::object()));
         // No finish_reason on the wire — a function_call in the output means
         // the model wants tool results before continuing.
-        ctx.stop = ctx.saw_function_call ? StopReason::ToolUse : StopReason::EndTurn;
+        ctx.stop = ctx.saw_refusal       ? StopReason::Refusal
+                 : ctx.saw_function_call ? StopReason::ToolUse
+                                         : StopReason::EndTurn;
         AGT_LOG(Wire, Debug, "responses.completed",
                 "stop={} tool_calls={} thinking_deltas={} "
                 "salvaged_args={} unroutable_args={}",
@@ -795,7 +810,8 @@ void dispatch(StreamCtx& ctx, std::string_view data) {
         // is the answer to their "why did it stop mid-sentence?" report.
         AGT_LOG(Wire, Warn, "responses.incomplete", "reason={}", reason);
         ctx.stop = reason == "max_output_tokens" ? StopReason::MaxTokens
-                                                  : StopReason::EndTurn;
+                 : reason == "content_filter"    ? StopReason::Refusal
+                                                 : StopReason::EndTurn;
         ctx.sink(StreamFinished{ctx.stop});
         ctx.terminated = true;
         return;
@@ -904,10 +920,10 @@ void dispatch(StreamCtx& ctx, std::string_view data) {
 // the shared epilogue — is identical for every Responses backend, which is
 // the whole reason this module exists.
 namespace {
-provider::StreamResult stream_started(const Site& site,
-                                      std::expected<Target, std::string> target,
-                                      provider::Request req,
-                                      provider::EventSink sink);
+provider::StreamResult stream_attempt(const Site& site, const Target& tgt,
+                                      const provider::Request& req,
+                                      const provider::EventSink& sink,
+                                      bool may_retry_401, bool& rejected);
 }
 
 provider::StreamResult stream(const maya::unlocked& cap, const Site& site,
@@ -918,7 +934,27 @@ provider::StreamResult stream(const maya::unlocked& cap, const Site& site,
     // and may rewrite req.model). Auth prose is the host's: this layer never
     // invents remediation text it can't be sure of.
     auto target = site.authorize(cap, req);
-    return stream_started(site, std::move(target), std::move(req), std::move(sink));
+    if (!target) {
+        sink(StreamError{target.error()});
+        return provider::StreamResult::failed(std::string{site.id} + ": " + target.error());
+    }
+    // One forced refresh per turn: a 401 means the token was rejected even
+    // though it looked valid (revoked early, clock skew). codex-rs does the
+    // same before giving up.
+    for (bool reauthorized = false;; reauthorized = true) {
+        bool rejected = false;
+        auto r = stream_attempt(site, *target, req, sink,
+                                /*may_retry_401=*/!reauthorized && site.reauthorize != nullptr,
+                                rejected);
+        if (!rejected) return r;
+        AGT_LOG(Wire, Warn, "responses.unauthorized", "site={} refreshing and retrying", site.id);
+        auto again = site.reauthorize(cap, req, *target);
+        if (!again) {
+            sink(StreamError{again.error(), std::nullopt});
+            return provider::StreamResult::failed(std::string{site.id} + ": " + again.error());
+        }
+        target = std::move(again);
+    }
 }
 
 provider::StreamResult stream(const Site& site,
@@ -926,19 +962,23 @@ provider::StreamResult stream(const Site& site,
                               provider::Request req,
                               provider::EventSink sink) {
     sink(StreamStarted{});
-    return stream_started(site, std::move(target), std::move(req), std::move(sink));
+    if (!target) {
+        sink(StreamError{target.error()});
+        return provider::StreamResult::failed(std::string{site.id} + ": " + target.error());
+    }
+    bool rejected = false;
+    return stream_attempt(site, *target, req, sink, /*may_retry_401=*/false, rejected);
 }
 
 namespace {
-provider::StreamResult stream_started(const Site& site,
-                                      std::expected<Target, std::string> target,
-                                      provider::Request req,
-                                      provider::EventSink sink) {
-    if (!target) {
-        sink(StreamError{target.error()});
-        return provider::StreamResult::failed(
-            std::string{site.id} + ": " + target.error());
-    }
+// One POST + stream. With `may_retry_401`, a 401 before any event returns
+// with `rejected` set and nothing emitted, so the caller can refresh and
+// resend; otherwise the turn ends through the shared epilogue.
+provider::StreamResult stream_attempt(const Site& site, const Target& tgt,
+                                      const provider::Request& req,
+                                      const provider::EventSink& sink,
+                                      bool may_retry_401, bool& rejected) {
+    const Target* target = &tgt;
 
     http::Request hr;
     hr.method  = http::HttpMethod::Post;
@@ -1014,6 +1054,12 @@ provider::StreamResult stream_started(const Site& site,
 
     auto result = http::default_client(::agentty::IoAccess::grant()).stream(hr, sc.handler(), tos, req.cancel);
 
+    // Rejected credentials, nothing streamed yet: let the caller refresh.
+    if (may_retry_401 && sc.http_status == 401 && !ctx.terminated) {
+        rejected = true;
+        return provider::StreamResult::failed("401");
+    }
+
     // Uniform end-of-turn pair (Debug summary + Warn raw error body) with the
     // dialect-specific counters appended.
     sc.log_result(bool(result),
@@ -1043,6 +1089,8 @@ provider::StreamResult stream_started(const Site& site,
         .transport_error_message = [&]() -> std::string {
             return result.error().render();
         },
+        // Responses always ends with response.completed / incomplete / failed.
+        .expects_terminal_event = true,
     });
 }
 } // namespace

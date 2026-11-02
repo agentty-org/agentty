@@ -195,20 +195,32 @@ chatgpt_authorize(const maya::unlocked& cap, provider::Request& req) {
     auto creds = codex_fresh_credentials(cap);   // auto-refreshes if stale
     if (!creds || creds->access_token.empty())
         return std::unexpected(
-            std::string{"not signed in to ChatGPT — run `agentty login` and "
+            std::string{"not signed in to ChatGPT \xe2\x80\x94 run `agentty login` and "
                         "choose ChatGPT, or use --provider with an API key"});
+    // The refresh failed for good (expired / reused / revoked): sending the
+    // dead token would only come back as a confusing 401.
+    if (const auto why = refresh_failure_message(codex_last_refresh_failure());
+        !why.empty() && creds->expired())
+        return std::unexpected(std::string{"401 "} + std::string{why});
 
     responses::Target t;
     t.host = "chatgpt.com";
     t.port = 443;
     t.path = "/backend-api/codex/responses";
+    // codex-rs sends the conversation id three ways: `session_id` (legacy),
+    // `session-id` + `thread-id`, and `x-client-request-id`. The backend keys
+    // routing and prompt-cache stickiness on them, so send the same set.
+    const std::string sid = session_id_for(req.session_key);
     t.headers = {
         {"authorization",     "Bearer " + creds->access_token},
         {"content-type",      "application/json"},
         {"accept",            "text/event-stream"},
         {"openai-beta",       "responses=experimental"},
         {"originator",        OAuthConfig::originator},
-        {"session_id",        session_id_for(req.session_key)},
+        {"session_id",        sid},
+        {"session-id",        sid},
+        {"thread-id",         sid},
+        {"x-client-request-id", sid},
         {"user-agent",        std::string("codex_cli_rs/") + OAuthConfig::codex_client_version},
     };
     if (!creds->account_id.empty())
@@ -219,10 +231,13 @@ chatgpt_authorize(const maya::unlocked& cap, provider::Request& req) {
     return t;
 }
 
-void chatgpt_decorate_body(json& body, const provider::Request&) {
+void chatgpt_decorate_body(json& body, const provider::Request& req) {
     // The Codex backend runs stateless: we replay the whole conversation each
     // turn, so nothing should be stored server-side.
     body["store"] = false;
+    // Same stable key codex-rs derives from the session, so turns of one
+    // conversation hit the same prompt cache.
+    if (!req.session_key.empty()) body["prompt_cache_key"] = session_id_for(req.session_key);
     // Ask the backend to return each reasoning item's encrypted_content so we
     // can replay it in input[] next turn. Under store:false this is the ONLY
     // way to carry chain-of-thought across tool rounds — without it a
@@ -231,11 +246,28 @@ void chatgpt_decorate_body(json& body, const provider::Request&) {
     body["include"] = json::array({"reasoning.encrypted_content"});
 }
 
+// A 401 on a token that looked valid: refresh it now and resend once.
+std::expected<responses::Target, std::string>
+chatgpt_reauthorize(const maya::unlocked& cap, provider::Request& req,
+                    const responses::Target& rejected) {
+    std::string old_token;
+    for (const auto& [k, v] : rejected.headers)
+        if (k == "authorization" && v.starts_with("Bearer ")) old_token = v.substr(7);
+    const auto out = codex_force_refresh(cap, old_token);
+    if (const auto why = refresh_failure_message(out.failure); !why.empty())
+        return std::unexpected(std::string{"401 "} + std::string{why});
+    if (!out.creds || out.creds->access_token == old_token)
+        return std::unexpected(std::string{
+            "401 ChatGPT rejected the sign-in \xe2\x80\x94 run `agentty login` and sign in again"});
+    return chatgpt_authorize(cap, req);
+}
+
 const responses::Site kChatGptSite{
     .id                 = "chatgpt",
     .authorize          = &chatgpt_authorize,
     .decorate_body      = &chatgpt_decorate_body,
     .explain_http_error = &format_http_error,
+    .reauthorize        = &chatgpt_reauthorize,
 };
 
 } // namespace

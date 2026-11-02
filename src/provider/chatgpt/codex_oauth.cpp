@@ -151,7 +151,21 @@ std::string jwt_claim(const std::string& jwt, const char* key) {
     return {};
 }
 
-// Parse {access_token,refresh_token,id_token,expires_in} into a credential.
+// The `exp` claim (seconds since epoch) of a JWT, or 0.
+std::int64_t jwt_exp_seconds(const std::string& jwt) {
+    const auto a = jwt.find('.');
+    if (a == std::string::npos) return 0;
+    const auto b = jwt.find('.', a + 1);
+    if (b == std::string::npos) return 0;
+    std::string payload = jwt.substr(a + 1, b - a - 1);
+    for (auto& c : payload) { if (c == '-') c = '+'; else if (c == '_') c = '/'; }
+    while (payload.size() % 4) payload.push_back('=');
+    try {
+        const auto j = json::parse(util::base64_decode(payload));
+        if (auto e = j.find("exp"); e != j.end() && e->is_number()) return e->get<std::int64_t>();
+    } catch (...) {}
+    return 0;
+}
 std::expected<CodexCredentials, OAuthError>
 parse_tokens(const std::string& body, int status,
              const std::string& prior_refresh) {
@@ -162,9 +176,18 @@ parse_tokens(const std::string& body, int status,
             std::string{"json parse failed: "} + e.what()});
     }
     if (status >= 400) {
+        // Keep the server's error code in the detail so the caller can tell
+        // "sign in again" from "try again later".
+        const std::string code = j.contains("error") && j["error"].is_object()
+            ? j["error"].value("code", std::string{}) : j.value("error", std::string{});
+        std::string desc = j.contains("error") && j["error"].is_object()
+            ? j["error"].value("message", std::string{})
+            : j.value("error_description", std::string{});
+        if (desc.empty()) desc = "HTTP " + std::to_string(status);
+        // "status=NNN " leads so a refresh failure can be classified on it.
         return std::unexpected(OAuthError{OAuthErrorKind::ApiError,
-            j.value("error_description",
-                j.value("error", std::string{"HTTP "} + std::to_string(status)))});
+            "status=" + std::to_string(status) + " "
+            + (code.empty() ? desc : code + ": " + desc)});
     }
     CodexCredentials c;
     c.access_token  = j.value("access_token", std::string{});
@@ -176,6 +199,9 @@ parse_tokens(const std::string& body, int status,
     }
     if (const auto secs = j.value("expires_in", std::int64_t{0}); secs > 0)
         c.expires_at_ms = now_ms() + secs * 1000;
+    else if (const auto exp = jwt_exp_seconds(c.access_token); exp > 0)
+        c.expires_at_ms = exp * 1000;   // the token says when it dies
+    c.last_refresh_ms = now_ms();
     if (!c.id_token.empty())
         c.account_id = jwt_claim(c.id_token, "chatgpt_account_id");
     return c;
@@ -401,7 +427,7 @@ void shut_read(std::intptr_t fd) noexcept {
 }
 
 CallbackResult wait_for_callback_impl(int timeout_s, const CodexCancelProbe& cancelled,
-                                      WakeFds& wake) {
+                                      WakeFds& wake, int port) {
     CallbackResult out;
 #if defined(_WIN32)
     WSADATA wsa;
@@ -427,11 +453,11 @@ CallbackResult wait_for_callback_impl(int timeout_s, const CodexCancelProbe& can
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // bind 127.0.0.1 only
-    addr.sin_port = htons(static_cast<uint16_t>(OAuthConfig::callback_port));
+    addr.sin_port = htons(static_cast<uint16_t>(port));
     if (::bind(srv, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         close_sock(srv);
-        out.error = "port 1455 is busy — close any running `codex`/Codex login "
-                    "and retry";
+        out.error = "ports 1455 and 1457 are busy \xe2\x80\x94 close any running "
+                    "`codex`/Codex login and retry";
         return out;
     }
     if (::listen(srv, 1) != 0) { close_sock(srv); out.error = "listen failed"; return out; }
@@ -558,7 +584,7 @@ CallbackResult wait_for_callback_impl(int timeout_s, const CodexCancelProbe& can
     }
 }
 
-CallbackResult wait_for_callback(int timeout_s, const CodexCancelProbe& cancelled) {
+CallbackResult wait_for_callback(int timeout_s, const CodexCancelProbe& cancelled, int port) {
     WakeFds wake;
     std::stop_callback on_cancel(cancelled, [&wake] {
         // Announce ourselves before reading, so the waiter's disarm() waits
@@ -568,7 +594,39 @@ CallbackResult wait_for_callback(int timeout_s, const CodexCancelProbe& cancelle
         shut_read(wake.cli.load());
         wake.busy.fetch_sub(1);
     });
-    return wait_for_callback_impl(timeout_s, cancelled, wake);
+    return wait_for_callback_impl(timeout_s, cancelled, wake, port);
+}
+
+// The callback port to use: 1455, or 1457 when something holds 1455 (a
+// Codex login left running). Both are on OpenAI's redirect allow-list for
+// this client; codex-rs falls back the same way. 0 = neither is free.
+int pick_callback_port() {
+#if defined(_WIN32)
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return OAuthConfig::callback_port;
+    struct WsaGuard { ~WsaGuard() { WSACleanup(); } } g;
+    auto close_sock = [](SOCKET s) { closesocket(s); };
+    const SOCKET kInvalid = INVALID_SOCKET;
+#else
+    auto close_sock = [](int s) { ::close(s); };
+    const int kInvalid = -1;
+#endif
+    for (int port : {OAuthConfig::callback_port, OAuthConfig::callback_fallback_port}) {
+        auto s = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (s == kInvalid) continue;
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons(static_cast<uint16_t>(port));
+        const bool free = ::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0;
+        close_sock(s);
+        if (free) return port;
+    }
+    return 0;
+}
+
+std::string redirect_uri_for(int port) {
+    return "http://localhost:" + std::to_string(port) + OAuthConfig::callback_path;
 }
 
 // ── Credential (de)serialization ───────────────────────────────────────────
@@ -580,6 +638,7 @@ json to_json(const CodexCredentials& c) {
         {"account_id",    c.account_id},
         {"api_key",       c.api_key},
         {"expires_at_ms", c.expires_at_ms},
+        {"last_refresh_ms", c.last_refresh_ms},
     };
 }
 
@@ -591,6 +650,10 @@ CodexCredentials from_json(const json& j) {
     c.account_id    = j.value("account_id", std::string{});
     c.api_key       = j.value("api_key", std::string{});
     c.expires_at_ms = j.value("expires_at_ms", std::int64_t{0});
+    c.last_refresh_ms = j.value("last_refresh_ms", std::int64_t{0});
+    // Saved before expires_in was always set: the token itself knows.
+    if (c.expires_at_ms == 0)
+        if (const auto exp = jwt_exp_seconds(c.access_token); exp > 0) c.expires_at_ms = exp * 1000;
     return c;
 }
 
@@ -648,6 +711,13 @@ bool CodexCredentials::expired(std::int64_t skew_ms) const noexcept {
     return expires_at_ms != 0 && now_ms() >= expires_at_ms - skew_ms;
 }
 
+bool CodexCredentials::needs_refresh() const noexcept {
+    constexpr std::int64_t kWindowMs = 5LL * 60 * 1000;         // codex-rs: 5 minutes
+    constexpr std::int64_t kMaxAgeMs = 8LL * 24 * 3600 * 1000;  // codex-rs: 8 days
+    if (expired(kWindowMs)) return true;
+    return last_refresh_ms != 0 && now_ms() - last_refresh_ms > kMaxAgeMs;
+}
+
 fs::path codex_credentials_path() {
     return auth::config_dir() / "codex_credentials.json";
 }
@@ -677,13 +747,14 @@ bool clear_codex_credentials(const maya::below<maya::leaf>& cap) {
 }
 
 std::string codex_authorize_url(const auth::PkceVerifier& verifier,
-                                const auth::OAuthState&   state) {
+                                const auth::OAuthState&   state,
+                                std::string_view          redirect_uri) {
     const std::string challenge = auth::code_challenge_s256(verifier.value);
     std::ostringstream url;
     url << OAuthConfig::authorize_url
         << "?response_type=code"
         << "&client_id="              << OAuthConfig::client_id
-        << "&redirect_uri="           << url_escape(OAuthConfig::redirect_uri)
+        << "&redirect_uri="           << url_escape(redirect_uri)
         << "&scope="                  << url_escape(OAuthConfig::scopes)
         << "&code_challenge="         << url_escape(challenge)
         << "&code_challenge_method=S256"
@@ -695,12 +766,13 @@ std::string codex_authorize_url(const auth::PkceVerifier& verifier,
 }
 
 std::expected<CodexCredentials, OAuthError>
-codex_exchange_code(const auth::OAuthCode& code, const auth::PkceVerifier& verifier) {
+codex_exchange_code(const auth::OAuthCode& code, const auth::PkceVerifier& verifier,
+                    std::string_view redirect_uri) {
     auto r = post("/oauth/token", form_encode({
         {"grant_type",    "authorization_code"},
         {"code",          code.value},
         {"client_id",     OAuthConfig::client_id},
-        {"redirect_uri",  OAuthConfig::redirect_uri},
+        {"redirect_uri",  std::string{redirect_uri}},
         {"code_verifier", verifier.value},
     }), /*json_body=*/false);
     if (!r.transport_error.empty())
@@ -802,10 +874,15 @@ codex_login(Io io, const maya::unlocked& cap, int timeout_s, CodexDeviceCodeSink
     auth::PkceVerifier verifier{auth::random_urlsafe(io, 64)};
     auth::OAuthState   state{auth::random_urlsafe(io, 32)};
 
-    const std::string url = codex_authorize_url(verifier, state);
+    const int port = pick_callback_port();
+    if (port == 0)
+        return std::unexpected(OAuthError{OAuthErrorKind::Network,
+            "ports 1455 and 1457 are busy \xe2\x80\x94 close any running `codex`/Codex login and retry"});
+    const std::string redirect = redirect_uri_for(port);
+    const std::string url = codex_authorize_url(verifier, state, redirect);
     auth::open_browser(url);
 
-    auto cb = wait_for_callback(timeout_s, cancelled);
+    auto cb = wait_for_callback(timeout_s, cancelled, port);
     if (!cb.error.empty())
         return std::unexpected(OAuthError{OAuthErrorKind::Network, cb.error});
 
@@ -824,44 +901,108 @@ codex_login(Io io, const maya::unlocked& cap, int timeout_s, CodexDeviceCodeSink
         return std::unexpected(OAuthError{OAuthErrorKind::Network,
             "login cancelled"});
     }
-    auto c = codex_exchange_code(auth::OAuthCode{cb.code}, verifier);
+    auto c = codex_exchange_code(auth::OAuthCode{cb.code}, verifier, redirect);
     return c;
 }
 
 namespace {
-std::optional<CodexCredentials>
-codex_fresh_credentials_locked(const maya::held<locks::auth_refresh>& cap);
+RefreshOutcome refresh_locked(const maya::held<locks::auth_refresh>& cap,
+                              std::string_view rejected);
+
+// Last refresh failure, for the request path to report. Written only under
+// the refresh lane; an atomic so readers don't need it.
+std::atomic<std::uint8_t>& last_failure() {
+    static std::atomic<std::uint8_t> v{0};
+    return v;
 }
+
+maya::guarded<bool, locks::auth_refresh>& refresh_lane() {
+    static maya::guarded<bool, locks::auth_refresh> lane;
+    return lane;
+}
+}  // namespace
 
 std::optional<CodexCredentials> codex_fresh_credentials(const locks::below_auth_refresh& cap) {
     // One refresh at a time. The store is only held for file IO, never
     // across the network call, so sign-out and a new login stay responsive.
     // Lock order: refresh lane (auth_refresh), then store (leaf).
-    static maya::guarded<bool, locks::auth_refresh> lane;
-    return lane.with(cap, [](const maya::held<locks::auth_refresh>& h, bool&) {
-        return codex_fresh_credentials_locked(h);
+    return refresh_lane().with(cap, [](const maya::held<locks::auth_refresh>& h, bool&) {
+        return refresh_locked(h, {}).creds;
     });
 }
 
+RefreshOutcome codex_force_refresh(const locks::below_auth_refresh& cap,
+                                   std::string_view rejected_access_token) {
+    return refresh_lane().with(cap, [](const maya::held<locks::auth_refresh>& h, bool&,
+                                       std::string rejected) {
+        return refresh_locked(h, rejected);
+    }, std::string{rejected_access_token});
+}
+
+RefreshFailure codex_last_refresh_failure() noexcept {
+    return static_cast<RefreshFailure>(last_failure().load(std::memory_order_relaxed));
+}
+
+RefreshFailure classify_refresh_failure(int status, std::string_view body) noexcept {
+    if (status == 0 || status >= 500 || status == 429) return RefreshFailure::Transient;
+    if (body.find("refresh_token_expired") != std::string_view::npos) return RefreshFailure::Expired;
+    if (body.find("refresh_token_reused") != std::string_view::npos)  return RefreshFailure::Reused;
+    if (body.find("refresh_token_invalidated") != std::string_view::npos
+     || body.find("invalid_grant") != std::string_view::npos)          return RefreshFailure::Revoked;
+    // Any other 4xx from the token endpoint won't fix itself either.
+    return status == 401 || status == 400 ? RefreshFailure::Revoked : RefreshFailure::Transient;
+}
+
+std::string_view refresh_failure_message(RefreshFailure f) noexcept {
+    switch (f) {
+        case RefreshFailure::Expired:
+            return "your ChatGPT sign-in expired \xe2\x80\x94 run `agentty login` and sign in again";
+        case RefreshFailure::Reused:
+            return "your ChatGPT sign-in was refreshed somewhere else and is no longer valid "
+                   "\xe2\x80\x94 run `agentty login` and sign in again";
+        case RefreshFailure::Revoked:
+            return "your ChatGPT sign-in was revoked \xe2\x80\x94 run `agentty login` and sign in again";
+        case RefreshFailure::None:
+        case RefreshFailure::Transient:
+            return {};
+    }
+    return {};
+}
+
 namespace {
-std::optional<CodexCredentials>
+// Refresh with the credential file locked against other agentty processes.
+// `rejected` is the access token a server just refused, for a forced refresh.
+RefreshOutcome
 refresh_in_section(const maya::held<locks::cred_file>& cap, bool cross,
-                   CodexCredentials loaded, std::uint64_t source_generation) {
+                   CodexCredentials loaded, std::uint64_t source_generation,
+                   std::string rejected) {
     // Re-read under the lock: a peer that refreshed first has saved its
     // token, and Codex rotates refresh tokens, so adopt it instead.
     if (cross) {
         auto [disk, gen] = load_with_generation(cap);
         source_generation = gen;
-        if (!disk) return loaded;
-        if (!disk->expired(/*skew_ms=*/60'000)) return disk;  // a peer refreshed
-        if (disk->refresh_token.empty()) return disk;
+        if (!disk) return {std::move(loaded), RefreshFailure::None};
+        const bool peer_replaced = !rejected.empty() && disk->access_token != rejected;
+        if (peer_replaced || (rejected.empty() && !disk->needs_refresh()))
+            return {std::move(disk), RefreshFailure::None};
+        if (disk->refresh_token.empty()) return {std::move(disk), RefreshFailure::Revoked};
         loaded = std::move(*disk);
     }
 
     auto refreshed = codex_refresh(loaded);
-    if (!refreshed) return loaded;
+    if (!refreshed) {
+        const auto& d = refreshed.error().detail;
+        int status = 0;
+        if (refreshed.error().kind != OAuthErrorKind::Network && d.starts_with("status="))
+            status = std::atoi(d.c_str() + 7);
+        else if (refreshed.error().kind == OAuthErrorKind::BadResponse)
+            status = 502;   // an HTML error page from a proxy, not a verdict on the token
+        const RefreshFailure why = classify_refresh_failure(status, d);
+        util::dbglog("codex.refresh_failed", std::to_string(static_cast<int>(why)) + " " + d.substr(0, 200));
+        return {std::move(loaded), why};
+    }
 
-    return store().with(cap, [](Store& st, std::uint64_t source_gen, CodexCredentials source,
+    auto saved = store().with(cap, [](Store& st, std::uint64_t source_gen, CodexCredentials source,
                            CodexCredentials fresh) -> std::optional<CodexCredentials> {
         auto current = load_codex_credentials_unlocked();
         const bool source_unchanged = current
@@ -877,20 +1018,31 @@ refresh_in_section(const maya::held<locks::cred_file>& cap, bool cross,
         ++st.generation;
         return fresh;
     }, source_generation, loaded, *refreshed);
+    return {std::move(saved), RefreshFailure::None};
 }
 
-std::optional<CodexCredentials>
-codex_fresh_credentials_locked(const maya::held<locks::auth_refresh>& cap) {
+RefreshOutcome refresh_locked(const maya::held<locks::auth_refresh>& cap,
+                              std::string_view rejected) {
     auto [loaded, source_generation] = load_with_generation(cap);
-    if (!loaded) return std::nullopt;
-    if (!loaded->expired(/*skew_ms=*/60'000)) return loaded;
-    if (loaded->refresh_token.empty()) return loaded;
-
-    return persistence::with_shared_file(cap, persistence::cred_lane(codex_credentials_path()), codex_credentials_path(),
-        [](const maya::held<locks::cred_file>& h, persistence::Held held,
-           CodexCredentials l, std::uint64_t gen) {
-            return refresh_in_section(h, held.cross_process, std::move(l), gen);
-        }, *loaded, source_generation);
+    if (!loaded) return {};
+    RefreshOutcome out;
+    if (!rejected.empty() && loaded->access_token != rejected) {
+        // Someone already replaced the token the server refused.
+        out = {std::move(loaded), RefreshFailure::None};
+    } else if (rejected.empty() && !loaded->needs_refresh()) {
+        return {std::move(loaded), RefreshFailure::None};
+    } else if (loaded->refresh_token.empty()) {
+        out = {std::move(loaded), RefreshFailure::Revoked};
+    } else {
+        out = persistence::with_shared_file(
+            cap, persistence::cred_lane(codex_credentials_path()), codex_credentials_path(),
+            [](const maya::held<locks::cred_file>& h, persistence::Held held,
+               CodexCredentials l, std::uint64_t gen, std::string rej) {
+                return refresh_in_section(h, held.cross_process, std::move(l), gen, std::move(rej));
+            }, *loaded, source_generation, std::string{rejected});
+    }
+    last_failure().store(static_cast<std::uint8_t>(out.failure), std::memory_order_relaxed);
+    return out;
 }
 } // namespace
 
