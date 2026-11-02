@@ -13,6 +13,8 @@
 #include <nlohmann/json.hpp>
 
 #include "agentty/provider/openai/transport.hpp"
+#include "agentty/runtime/app/update/internal.hpp"
+#include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
 
 #include <string>
@@ -183,4 +185,51 @@ TEST_CASE("gemini: the signature goes back on the same call next turn") {
                     CHECK(c["extra_content"]["google"]["thought_signature"] == "SIG");
                 }
     CHECK(found);
+}
+
+// The whole path with nothing mocked but the network: the real SSE parser's
+// events go through the real stream reducer, then the next request is built
+// from the thread that left. What the model sent is what goes back.
+TEST_CASE("end to end: what the stream carried is in the next request") {
+    const std::string sse =
+        R"(data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":0,"text":"need to "}]}}]})" "\n\n"
+        R"(data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":0,"text":"read it","signature":"RSIG"}]}}]})" "\n\n"
+        R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",)"
+        R"("extra_content":{"google":{"thought_signature":"TSIG"}},)"
+        R"("function":{"name":"read","arguments":"{\"path\":\"notes.txt\"}"}}]}}]})" "\n\n"
+        R"(data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]})" "\n\n"
+        "data: [DONE]\n\n";
+
+    Model m;
+    m.d.current.messages = {user("what's on line 2?")};
+    Message live; live.role = Role::Assistant;
+    m.d.current.messages.push_back(live);
+    m.s.phase = phase::Streaming{phase::Active{}};
+
+    for (auto& ev : oa::parse_sse_for_test(sse, {"read"}))
+        if (auto* s = std::get_if<msg::StreamMsg>(&ev)) {
+            // StreamFinished would hand off to tool dispatch; stop at the
+            // settled message, which is what the next request is built from.
+            if (std::holds_alternative<StreamFinished>(*s)) break;
+            (void)app::detail::stream_update(m, std::move(*s));
+        }
+
+    const Message& turn = m.d.current.messages.back();
+    REQUIRE(turn.tool_calls.size() == 1);
+    CHECK(turn.tool_calls[0].extra_content["google"]["thought_signature"] == "TSIG");
+    CHECK(turn.reasoning_site == "openrouter");
+
+    // The tool ran; now the follow-up request.
+    Message done = turn;
+    done.tool_calls[0].status = ToolUse::Done{{}, {}, "alpha\nbeta\n"};
+    auto r = openrouter("google/gemini-3-pro");
+    r.messages = {user("what's on line 2?"), done};
+    const json b = oa::build_request_body(r);
+    const json* asst = nullptr;
+    for (const auto& msg : b["messages"])
+        if (msg.value("role", "") == "assistant") asst = &msg;
+    REQUIRE(asst != nullptr);
+    CHECK((*asst)["reasoning_details"][0]["text"] == "need to read it");
+    CHECK((*asst)["reasoning_details"][0]["signature"] == "RSIG");
+    CHECK((*asst)["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "TSIG");
 }
