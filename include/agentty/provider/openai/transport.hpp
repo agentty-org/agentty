@@ -312,6 +312,10 @@ struct HostProbe {
 // header is `authorization: Bearer <key>` unless `endpoint.auth_header_name`
 // is set, in which case the key goes out raw under that name. Exposed for
 // tests.
+// "user" when the newest message is one the user typed, else "agent".
+// Copilot's x-initiator: only user turns are billed as premium requests.
+[[nodiscard]] std::string initiator_for(const std::vector<Message>& msgs);
+
 [[nodiscard]] http::Headers build_request_headers(const AuthHeader& auth,
                                                   const Endpoint& endpoint);
 

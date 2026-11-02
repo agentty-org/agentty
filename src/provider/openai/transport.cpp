@@ -69,6 +69,10 @@ using json = nlohmann::json;
 
 namespace {
 
+// Tags reasoning_details captured from OpenRouter, so they're only ever sent
+// back to OpenRouter (Message::reasoning_site).
+constexpr std::string_view kOpenRouterReasoningSite = "openrouter";
+
 // ── UTF-8 scrub (same defence as the Anthropic transport) ───────────────────
 // A tool output or pasted blob can carry invalid UTF-8; nlohmann's dump()
 // throws on it. Replace every malformed byte with U+FFFD so the request
@@ -118,6 +122,16 @@ struct StreamCtx {
     // (see dispatch_data_fast). Stateful — caches its scratch across
     // iterate() calls so the hot path avoids a malloc per SSE frame.
     simdjson::ondemand::parser simd_parser;
+
+    // OpenRouter's `reasoning_details` (Gemini thought signatures, encrypted
+    // reasoning, summaries), merged across deltas by `index`. Sent back on the
+    // next request so the model keeps its chain of thought across tool calls.
+    json reasoning_details = json::array();
+    // Per-call `extra_content` (Gemini thought signatures), by call id.
+    std::map<std::string, json, std::less<>> tool_extra;
+    // The last call a chunk was attributed to, for a signature that arrives
+    // before the call's id has.
+    json pending_extra;
 
     // Tool-call streaming state. Attribution (which chunk belongs to which
     // call) lives in wire::ToolCallTracker — it keys on (id, index) jointly
@@ -216,12 +230,23 @@ using wire::could_be_tool_json;
     if (fr == "length")         return StopReason::MaxTokens;
     if (fr == "tool_calls")     return StopReason::ToolUse;
     if (fr == "function_call")  return StopReason::ToolUse;
+    // A provider safety filter cut the reply. Without this it read as a
+    // clean, possibly empty, end of turn with no reason given.
+    if (fr == "content_filter") return StopReason::Refusal;
     return StopReason::Unspecified;
 }
 
 // Close every still-open tool call exactly once. OpenAI Chat can interleave
 // argument deltas by tool_calls[].index and only gives a turn-level finish, so
 // closing a call merely because another index emitted would truncate siblings.
+json extra_for(StreamCtx& ctx, std::string_view id) {
+    auto it = ctx.tool_extra.find(id);
+    if (it == ctx.tool_extra.end()) return nullptr;
+    json out = std::move(it->second);
+    ctx.tool_extra.erase(it);
+    return out;
+}
+
 void close_open_tools(StreamCtx& ctx) {
     // Attribution failed earlier in this response: we know some argument
     // bytes went unplaced, but not which call lost them. Announcing these
@@ -243,7 +268,7 @@ void close_open_tools(StreamCtx& ctx) {
             slot.started = true;
         }
         if (!slot.started || slot.ended || slot.id.empty()) continue;
-        ctx.sink(StreamToolUseEnd{ToolCallId{slot.id}});
+        ctx.sink(StreamToolUseEnd{ToolCallId{slot.id}, extra_for(ctx, slot.id)});
         slot.ended = true;
     }
 }
@@ -896,7 +921,10 @@ void ensure_nonempty_turn(StreamCtx& ctx) {
 }
 
 // Handle one choices[0].delta object.
+void merge_reasoning_details(json& into, const json& chunks);
 void handle_delta(StreamCtx& ctx, const json& delta) {
+    if (auto rd = delta.find("reasoning_details"); rd != delta.end() && rd->is_array())
+        merge_reasoning_details(ctx.reasoning_details, *rd);
     // Reasoning / chain-of-thought text. Reasoning-capable models on the Chat
     // wire stream their thinking in a field PARALLEL to `content`, and the
     // ecosystem does not agree on its name — DeepSeek/vLLM say
@@ -1146,12 +1174,26 @@ void handle_delta(StreamCtx& ctx, const json& delta) {
             if (who->displaced) {
                 auto& old = ctx.tools.displaced(*who);
                 if (old.started && !old.ended && !old.id.empty()) {
-                    ctx.sink(StreamToolUseEnd{ToolCallId{old.id}});
+                    ctx.sink(StreamToolUseEnd{ToolCallId{old.id}, extra_for(ctx, old.id)});
                     old.ended = true;
                 }
             }
 
             auto& slot = ctx.tools.at(*who);
+
+            // Gemini's thought signature rides on the call as extra_content
+            // (and, on some gateways, function.thought_signature). Keep it
+            // for the end event; the next request has to send it back.
+            if (auto ec = tc.find("extra_content"); ec != tc.end() && ec->is_object())
+                ctx.pending_extra = *ec;
+            else if (tc.contains("function") && tc["function"].is_object())
+                if (auto ts = tc["function"].find("thought_signature");
+                    ts != tc["function"].end() && ts->is_string() && !ts->get_ref<const std::string&>().empty())
+                    ctx.pending_extra = json{{"google", {{"thought_signature", *ts}}}};
+            if (!ctx.pending_extra.is_null() && !slot.id.empty()) {
+                ctx.tool_extra[slot.id] = std::move(ctx.pending_extra);
+                ctx.pending_extra = nullptr;
+            }
 
             std::string fn_name;
             std::string fn_args;
@@ -1318,12 +1360,80 @@ FastData dispatch_data_fast(StreamCtx& ctx, std::string_view data, char* padded)
     return FastData::Handled;
 }
 
+// Handle one choices[0].delta object.
+void handle_delta(StreamCtx& ctx, const json& delta);
+
+// OpenRouter streams `reasoning_details` in pieces: entries with the same
+// `index` are one detail, and their text/summary/data fragments join up.
+// Same merge as Zed's ReasoningDetailsAccumulator.
+void merge_reasoning_details(json& into, const json& chunks) {
+    for (const auto& c : chunks) {
+        if (!c.is_object()) continue;
+        json* target = nullptr;
+        if (auto i = c.find("index"); i != c.end() && i->is_number_unsigned())
+            for (auto& d : into)
+                if (auto di = d.find("index"); di != d.end() && *di == *i) { target = &d; break; }
+        if (!target) { into.push_back(c); continue; }
+        for (auto it = c.begin(); it != c.end(); ++it) {
+            const auto& k = it.key();
+            if ((k == "text" || k == "summary" || k == "data") && it->is_string()
+                && target->contains(k) && (*target)[k].is_string())
+                (*target)[k] = (*target)[k].get<std::string>() + it->get<std::string>();
+            else if (!it->is_null())
+                (*target)[k] = *it;
+        }
+    }
+}
+
+// Hand the turn's reasoning_details to the reducer, tagged so it's only
+// replayed to OpenRouter.
+void flush_reasoning_details(StreamCtx& ctx) {
+    if (ctx.reasoning_details.empty()) return;
+    ctx.sink(StreamReasoning{ctx.reasoning_details.dump(), std::string{kOpenRouterReasoningSite}});
+    ctx.reasoning_details = json::array();
+}
+
+// Put an Anthropic cache point on the last text part of `msg`, turning a
+// plain string content into one text part so it can carry it.
+void cache_last_text(json& msg, json cache) {
+    auto c = msg.find("content");
+    if (c == msg.end()) return;
+    if (c->is_string()) {
+        if (c->get_ref<const std::string&>().empty()) return;
+        *c = json::array({{{"type", "text"}, {"text", *c}, {"cache_control", std::move(cache)}}});
+        return;
+    }
+    if (!c->is_array()) return;
+    for (auto it = c->rbegin(); it != c->rend(); ++it)
+        if (it->is_object() && it->value("type", "") == "text") {
+            (*it)["cache_control"] = std::move(cache);
+            return;
+        }
+}
+
+// Claude via OpenRouter: system prompt cached for an hour, the newest
+// user/tool message for the default 5 minutes. Two of Anthropic's four.
+void mark_claude_cache_points(json& messages) {
+    if (!messages.is_array() || messages.empty()) return;
+    if (messages[0].value("role", "") == "system")
+        cache_last_text(messages[0], {{"type", "ephemeral"}, {"ttl", "1h"}});
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        const auto role = it->value("role", "");
+        if (role == "system") break;
+        if (role == "user" || role == "tool") {
+            cache_last_text(*it, {{"type", "ephemeral"}});
+            break;
+        }
+    }
+}
+
 // Parse + dispatch one SSE `data:` payload.
 void dispatch_data(StreamCtx& ctx, std::string_view data) {
     if (data.empty()) return;
     if (data == "[DONE]") {
         close_open_tools(ctx);
         if (!ctx.terminated) {
+            flush_reasoning_details(ctx);
             // Salvage a leaked tool call (or flush held text as prose)
             // before the terminal event.
             if (!try_salvage_tool_call(ctx)) flush_text_hold(ctx);
@@ -2010,11 +2120,16 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
                     fn["arguments"] = tc.args.is_null()
                         ? std::string{"{}"}
                         : tc.args.dump();
-                    calls.push_back({
+                    json call = {
                         {"id", tc.id.value},
                         {"type", "function"},
                         {"function", std::move(fn)},
-                    });
+                    };
+                    // Gemini requires its thought signature back on the call
+                    // that carried it, or the next request 400s.
+                    if (tc.extra_content.is_object() && !tc.extra_content.empty())
+                        call["extra_content"] = tc.extra_content;
+                    calls.push_back(std::move(call));
                 }
                 msg["tool_calls"] = std::move(calls);
             }
@@ -2024,6 +2139,14 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
             // recorded field (another dialect, or no reasoning) gets none.
             if (!m.reasoning_wire_field.empty() && !m.thinking.empty())
                 msg[m.reasoning_wire_field] = scrub_utf8(m.thinking);
+            // OpenRouter's reasoning_details from this turn, back as they came
+            // (Gemini thought signatures must be, or the next call loses the
+            // model's chain of thought). Only ones OpenRouter minted.
+            if (m.role == Role::Assistant && m.reasoning_site == kOpenRouterReasoningSite
+                && !m.reasoning_encrypted.empty()) {
+                json rd = json::parse(m.reasoning_encrypted, nullptr, false);
+                if (rd.is_array() && !rd.empty()) msg["reasoning_details"] = std::move(rd);
+            }
             // A model that requires reasoning on earlier turns 400s a turn
             // with none (#117): one another model produced, or one it did not
             // reason on. Send what reasoning the turn does have (another
@@ -2100,6 +2223,16 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
 }
 
 // ── Header builder ───────────────────────────────────────────────────────────
+// "user" when the newest message is one the user typed, else "agent" (a tool
+// result round, a subagent, a compaction).
+std::string initiator_for(const std::vector<Message>& msgs) {
+    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+        if (it->role == Role::Assistant) return "agent";
+        if (it->typed_by_user()) return "user";
+    }
+    return "agent";
+}
+
 http::Headers build_request_headers(const AuthHeader& auth,
                                     const Endpoint& endpoint) {
     http::Headers h;
@@ -2348,6 +2481,11 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     hreq.headers = build_request_headers(req.auth, req.endpoint);
     append_session_header(hreq.headers,
                           req.affinity_key.empty() ? req.session_key : req.affinity_key);
+    // Copilot bills a premium request per USER-initiated turn. Tool-result
+    // rounds and subagent calls are the agent's, and say so, or every tool
+    // round costs a premium request. Same rule as Zed and VS Code.
+    if (req.endpoint.label == "copilot")
+        hreq.headers.push_back({"x-initiator", initiator_for(req.messages)});
     http::append_sse_no_buffer(hreq.headers);
     hreq.body    = std::move(body_str);
 
@@ -2444,6 +2582,7 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             return msg;
         },
         .before_finish = [&ctx]() {
+            flush_reasoning_details(ctx);
             if (!try_salvage_tool_call(ctx)) flush_text_hold(ctx);
             ensure_nonempty_turn(ctx);
         },
@@ -2712,6 +2851,8 @@ json build_request_body(const Request& req) {
         body["stream_options"] = {{"include_usage", true}};
 
     // messages: system prompt first, then the conversation.
+    const bool is_openrouter = req.endpoint.label == "openrouter"
+                            || req.endpoint.host == "openrouter.ai";
     json messages = json::array();
     if (!req.system_prompt.empty()) {
         messages.push_back({{"role", "system"},
@@ -2769,8 +2910,36 @@ json build_request_body(const Request& req) {
     // declaration (see declared_reasoning in dialect.hpp) rather than a
     // filename heuristic. Transport encryption was never evidence about a
     // model's capabilities.
-    if (!req.effort.empty())
-        body["reasoning_effort"] = req.effort;
+    if (!req.effort.empty()) {
+        // OpenRouter normalises reasoning across every model behind it with
+        // its own `reasoning` object; `reasoning_effort` only reaches models
+        // that happen to speak OpenAI's field.
+        if (is_openrouter && allowed(provider::OptionalField::Reasoning))
+            body["reasoning"] = {{"effort", req.effort}};
+        else
+            body["reasoning_effort"] = req.effort;
+    }
+
+    if (is_openrouter) {
+        // Sticky routing: one conversation stays on one upstream, so its
+        // prompt cache keeps hitting (same derivation as the session key).
+        if (!req.session_key.empty() && allowed(provider::OptionalField::SessionId))
+            body["session_id"] = req.session_key;
+        // Claude through OpenRouter only caches where the request marks it.
+        // Mark the system prompt (1h; it rarely changes) and the newest
+        // message, so each turn reuses everything before it. Zed does the same.
+        if (req.model.starts_with("anthropic/") && allowed(provider::OptionalField::CacheControl))
+            mark_claude_cache_points(body["messages"]);
+    }
+    // reasoning_details goes back to OpenRouter only, and never for Claude,
+    // which rejects it as an input field.
+    if (!is_openrouter || req.model.starts_with("anthropic/")
+        || !allowed(provider::OptionalField::ReasoningDetails))
+        for (auto& m : body["messages"]) m.erase("reasoning_details");
+    if (!allowed(provider::OptionalField::ExtraContent))
+        for (auto& m : body["messages"])
+            if (auto tc = m.find("tool_calls"); tc != m.end() && tc->is_array())
+                for (auto& c : *tc) c.erase("extra_content");
 
     // A quick utility call on a custom host: turn thinking off. llama.cpp,
     // vLLM and SGLang pass this to the chat template; servers that don't
@@ -3973,6 +4142,7 @@ std::vector<Msg> parse_sse_for_test(std::string_view sse_bytes,
     // synthesise the close so a test sees a StreamFinished.
     if (!ctx.terminated) {
         close_open_tools(ctx);
+        flush_reasoning_details(ctx);
         if (!try_salvage_tool_call(ctx)) flush_text_hold(ctx);
         ensure_nonempty_turn(ctx);
         ctx.sink(StreamFinished{ctx.stop_reason});

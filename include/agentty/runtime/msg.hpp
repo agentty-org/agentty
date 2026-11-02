@@ -216,7 +216,12 @@ struct StreamToolUseDelta { ToolCallId id; std::string partial_json; };
 struct StreamToolUseSnapshot { ToolCallId id; std::string json; };
 // Completion is also explicitly addressed. An empty/default id is not a valid
 // wire event: adapters must retain the id they received at call start.
-struct StreamToolUseEnd { ToolCallId id; };
+struct StreamToolUseEnd {
+    ToolCallId id;
+    // OpenAI-compatible `extra_content` seen for this call (Gemini's thought
+    // signature lives here). Stored on the ToolUse and sent back next turn.
+    nlohmann::json extra_content = nullptr;
+};
 // Terminal result for a tool executed by a delegated agent (external ACP).
 // It follows StreamToolUseEnd so the shared argument assembler still parses
 // the final input, then marks the card terminal without scheduling the host's

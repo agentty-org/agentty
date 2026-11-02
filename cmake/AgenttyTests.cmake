@@ -62,7 +62,7 @@ set(_AGENTTY_CONSOLIDATED
     openai_request_body_test context_window_robustness_test
     command_palette_test compaction_threshold_test fsm_test model_caps_test
     config_inventory_test mcp_import_test capped_read_test foreign_sessions_test
-    foreign_open_test
+    foreign_open_test stream_epilogue_test stream_recovery_test codex_auth_test openrouter_test
     dialect_test
     embed_backend_test form_test embed_form_test escape_guarantee_test
     theme_discipline_test

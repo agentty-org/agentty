@@ -355,6 +355,8 @@ json message_to_json(const Message& m) {
         t["id"] = tc.id;
         t["name"] = tc.name;
         t["args"] = tc.args;
+        if (tc.extra_content.is_object() && !tc.extra_content.empty())
+            t["extra_content"] = tc.extra_content;
         // Tool OUTPUT is the single largest thing in a long thread — 12 MB
         // across 5.5k calls in one real thread here, against 0.7 MB of
         // actual conversation text. Inline, every byte of it is re-parsed
@@ -820,6 +822,8 @@ std::expected<Message, DeserializeError> message_from_json(const json& j) {
             tc.id = ToolCallId{t.value("id", "")};
             tc.name = ToolName{t.value("name", "")};
             tc.args = t.value("args", json::object());
+            if (auto ec = t.find("extra_content"); ec != t.end() && ec->is_object())
+                tc.extra_content = *ec;
             // Old persisted threads stored status as an int enum; new ones
             // use the string tag returned by ToolUse::status_name(). Accept
             // both so existing on-disk threads keep loading.
@@ -2116,6 +2120,7 @@ static std::uint64_t message_fingerprint(const Message& m) {
         f.str(tc.id.value);
         f.str(tc.name.value);
         f.str(tc.args_dump());
+        if (!tc.extra_content.is_null()) f.str(tc.extra_content.dump());
         f.str(tc.status_name());
         f.str(tc.output());
         f.num(tc.done_images().size());

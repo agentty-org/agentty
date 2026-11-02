@@ -183,6 +183,7 @@ struct ResponsesTurn {
     std::string token;         // proxy token (Bearer)
     std::string session_token; // copilot-session-token — REQUIRED, measured
     std::string model;         // server-blessed slug
+    std::string initiator = "user";   // x-initiator: "user" or "agent"
 };
 
 std::expected<provider::responses::Target, std::string>
@@ -204,6 +205,8 @@ copilot_target(const ResponsesTurn& t) {
         // it every model — including gpt-5-mini — 400s model_not_supported.
         {"copilot-session-token", t.session_token},
         {"x-github-api-version", client_api_version()},
+        // Only user turns count as premium requests; tool rounds are the agent's.
+        {"x-initiator", t.initiator},
     };
     for (auto& h : copilot_headers()) target.headers.push_back({h.first, h.second});
     return target;
@@ -348,6 +351,7 @@ provider::StreamResult CopilotProvider::stream(const maya::unlocked& cap,
                     .token         = t.token,
                     .session_token = as->session_token,
                     .model         = picked,
+                    .initiator     = provider::openai::initiator_for(req.messages),
                 };
                 provider::Request rr = req;   // still INTACT here
                 rr.model = picked;

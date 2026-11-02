@@ -215,6 +215,11 @@ struct ToolUse {
     ToolCallId     id;
     ToolName       name;
     nlohmann::json args;
+    // A tool call's `extra_content` from an OpenAI-compatible stream, sent
+    // back as-is. Gemini puts its thought signature here
+    // (extra_content.google.thought_signature); omitting it on the next
+    // request is a 400 for Gemini 3. Null when the provider sent none.
+    nlohmann::json extra_content;
     std::string    args_streaming;
     // Throttle for the live preview re-parse during input_json_delta. The
     // preview path closes the partial JSON and runs `nlohmann::json::parse`
