@@ -4,6 +4,13 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Over SSH, the end of a reply animates again instead of appearing all
+  at once. SSH used to turn off the end-of-turn glide and slow screen
+  updates to 80 ms, so a reply that arrived in one burst pasted in a
+  single frame. Set Motion to Off to turn the animation off.
+- ^/ opens the model picker under tmux with extended-keys on.
+
 ## [0.9.41] - 2026-11-02
 
 ### Changed
