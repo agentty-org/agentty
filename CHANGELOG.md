@@ -4,6 +4,34 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.44] - 2026-11-03
+
+### Changed
+- Smaller release binary: release builds are compiled for size (`-Os`),
+  which cut the compiled code by about 31%. The render path in maya keeps
+  `-O3`. Build with `-DAGENTTY_OPTIMIZE_SIZE=OFF` to keep `-O3` everywhere.
+- Faster startup: the static Linux binary no longer registers every
+  unwind entry before `main` (half of `agentty --version`, ~1 ms to
+  ~0.5 ms), and OpenSSL no longer reads `openssl.cnf` at launch.
+- Reasoning *off* is now actually sent. Leaving the field out didn't stop
+  Qwen3, DeepSeek V3.1 or gpt-5.1+ from thinking, so off goes out as
+  `reasoning_effort: "none"`, OpenRouter `reasoning.enabled=false`, Ollama
+  `think:false`, or `enable_thinking=false` on custom hosts. A host that
+  rejects these is remembered and the turn is resent. Models that always
+  reason no longer offer off. `agentty run --effort off` works.
+
+### Fixed
+- A custom host whose `/v1/models` failed (e.g. a 401) looked empty and
+  kept Claude's model list, so picking a model sent a Claude id to it. The
+  error is now shown in the picker, and startup loads the active
+  provider's own catalog.
+- A message sent while the Anthropic token check was running could stay
+  queued forever.
+- The provider picker and account list no longer show a key the host
+  refused as ready.
+- A debug build no longer replaces itself with the release binary via
+  auto-update.
+
 ## [0.9.43] - 2026-11-03
 
 ### Added
