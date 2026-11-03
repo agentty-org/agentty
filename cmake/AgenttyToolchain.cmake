@@ -92,6 +92,13 @@ endif()
 # ~6% slower. maya still adds its own -O3 after this for its render path.
 # Set before any add_subdirectory so every submodule sees it.
 option(AGENTTY_OPTIMIZE_SIZE "Release builds use -Os instead of -O3 (maya keeps -O3)" ON)
+# Not on macOS with GCC: at -Os every object there defines libstdc++'s
+# exception vtables/typeinfo, and the static link against libstdc++.a fails
+# with 42 duplicate symbols (v0.9.44 release, gcc 16.2). Apple's clang and
+# the other platforms are fine.
+if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(AGENTTY_OPTIMIZE_SIZE OFF CACHE BOOL "" FORCE)
+endif()
 if(AGENTTY_OPTIMIZE_SIZE AND NOT MSVC)
     foreach(_v CMAKE_CXX_FLAGS_RELEASE CMAKE_C_FLAGS_RELEASE)
         string(REGEX REPLACE "(^| )-O[0-3s]( |$)" " -Os " ${_v} "${${_v}}")
