@@ -137,6 +137,12 @@ jobs:
           # The runner was killed for memory once (v0.9.39 aarch64: "lost
           # communication with the server"). Swap turns that into slower,
           # not dead.
+          # The swapfile and the Alpine toolchain share a small root disk;
+          # v0.9.45 x86_64 ran out of space installing clang. Drop the
+          # preinstalled SDKs this job never uses first.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
           sudo swapoff -a || true
           sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
           sudo chmod 600 /swapfile2
@@ -258,6 +264,9 @@ jobs:
         run: |
           # This leg died once with "the runner lost communication" mid-build
           # (v0.9.39), the signature of running out of memory.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
           sudo swapoff -a || true
           sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
           sudo chmod 600 /swapfile2
@@ -379,6 +388,9 @@ jobs:
         uses: docker/setup-qemu-action@v4
       - name: Add swap (heavy C++26 TUs + LTO link)
         run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
           sudo swapoff -a || true
           sudo fallocate -l 12G /swapfile2 || sudo dd if=/dev/zero of=/swapfile2 bs=1M count=12288
           sudo chmod 600 /swapfile2
