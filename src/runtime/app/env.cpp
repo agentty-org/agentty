@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include <maya/terminal/ansi.hpp>
+#include <maya/terminal/scrollback.hpp>
 #include <maya/terminal/tmux.hpp>
 
 #include "agentty/util/home_dir.hpp"
@@ -93,6 +94,9 @@ void read_replay_caps(Model::Env& e) noexcept {
             e.replay_rows_override = static_cast<int>(std::min<long>(n, std::numeric_limits<int>::max()));
     }
     e.terminal_history_rows = maya::tmux::history_limit();
+    // Env + the tmux probe above only: no files, no spawns.
+    const auto fast = maya::terminal::scrollback_fast();
+    e.auto_scrollback_rows = fast.unlimited ? std::numeric_limits<int>::max() : fast.rows;
 }
 
 }  // namespace

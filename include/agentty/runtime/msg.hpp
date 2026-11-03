@@ -1325,6 +1325,15 @@ struct CheckpointDiffLoaded {
 // The startup probe answered: is the workspace a git repo? Checkpoints read
 // this from the Model instead of asking git on the reducer thread.
 struct RepoProbed { bool in_repo = false; };
+// The terminal's scrollback length, read off the UI thread at startup (its
+// config file, gsettings, ...). Scrollback=Auto redraws this many rows.
+// rows 0 + !unlimited = unknown.
+struct TerminalScrollbackProbed {
+    int         rows      = 0;
+    bool        unlimited = false;
+    bool        exact     = false;
+    std::string source;
+};
 // The on-disk library (skills, approvals, commands, hooks), read on a worker.
 struct LibraryLoaded { Library library; };
 // Terminal window focus changed (?1004 CSI I/O, AgenttyApp::on(FocusEvent)).
@@ -1493,7 +1502,7 @@ using CodeBlockMsg = std::variant<
 
 using CheckpointMsg = std::variant<
     OpenCheckpoints, CloseCheckpoints, CheckpointsMove,
-    CheckpointsSelect, CheckpointDiffLoaded, RepoProbed, LibraryLoaded>;
+    CheckpointsSelect, CheckpointDiffLoaded, RepoProbed, TerminalScrollbackProbed, LibraryLoaded>;
 
 using RagMsg = std::variant<
     OpenRag, CloseRag, RagAdvanced,

@@ -2983,9 +2983,9 @@ store::Settings load_settings_from_disk() {
             s.ui.polarity      = en("polarity",   ui_prefs::Polarity::Auto);
             s.ui.density       = en("density",    ui_prefs::Density::Normal);
             s.ui.motion        = en("motion",     ui_prefs::Motion::Full);
-            s.ui.scrollback    = en("scrollback", ui_prefs::Scrollback::Small);
-            if (static_cast<int>(s.ui.scrollback) > static_cast<int>(ui_prefs::Scrollback::Full))
-                s.ui.scrollback = ui_prefs::Scrollback::Small;
+            s.ui.scrollback    = en("scrollback", ui_prefs::Scrollback::Auto);
+            if (static_cast<int>(s.ui.scrollback) > static_cast<int>(ui_prefs::Scrollback::Auto))
+                s.ui.scrollback = ui_prefs::Scrollback::Auto;
             s.ui.tool_output   = en("tool_output",ui_prefs::ToolOutput::Preview);
             s.ui.thinking      = en("thinking",   ui_prefs::Thinking::Collapsed);
             s.ui.timestamps    = en("timestamps", ui_prefs::Timestamps::Off);

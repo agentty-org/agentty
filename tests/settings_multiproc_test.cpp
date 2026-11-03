@@ -244,7 +244,7 @@ TEST_CASE("settings: the scrollback level survives a restart") {
     const auto root = scratch("scrollback");
     use_store(root);
     CHECK(ps::load_settings(::agentty::IoAccess::grant()).ui.scrollback
-          == agentty::ui_prefs::Scrollback::Small);   // the default
+          == agentty::ui_prefs::Scrollback::Auto);   // the default
     {
         auto s = ps::load_settings(::agentty::IoAccess::grant());
         s.ui.scrollback = agentty::ui_prefs::Scrollback::Tiny;
@@ -257,6 +257,6 @@ TEST_CASE("settings: the scrollback level survives a restart") {
     doc["ui"]["scrollback"] = 9;
     other_instance_writes(root, doc);
     CHECK(ps::load_settings(::agentty::IoAccess::grant()).ui.scrollback
-          == agentty::ui_prefs::Scrollback::Small);
+          == agentty::ui_prefs::Scrollback::Auto);
     fs::remove_all(root);
 }

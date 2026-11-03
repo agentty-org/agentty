@@ -725,6 +725,15 @@ struct Model {
         // answers (RepoProbed). Checkpoints read this; asking git directly
         // would spawn it on the reducer thread.
         std::optional<bool> git_repo;
+        // The terminal's scrollback length, once the startup probe answers
+        // (TerminalScrollbackProbed). Scrollback=Auto reads it.
+        struct TerminalScrollback {
+            int         rows      = 0;      // 0 = unknown (or unlimited)
+            bool        unlimited = false;
+            bool        exact     = false;  // from its config, not a default
+            std::string source;
+        };
+        std::optional<TerminalScrollback> terminal_scrollback;
 
         // Cross-frame widget state cache. The only consumers now are:
         //   • StreamingMarkdown — keeps a per-Message widget instance
@@ -984,6 +993,9 @@ struct Model {
         // when it says (tmux's history-limit); 0 = unknown.
         int         replay_rows_override = -1;
         int         terminal_history_rows = 0;
+        // Scrollback=Auto before the startup probe answers: env only (the
+        // terminal's documented default). 0 = unknown.
+        int         auto_scrollback_rows = 0;
         std::size_t replay_max_bytes = std::numeric_limits<std::size_t>::max();
         // Colour tier and background polarity the terminal reports (TERM,
         // COLORTERM, COLORFGBG, NO_COLOR). "auto" appearance resolves here.

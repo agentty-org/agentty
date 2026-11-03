@@ -254,10 +254,11 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
     }
     {
         static constexpr std::array kScroll = {
-            up::Scrollback::Tiny, up::Scrollback::Small, up::Scrollback::Big,
-            up::Scrollback::Full,
+            up::Scrollback::Auto, up::Scrollback::Tiny, up::Scrollback::Small,
+            up::Scrollback::Big, up::Scrollback::Full,
         };
-        static constexpr std::array<const char*, 4> kScrollBlurbs = {
+        static constexpr std::array<const char*, 5> kScrollBlurbs = {
+            "match the terminal's scrollback",
             "last ~1k rows \xc2\xb7 lightest",
             "last ~5k rows",
             "last ~20k rows",

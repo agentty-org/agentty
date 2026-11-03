@@ -138,20 +138,42 @@ TEST_CASE("appearance: a change is persisted, not just held") {
     CHECK(m.d.ui().motion != ui_prefs::Motion::Full);
 }
 
-// The Scrollback row picks how many rows a replay prints. Small is the
-// default; AGENTTY_REPLAY_ROWS beats it; tmux's history-limit caps it.
+// The Scrollback row picks how many rows a replay prints. Auto (default)
+// is the terminal's own length; AGENTTY_REPLAY_ROWS beats every level;
+// tmux's history-limit caps them.
 TEST_CASE("appearance: scrollback sets the replay row cap") {
     install_stub_deps();
     Model m = opened();
-    CHECK(m.d.ui().scrollback == ui_prefs::Scrollback::Small);
+    CHECK(m.d.ui().scrollback == ui_prefs::Scrollback::Auto);
+
+    // Auto before the probe: the env-only guess, else a safe 5k.
+    m.env.auto_scrollback_rows = 0;
     CHECK(app::detail::scrollback_replay_limits(m).first == 5'000);
+    m.env.auto_scrollback_rows = 2'000;        // e.g. kitty's default
+    CHECK(app::detail::scrollback_replay_limits(m).first == 2'000);
+    // The startup probe answers (it read kitty.conf): that wins.
+    m = app::update(std::move(m), Msg{TerminalScrollbackProbed{7'654, false, true, "kitty.conf"}}).first;
+    CHECK(app::detail::scrollback_replay_limits(m).first == 7'654);
+    m = app::update(std::move(m), Msg{TerminalScrollbackProbed{0, true, true, "kitty.conf"}}).first;
+    CHECK(app::detail::scrollback_replay_limits(m).first == std::numeric_limits<int>::max());
+    // A probe that learnt nothing leaves the guess in charge.
+    m = app::update(std::move(m), Msg{TerminalScrollbackProbed{0, false, false, ""}}).first;
+    CHECK(app::detail::scrollback_replay_limits(m).first == 2'000);
 
-    m = press(std::move(m), ui::panel::kApScrollback,
-              form::keys::Action{form::keys::Intent::AdjustUp});
-    CHECK(m.d.ui().scrollback == ui_prefs::Scrollback::Big);
-    CHECK(g_saved.ui.scrollback == ui_prefs::Scrollback::Big);
-    CHECK(app::detail::scrollback_replay_limits(m).first == 20'000);
-
+    // Fixed levels ignore the terminal.
+    m.d.ui().scrollback = ui_prefs::Scrollback::Small;
+    CHECK(app::detail::scrollback_replay_limits(m).first == 5'000);
+    {
+        // Open the pane on Small so the row starts there; up is Big.
+        Model start;
+        start.d.ui().scrollback = ui_prefs::Scrollback::Small;
+        Model p = app::update(std::move(start), Msg{OpenAppearance{}}).first;
+        p = press(std::move(p), ui::panel::kApScrollback,
+                  form::keys::Action{form::keys::Intent::AdjustUp});
+        CHECK(p.d.ui().scrollback == ui_prefs::Scrollback::Big);
+        CHECK(g_saved.ui.scrollback == ui_prefs::Scrollback::Big);
+        CHECK(app::detail::scrollback_replay_limits(p).first == 20'000);
+    }
     m.d.ui().scrollback = ui_prefs::Scrollback::Full;
     CHECK(app::detail::scrollback_replay_limits(m).first == std::numeric_limits<int>::max());
     m.d.ui().scrollback = ui_prefs::Scrollback::Tiny;
@@ -162,11 +184,26 @@ TEST_CASE("appearance: scrollback sets the replay row cap") {
     m.env.terminal_history_rows = 2'000;
     CHECK(app::detail::scrollback_replay_limits(m).first == 2'000);
 
-    // The env override wins over the setting, still under the tmux cap.
+    // The env override wins over every level.
     m.env.replay_rows_override = 0;
     CHECK(app::detail::scrollback_replay_limits(m).first == 0);
     m.env.replay_rows_override = 500;
     CHECK(app::detail::scrollback_replay_limits(m).first == 500);
+}
+
+// The row lists Auto first, which isn't enum order: picking a choice must
+// store the level it shows, not the one at that enum index.
+TEST_CASE("appearance: scrollback choices map to the level shown") {
+    install_stub_deps();
+    Model m = opened();
+    const ui_prefs::Scrollback order[] = {
+        ui_prefs::Scrollback::Auto, ui_prefs::Scrollback::Tiny, ui_prefs::Scrollback::Small,
+        ui_prefs::Scrollback::Big, ui_prefs::Scrollback::Full, ui_prefs::Scrollback::Auto};
+    for (int i = 1; i < 6; ++i) {
+        m = press(std::move(m), ui::panel::kApScrollback,
+                  form::keys::Action{form::keys::Intent::AdjustUp});
+        CHECK(m.d.ui().scrollback == order[i]);
+    }
 }
 
 TEST_CASE("appearance: the theme row hands off to a browser, not a dropdown") {

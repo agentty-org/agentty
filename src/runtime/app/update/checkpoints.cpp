@@ -169,6 +169,10 @@ Cmd checkpoint_update(Model& m, msg::CheckpointMsg cm) {
             m.ui.git_repo = e.in_repo;
             return Cmd::none();
         },
+        [&](TerminalScrollbackProbed& e) -> Cmd {
+            m.ui.terminal_scrollback = {e.rows, e.unlimited, e.exact, std::move(e.source)};
+            return Cmd::none();
+        },
         [&](CheckpointDiffLoaded& e) -> Cmd {
             auto* o = m.ui.panel.get<pn::Checkpoints>();
             if (!o) return Cmd::none();   // picker closed mid-load

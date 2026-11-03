@@ -1,6 +1,7 @@
 #include "agentty/runtime/app/program.hpp"
 #include "agentty/runtime/app/cmd_factory.hpp"
 #include "agentty/runtime/app/env.hpp"
+#include <maya/terminal/scrollback.hpp>
 #include "agentty/mcp/client.hpp"   // mcp_config_present()
 #include "agentty/runtime/login.hpp"
 #include "agentty/runtime/view/helpers.hpp"
@@ -498,6 +499,16 @@ std::pair<Model, Cmd> init() {
             workspace::prewarm_repo_info(st);
             if (auto r = workspace::in_git_repo_if_ready(io))
                 out.send(Msg{RepoProbed{*r}});
+        }));
+
+    // The terminal's scrollback length for Scrollback=Auto. Reads its config
+    // file (and may ask gsettings / defaults), so it runs here, never on the
+    // UI thread; a replay before it answers uses the env-only guess.
+    cmds.push_back(Cmd::task_isolated(
+        [](maya::Sink<Msg> out, std::stop_token st) {
+            if (st.stop_requested()) return;
+            const auto s = maya::terminal::scrollback_full();
+            out.send(Msg{TerminalScrollbackProbed{s.rows, s.unlimited, s.exact, s.source}});
         }));
 
     // Open the TCP + TLS + HTTP/2 connection to api.anthropic.com NOW, while

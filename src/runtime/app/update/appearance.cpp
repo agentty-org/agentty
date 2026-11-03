@@ -288,7 +288,18 @@ namespace {
     else if (f.id == pn::kApSyntax)     { p.syntax   = on();                              return true; }
     else if (f.id == pn::kApDensity)    p.density     = static_cast<up::Density>(idx());
     else if (f.id == pn::kApMotion)     p.motion      = static_cast<up::Motion>(idx());
-    else if (f.id == pn::kApScrollback) p.scrollback  = static_cast<up::Scrollback>(idx());
+    else if (f.id == pn::kApScrollback) {
+        // Listed Auto-first, which isn't enum order: map by id, as kApLang does.
+        if (const auto* c = std::get_if<form::field::Choice>(&f.value)) {
+            const int i = c->normalized(c->index);
+            const std::string_view chosen =
+                (i >= 0 && i < static_cast<int>(c->ids.size())) ? std::string_view{c->ids[static_cast<std::size_t>(i)]}
+                                                                 : std::string_view{};
+            for (auto v : {up::Scrollback::Auto, up::Scrollback::Tiny, up::Scrollback::Small,
+                           up::Scrollback::Big, up::Scrollback::Full})
+                if (up::label(v) == chosen) p.scrollback = v;
+        }
+    }
     else if (f.id == pn::kApToolOutput) p.tool_output = static_cast<up::ToolOutput>(idx());
     else if (f.id == pn::kApThinking)   p.thinking    = static_cast<up::Thinking>(idx());
     else if (f.id == pn::kApTimestamps) p.timestamps  = static_cast<up::Timestamps>(idx());

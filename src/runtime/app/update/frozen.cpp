@@ -930,14 +930,27 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
 }
 
 // Rows a replay may print: AGENTTY_REPLAY_ROWS if set, else the Scrollback
-// setting, and never more than tmux keeps.
+// setting, and never more than tmux keeps. Auto is the terminal's own
+// scrollback length: the startup probe's answer once it's in, before that
+// the env-only guess (tmux, or the terminal's documented default).
 std::pair<int, std::size_t> scrollback_replay_limits(const Model& m) {
     constexpr int kAll = std::numeric_limits<int>::max();
-    int rows = m.env.replay_rows_override >= 0
-        ? m.env.replay_rows_override
-        : ui_prefs::scrollback_rows(m.d.ui().scrollback);
-    if (m.env.replay_rows_override < 0 && rows == 0) rows = kAll;   // Full
-    // Rows past what the terminal keeps are dropped by it anyway.
+    if (m.env.replay_rows_override >= 0)
+        return {m.env.replay_rows_override, m.env.replay_max_bytes};
+    int rows = 0;
+    const auto level = m.d.ui().scrollback;
+    if (level == ui_prefs::Scrollback::Auto) {
+        if (const auto& t = m.ui.terminal_scrollback; t && (t->unlimited || t->rows > 0))
+            rows = t->unlimited ? kAll : t->rows;
+        else if (m.env.auto_scrollback_rows > 0)
+            rows = m.env.auto_scrollback_rows;
+        else
+            rows = ui_prefs::scrollback_rows(level);
+    } else {
+        rows = ui_prefs::scrollback_rows(level);
+        if (rows == 0) rows = kAll;   // Full
+    }
+    // Rows past what tmux keeps are dropped by it anyway.
     if (m.env.terminal_history_rows > 0 && rows > m.env.terminal_history_rows)
         rows = m.env.terminal_history_rows;
     return {rows, m.env.replay_max_bytes};

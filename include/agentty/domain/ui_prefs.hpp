@@ -87,15 +87,18 @@ enum class Motion : std::uint8_t { Full, Reduced, Off };
 // How much of the conversation is redrawn into the terminal's scrollback
 // when a thread opens or the window is resized. The redraw is the biggest
 // memory and time cost of a long thread, and rows past the terminal's own
-// scrollback limit are thrown away anyway. Full redraws everything.
-enum class Scrollback : std::uint8_t { Tiny, Small, Big, Full };
+// scrollback limit are thrown away anyway. Auto matches the terminal's
+// scrollback length (maya/terminal/scrollback.hpp). Full redraws everything.
+enum class Scrollback : std::uint8_t { Tiny, Small, Big, Full, Auto };
 
+// Rows for a fixed level; 0 = no limit. Auto is resolved by the caller.
 [[nodiscard]] constexpr int scrollback_rows(Scrollback s) noexcept {
     switch (s) {
         case Scrollback::Tiny:  return 1'000;
         case Scrollback::Small: return 5'000;
         case Scrollback::Big:   return 20'000;
-        case Scrollback::Full:  return 0;   // no limit
+        case Scrollback::Full:  return 0;
+        case Scrollback::Auto:  return 5'000;   // until the terminal is known
     }
     return 5'000;
 }
@@ -145,7 +148,7 @@ struct Prefs {
     bool       foreign_sessions = true;
 
     Motion     motion      = Motion::Full;
-    Scrollback scrollback  = Scrollback::Small;
+    Scrollback scrollback  = Scrollback::Auto;
 
     bool       syntax      = true;
     ToolOutput tool_output = ToolOutput::Preview;
@@ -204,6 +207,7 @@ struct Prefs {
         case Scrollback::Small: return "small";
         case Scrollback::Big:   return "big";
         case Scrollback::Full:  return "full";
+        case Scrollback::Auto:  return "auto";
     }
     return "?";
 }
@@ -249,7 +253,7 @@ template <typename E, std::uint8_t N>
 [[nodiscard]] constexpr Polarity   next(Polarity v)   noexcept { return cycle<Polarity, 3>(v); }
 [[nodiscard]] constexpr Density    next(Density v)    noexcept { return cycle<Density, 3>(v); }
 [[nodiscard]] constexpr Motion     next(Motion v)     noexcept { return cycle<Motion, 3>(v); }
-[[nodiscard]] constexpr Scrollback next(Scrollback v) noexcept { return cycle<Scrollback, 4>(v); }
+[[nodiscard]] constexpr Scrollback next(Scrollback v) noexcept { return cycle<Scrollback, 5>(v); }
 [[nodiscard]] constexpr ToolOutput next(ToolOutput v) noexcept { return cycle<ToolOutput, 3>(v); }
 [[nodiscard]] constexpr Thinking   next(Thinking v)   noexcept { return cycle<Thinking, 3>(v); }
 [[nodiscard]] constexpr Timestamps next(Timestamps v) noexcept { return cycle<Timestamps, 3>(v); }
