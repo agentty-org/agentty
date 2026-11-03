@@ -29,6 +29,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   queued forever.
 - The provider picker and account list no longer show a key the host
   refused as ready.
+- Sending with no model after a failed model list now says why (e.g. the
+  host's 401) instead of "no model selected".
+- A custom host with no saved model starts on a chat model with a usable
+  window, not whatever `/v1/models` lists first (an embedding or 4k model).
+- A model with a small window (e.g. 4k on vLLM) no longer gets a 400 for
+  asking more output tokens than it can hold.
 - A debug build no longer replaces itself with the release binary via
   auto-update.
 
