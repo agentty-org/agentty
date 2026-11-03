@@ -1175,6 +1175,15 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                 // Presets are filtered out there, so this is safe for them.
                 settings.provider_keys.try_emplace(proven->first, "");
                 proven_save = save_record(m);
+            } else if (const std::string pid = active_provider_id(m);
+                       !e.models.empty() && provider::preset_for(pid) == nullptr
+                       && m.d.selection.kind == provider::Kind::OpenAI
+                       && !settings.provider_keys.contains(pid)) {
+                // A custom host set as the provider in settings by hand (or
+                // by an older build) answered: give it a saved row so the
+                // picker lists it and the status bar doesn't say "sign in".
+                settings.provider_keys.try_emplace(pid, "");
+                proven_save = save_record(m);
             }
             m.d.available_models.clear();
             for (auto& mi : e.models) {

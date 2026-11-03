@@ -25,6 +25,7 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/provider_rows.hpp"
 #include "agentty/provider/selection.hpp"
+#include "agentty/provider/auth_state.hpp"
 #include "agentty/provider/catalog_sources.hpp"
 #include "agentty/domain/bundled_catalog.hpp"
 #include "agentty/provider/error_class.hpp"
@@ -1211,6 +1212,25 @@ TEST_CASE("provider switch drops the old provider's fetch error") {
     m.s.models_error = "HTTP 401: Invalid API key";
     (void)app::detail::commit_provider_switch(m, "groq", "Groq");
     CHECK(m.s.models_error.empty());
+}
+
+// A custom host written into settings by hand (never added through ^P) has
+// no saved entry, so it read as signed out and missed from the picker.
+TEST_CASE("a settings-only custom host gets a saved row once it answers") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    const std::string host = "http://127.0.0.1:18461/v1";
+    g_settings = store::Settings{};
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection(host));
+    Model m = seeded_model();
+    REQUIRE(!m.d.persisted.provider_keys.contains(host));
+    ModelsLoaded ml;
+    ml.provider_id = host;
+    ml.models = {mi("twin-model", host.c_str())};
+    auto [m1, c1] = app::update(std::move(m), Msg{std::move(ml)});
+    apply_fx(c1);
+    CHECK(m1.d.persisted.provider_keys.contains(host));
+    CHECK(agentty::provider::signed_in(host, m1.d.persisted, m1.d.auth));
 }
 
 TEST_CASE("no model yet: the default pick is a usable chat model, not the first row") {
