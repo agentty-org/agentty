@@ -4,6 +4,28 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.45] - 2026-11-03
+
+### Fixed
+- macOS builds again. 0.9.44 shipped without macOS binaries: release
+  builds moved to `-Os`, and with GCC on macOS that made the static link
+  fail on duplicate libstdc++ symbols. macOS GCC builds stay on `-O3`.
+  macOS users get everything listed under 0.9.44 in this release.
+- A cancelled release no longer pushes a Homebrew formula with error text
+  where the checksums should be.
+- The same model id on two providers is now two models. Starring Groq's
+  gpt-oss no longer stars OpenRouter's, and forcing reasoning on one
+  gateway's copy (^E) no longer flips every provider serving that id.
+  Favorites and reasoning overrides saved by older versions still apply.
+- ^E on a row that isn't the active model no longer changes the active
+  model's reasoning tier.
+- Switching providers no longer carries the old provider's model-list
+  error onto the new one.
+- A custom host set as the provider in `settings.json` by hand now shows
+  its models instead of "sign in" once it answers.
+- Smart Mode routing and subagents on another provider read that
+  provider's model facts, not the active one's.
+
 ## [0.9.44] - 2026-11-03
 
 ### Changed
