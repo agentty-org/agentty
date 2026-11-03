@@ -1002,17 +1002,27 @@ jobs:
           # re-run can never pin a hash that has drifted from the release.
           sum_for() {
             want=$(awk -v f="$1" '$2==f {print $1}' SHA256SUMS)
-            [ -n "$want" ] || { echo "::error::$1 missing from SHA256SUMS"; exit 1; }
+            [ -n "$want" ] || { echo "::error::$1 missing from SHA256SUMS" >&2; exit 1; }
             got=$(sha256sum "$1" | awk '{print $1}')
-            [ "$want" = "$got" ] || { echo "::error::$1 hash drift: SHA256SUMS=$want bytes=$got — release was re-clobbered; refusing to pin a stale hash"; exit 1; }
+            [ "$want" = "$got" ] || { echo "::error::$1 hash drift: SHA256SUMS=$want bytes=$got — release was re-clobbered; refusing to pin a stale hash" >&2; exit 1; }
             printf '%s' "$want"
           }
+          # Hash into variables first: a failing $(sum_for ...) inside sed's
+          # arguments is not caught by set -e, so a cancelled run pushed a
+          # formula whose sha256 was the error message.
+          LX=$(sum_for agentty-linux-x86_64)
+          LA=$(sum_for agentty-linux-aarch64)
+          MX=$(sum_for agentty-macos-x86_64)
+          MA=$(sum_for agentty-macos-arm64)
           sed -e "s/^  version \".*\"/  version \"$V\"/" \
-              -e "s|@LINUX_X86_64_SHA256@|$(sum_for agentty-linux-x86_64)|g" \
-              -e "s|@LINUX_AARCH64_SHA256@|$(sum_for agentty-linux-aarch64)|g" \
-              -e "s|@MACOS_X86_64_SHA256@|$(sum_for agentty-macos-x86_64)|g" \
-              -e "s|@MACOS_ARM64_SHA256@|$(sum_for agentty-macos-arm64)|g" \
+              -e "s|@LINUX_X86_64_SHA256@|$LX|g" \
+              -e "s|@LINUX_AARCH64_SHA256@|$LA|g" \
+              -e "s|@MACOS_X86_64_SHA256@|$MX|g" \
+              -e "s|@MACOS_ARM64_SHA256@|$MA|g" \
               packaging/homebrew/agentty.rb > agentty.rb
+          if grep -q -E '::error::|@[A-Z0-9_]+_SHA256@' agentty.rb; then
+            echo "::error::formula has unresolved hashes; not publishing"; exit 1
+          fi
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/1ay1/homebrew-tap.git" tap
           mkdir -p tap/Formula && cp agentty.rb tap/Formula/agentty.rb
           cd tap
