@@ -20,6 +20,7 @@
 // StreamToolUseEnd when the index is superseded or the stream ends.
 
 #include "agentty/provider/openai/transport.hpp"
+#include "agentty/domain/reasoning_off.hpp"
 #include "agentty/version.hpp"
 
 #include <maya/runtime.hpp>
@@ -2414,6 +2415,8 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             rreq.cancel         = std::move(cancel);
             rreq.effort         = req.effort;
             rreq.show_reasoning = req.show_reasoning;
+            rreq.no_reasoning   = req.no_reasoning;
+            rreq.reasoning_off  = req.reasoning_off;
             rreq.session_key    = req.session_key;
             rreq.affinity_key   = req.affinity_key;
             return stream_responses(rep, std::move(rreq), std::move(sink));
@@ -2941,12 +2944,34 @@ json build_request_body(const Request& req) {
             if (auto tc = m.find("tool_calls"); tc != m.end() && tc->is_array())
                 for (auto& c : *tc) c.erase("extra_content");
 
-    // A quick utility call on a custom host: turn thinking off. llama.cpp,
-    // vLLM and SGLang pass this to the chat template; servers that don't
-    // know it ignore it. Hosted presets never get it (strict schemas 400).
-    if (req.quick && req.effort.empty()
-        && provider::preset_for(req.endpoint.label) == nullptr)
-        body["chat_template_kwargs"] = {{"enable_thinking", false}};
+    // Reasoning OFF. Omitting the effort field is not off for a model that
+    // thinks by default, so say it, in the form this model takes:
+    //   OpenRouter            reasoning.enabled=false (it maps per model)
+    //   effort "none" models  reasoning_effort: "none" (gpt-5.1+, Mistral)
+    //   toggle models         chat_template_kwargs.enable_thinking=false
+    //                         (vLLM, SGLang, llama.cpp read it)
+    // Unknown models get the template switch only on custom hosts, where
+    // it is ignored if the template doesn't use it; hosted presets 400 on
+    // unknown fields. Models that can't stop reasoning get nothing: the
+    // picker never offers them off. A host that rejects a field learns it
+    // once (parse_rejected_field) and the turn is resent without it.
+    using agentty::ReasoningOff;
+    const auto off_how = static_cast<ReasoningOff>(req.reasoning_off);
+    const bool custom_host = provider::preset_for(req.endpoint.label) == nullptr;
+    const bool want_off = req.effort.empty() && (req.no_reasoning || req.quick);
+    if (want_off && off_how != ReasoningOff::Impossible && off_how != ReasoningOff::Omit) {
+        if (is_openrouter) {
+            if (allowed(provider::OptionalField::Reasoning)
+                && (off_how == ReasoningOff::EffortNone || off_how == ReasoningOff::Toggle))
+                body["reasoning"] = {{"enabled", false}};
+        } else if (off_how == ReasoningOff::EffortNone) {
+            body["reasoning_effort"] = "none";
+        } else if (custom_host
+                   && allowed(provider::OptionalField::ChatTemplateKwargs)) {
+            body["chat_template_kwargs"] = {{"enable_thinking", false},
+                                            {"thinking", false}};
+        }
+    }
 
     return body;
 }
@@ -3838,9 +3863,15 @@ int probe_loaded_window(Io /*io*/, const AuthHeader& auth, const Endpoint& endpo
     return probe.per_model.empty() ? probe.server_wide : 0;
 }
 
+namespace {
+thread_local std::string t_list_models_error;
+}
+std::string last_list_models_error() { return t_list_models_error; }
+
 std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint& endpoint,
                                    bool force_probe) {
     std::vector<ModelInfo> result;
+    t_list_models_error.clear();
     // A known hosted provider with no key would only 401. A custom host may
     // need no key at all, so ask it.
     if (endpoint.use_tls && is_empty(auth)
@@ -3896,8 +3927,20 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint
             fell_back_to_v1 = true;
         }
     }
-    if (!resp || resp->status != 200) return result;
-
+    if (!resp) {
+        t_list_models_error = "can't reach " + endpoint.host + ": " + resp.error().render();
+        return result;
+    }
+    if (resp->status != 200) {
+        std::string msg = "HTTP " + std::to_string(resp->status);
+        if (auto said = provider_error_message(resp->body); !said.empty())
+            msg += ": " + said;
+        if (resp->status == 401 || resp->status == 403)
+            msg += is_empty(auth) ? " \xe2\x80\x94 this host needs an API key"
+                                  : " \xe2\x80\x94 the API key was rejected";
+        t_list_models_error = std::move(msg);
+        return result;
+    }
     // Capability facts for the whole list go in one batch and are published
     // once: per-model setters copy the full registry each time.
     CatalogBatch caps;

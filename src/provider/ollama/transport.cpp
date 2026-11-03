@@ -12,6 +12,7 @@
 // arrives, salvage is disabled (the model can drive the real channel).
 
 #include "agentty/provider/ollama/transport.hpp"
+#include "agentty/domain/reasoning_off.hpp"
 #include "agentty/version.hpp"
 
 #include <algorithm>
@@ -1675,6 +1676,12 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             body["think"] = level;
         } else if (req.show_reasoning) {
             body["think"] = true;
+        } else if ((req.no_reasoning || req.quick)
+                   && req.reasoning_off
+                          != static_cast<std::uint8_t>(::agentty::ReasoningOff::Impossible)) {
+            // Off is an instruction, not an omission: thinking models
+            // (qwen3, deepseek) think when `think` is absent.
+            body["think"] = false;
         }
     }
 

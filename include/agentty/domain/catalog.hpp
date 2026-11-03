@@ -21,6 +21,7 @@
 
 #include "agentty/domain/id.hpp"
 #include "agentty/domain/capkey.hpp"   // canonical capability-key discipline
+#include "agentty/domain/reasoning_off.hpp"
 
 namespace agentty {
 
@@ -134,6 +135,9 @@ struct ProviderCatalog {
     enum class State : std::uint8_t { Idle, Loading, Ready, Failed };
     State state = State::Idle;
     std::vector<ModelInfo> models;
+    // Why the last live fetch failed ("HTTP 401: Invalid API key"), shown in
+    // the picker. Empty when it worked.
+    std::string error;
     std::string account_label;            // active account on this provider
     // Steady-clock ms when this catalog's LIVE fetch last completed (0 = never
     // fetched live; still showing the bundled seed). Drives the on-open
@@ -381,6 +385,9 @@ struct ModelCapabilities {
     // Never set by the constexpr from_id — static inference only guesses.
     std::uint8_t effort_set       = 0;
     bool         effort_set_known = false;
+    // How "off" is said for this model (catalog_reasoning_off_for, then a
+    // family fallback in resolved_caps). Not set by from_id.
+    std::uint8_t reasoning_off    = 0;   // ReasoningOff, stored raw: declared below
 
     [[nodiscard]] constexpr bool is_haiku()  const noexcept { return family == Family::Haiku; }
     [[nodiscard]] constexpr bool is_sonnet() const noexcept { return family == Family::Sonnet; }
@@ -1279,6 +1286,17 @@ inline void set_catalog_effort_set(std::string model_id, std::uint8_t set) {
     catalog_effort_detail::reg().set(norm_caps_key(model_id), set);
 }
 
+// How a model's reasoning is switched OFF (enum in reasoning_off.hpp).
+namespace catalog_reasoning_off_detail {
+inline Registry<std::uint8_t>& reg() { static Registry<std::uint8_t> r; return r; }
+} // namespace catalog_reasoning_off_detail
+
+inline void set_catalog_reasoning_off(std::string model_id, ReasoningOff v) {
+    bump_caps_epoch();
+    catalog_reasoning_off_detail::reg().set(norm_caps_key(model_id),
+                                            static_cast<std::uint8_t>(v));
+}
+
 // Bare-tail merge for the effort-set registry — same cross-provider collision
 // semantics as merge_catalog_reasoning: agree → keep, disagree → poison to
 // "no declaration" so resolution falls back to the scoped fact / id-inference.
@@ -1454,6 +1472,7 @@ inline void merge_endpoint_context_window(std::string_view api_url,
 struct CatalogBatch {
     Registry<bool>::Batch         reasoning;
     Registry<std::uint8_t>::Batch effort;
+    Registry<std::uint8_t>::Batch reasoning_off;
     Registry<int>::Batch          context;
     std::vector<std::tuple<std::string, std::string, catalog_endpoint_detail::Entry>> endpoints;
 
@@ -1468,6 +1487,15 @@ struct CatalogBatch {
     }
     void merge_effort_set(const std::string& raw_id, std::uint8_t s) {
         effort.merges.emplace_back(norm_caps_key(raw_id), s);
+    }
+    void set_reasoning_off(std::string id, ReasoningOff v) {
+        if (v != ReasoningOff::Unknown)
+            reasoning_off.sets.emplace_back(norm_caps_key(id), static_cast<std::uint8_t>(v));
+    }
+    void merge_reasoning_off(const std::string& raw_id, ReasoningOff v) {
+        if (v != ReasoningOff::Unknown)
+            reasoning_off.merges.emplace_back(norm_caps_key(raw_id),
+                                              static_cast<std::uint8_t>(v));
     }
     void set_context_window(std::string id, int tokens) {
         if (tokens > 0) context.sets.emplace_back(norm_caps_key(id), tokens);
@@ -1500,10 +1528,12 @@ struct CatalogBatch {
     // everything is in place.
     void commit() {
         const bool any = !reasoning.empty() || !effort.empty()
+                      || !reasoning_off.empty()
                       || !context.empty() || !endpoints.empty();
         if (!any) return;
         catalog_context_detail::reg().commit(std::move(context));
         catalog_effort_detail::reg().commit(std::move(effort));
+        catalog_reasoning_off_detail::reg().commit(std::move(reasoning_off));
         if (!endpoints.empty())
             (void)catalog_endpoint_detail::hosts().update(
                 [](const catalog_endpoint_detail::Hosts& hs, const auto& eps) {
@@ -1575,6 +1605,41 @@ struct CatalogBatch {
                                 : scoped_caps_key(model_id, scope);
     const auto v = catalog_effort_detail::reg().find(scoped, capkey::norm_tail(model_id));
     return v ? static_cast<int>(*v) : -1;
+}
+
+// How this model turns reasoning off, scoped-first like the effort set.
+[[nodiscard]] inline ReasoningOff catalog_reasoning_off_for(std::string_view model_id,
+                                                            std::string_view scope = {}) {
+    if (!catalog_reasoning_off_detail::reg().any()) return ReasoningOff::Unknown;
+    auto scoped = scope.empty() ? scoped_caps_key(model_id)
+                                : scoped_caps_key(model_id, scope);
+    const auto v = catalog_reasoning_off_detail::reg().find(scoped,
+                                                            capkey::norm_tail(model_id));
+    return v ? static_cast<ReasoningOff>(*v) : ReasoningOff::Unknown;
+}
+
+// The declared fact, else what the model family is known to do. Only
+// families whose behaviour doesn't depend on the host go here.
+[[nodiscard]] inline ReasoningOff reasoning_off_for(std::string_view model_id,
+                                                    std::string_view scope = {}) {
+    if (auto d = catalog_reasoning_off_for(model_id, scope); d != ReasoningOff::Unknown)
+        return d;
+    std::string lower{model_id};
+    for (char& c : lower) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    auto has = [&](std::string_view n) { return lower.find(n) != std::string::npos; };
+    // gpt-oss and the o-series always reason; low is the floor.
+    if (has("gpt-oss") || has("deepseek-r1") || has("deepseek-reasoner")
+        || has("magistral") || has("qwq"))
+        return ReasoningOff::Impossible;
+    // Hybrid thinkers that template an on/off switch.
+    if (has("qwen3") && !has("thinking-2507") && !has("instruct-2507"))
+        return ReasoningOff::Toggle;
+    if (has("glm-4.5") || has("glm-4.6") || has("glm-4.7") || has("glm-5")
+        || has("deepseek-v3.1") || has("deepseek-v3.2") || has("deepseek-v4")
+        || has("nemotron") || has("granite-3") || has("granite-4")
+        || has("kimi-k2-thinking") || has("seed-oss"))
+        return ReasoningOff::Toggle;
+    return ReasoningOff::Unknown;
 }
 
 // ── Per-model reasoning-effort override registry ─────────────────────────
@@ -1845,6 +1910,7 @@ learned_effort_sets_snapshot() {
                live >= 0) {
         caps.reasoning_compat = (live == 1);
     }
+    caps.reasoning_off = static_cast<std::uint8_t>(reasoning_off_for(model_id, scope));
     return caps;
 }
 
@@ -2276,6 +2342,20 @@ enum class Effort : std::uint8_t { None, Minimal, Low, Medium, High, Xhigh, Max,
     return Effort::None;   // unreachable while set != 0
 }
 
+// A model that can't stop reasoning (gpt-oss, o3, R1): "off" would be a
+// lie on the wire, so the picker hides it and a stored off reads as the
+// lowest tier the model takes.
+[[nodiscard]] constexpr bool always_reasons(const ModelCapabilities& caps) noexcept {
+    return caps.reasoning_off == static_cast<std::uint8_t>(ReasoningOff::Impossible)
+        && effort_set_of(caps) != 0;
+}
+[[nodiscard]] constexpr Effort lowest_effort(std::uint8_t set) noexcept {
+    for (Effort e : {Effort::Minimal, Effort::Low, Effort::Medium, Effort::High,
+                     Effort::Xhigh, Effort::Max})
+        if (set & effort_bit(e)) return e;
+    return Effort::None;
+}
+
 // Clamp an Effort to what a model actually supports and return its wire
 // value. "" when the model can't take effort at all (or e == None). The
 // provider calls this so a stale pick (e.g. Xhigh chosen, then a swap to a
@@ -2287,6 +2367,8 @@ enum class Effort : std::uint8_t { None, Minimal, Low, Medium, High, Xhigh, Max,
     // resolves to its per-model anchor here — which is why nothing downstream
     // (the steppers, the budget table in the Anthropic transport) needs to
     // know Auto exists.
+    if (e == Effort::None && always_reasons(caps))
+        return effort_wire(lowest_effort(effort_set_of(caps)));
     return effort_wire(nearest_effort(resolve_auto_effort(e, caps),
                                       effort_set_of(caps)));
 }
@@ -2298,6 +2380,8 @@ enum class Effort : std::uint8_t { None, Minimal, Low, Medium, High, Xhigh, Max,
 // becomes High here, and effort on a non-reasoning model collapses to None.
 [[nodiscard]] inline Effort clamp_effort(
         Effort e, const ModelCapabilities& caps) noexcept {
+    if (e == Effort::None && always_reasons(caps))
+        return lowest_effort(effort_set_of(caps));
     return nearest_effort(e, effort_set_of(caps));
 }
 
@@ -2317,7 +2401,8 @@ enum class Effort : std::uint8_t { None, Minimal, Low, Medium, High, Xhigh, Max,
         const ModelCapabilities& caps) {
     const std::uint8_t set = effort_set_of(caps);
     if (set == 0) return std::vector<Effort>{Effort::None};
-    std::vector<Effort> out{Effort::Auto, Effort::None};
+    std::vector<Effort> out{Effort::Auto};
+    if (!always_reasons(caps)) out.push_back(Effort::None);
     for (Effort e : {Effort::Minimal, Effort::Low, Effort::Medium, Effort::High,
                      Effort::Xhigh, Effort::Max})
         if (set & effort_bit(e)) out.push_back(e);

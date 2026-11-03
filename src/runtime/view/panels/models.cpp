@@ -63,12 +63,13 @@ Element models_panel(const Model& m) {
     // list visibly reads as "more coming", not "that's all". Failed providers
     // are surfaced separately so a network blip doesn't look like "that's all".
     {
-        int failed = 0;
         std::vector<std::string_view> pending;
+        std::vector<const ProviderCatalog*> failed;
         for (const auto& c : m.d.provider_catalogs) {
             if (c.state == ProviderCatalog::State::Loading)
                 pending.push_back(c.label);
-            else if (c.state == ProviderCatalog::State::Failed) ++failed;
+            else if (!c.error.empty() || c.state == ProviderCatalog::State::Failed)
+                failed.push_back(&c);
         }
         if (!pending.empty()) {
             // Name who we're waiting on — "⋯ loading Groq, Mistral…" answers
@@ -86,13 +87,25 @@ Element models_panel(const Model& m) {
                     + " loading " + who + "\xe2\x80\xa6",
                 fg_italic(muted)));
         }
-        if (failed > 0)
+        // One line per failed provider with the server's own reason, so a
+        // rejected key reads as that and not as "this host has no models".
+        for (std::size_t i = 0; i < failed.size() && i < 3; ++i) {
+            const auto& c = *failed[i];
+            const std::string why = c.error.empty()
+                ? std::string{"couldn't load models"} : c.error;
             cfg.header.push_back(text(
-                "  \xe2\x9a\xa0 " + std::to_string(failed)
-                    + (failed == 1 ? " provider failed to refresh"
-                                   : " providers failed to refresh")
-                    + " \xc2\xb7 reopen to retry",
+                "  \xe2\x9a\xa0 " + c.label + " \xc2\xb7 " + why,
                 fg_of(warn)));
+        }
+        if (failed.size() > 3)
+            cfg.header.push_back(text(
+                "  \xe2\x9a\xa0 +" + std::to_string(failed.size() - 3)
+                    + " more failed \xc2\xb7 ^L to retry",
+                fg_of(warn)));
+        else if (!failed.empty())
+            cfg.header.push_back(text(
+                "    ^L retry \xc2\xb7 ^P fix the key or address",
+                fg_dim(muted)));
     }
 
     if (rows.empty()) {
@@ -111,10 +124,16 @@ Element models_panel(const Model& m) {
             m.d.provider_catalogs.begin(), m.d.provider_catalogs.end(),
             [](const ProviderCatalog& c) { return !c.models.empty(); });
 
+        const bool any_failed = std::any_of(
+            m.d.provider_catalogs.begin(), m.d.provider_catalogs.end(),
+            [](const ProviderCatalog& c) { return !c.error.empty(); });
+
         Panel::Item nr;
         if (loading) {
             nr.leading = "  " + std::string{m.s.spinner.current_frame()}
                        + " loading model catalogs\xe2\x80\xa6";
+        } else if (any_failed && picker->query.empty()) {
+            nr.leading = "  no models to pick \xc2\xb7 see the error above";
         } else if (!any_authed) {
             nr.leading = "  no providers signed in \xc2\xb7 "
                          "^P to add one";

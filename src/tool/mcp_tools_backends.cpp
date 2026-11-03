@@ -1194,8 +1194,11 @@ provider::StreamResult run_one_completion(Thread& thread,
     // `agentty run --effort`: the user asked this run to think. Clamped to
     // what the routed model takes; visible so --events can show it.
     if (stats && stats->effort) {
-        req.effort = std::string(effort_wire_for(*stats->effort, resolved_caps(req.model)));
+        const auto caps = resolved_caps(req.model);
+        req.effort = std::string(effort_wire_for(*stats->effort, caps));
         req.show_reasoning = !req.effort.empty();
+        req.no_reasoning   = *stats->effort == Effort::None;
+        req.reasoning_off  = caps.reasoning_off;
     }
     // --events wants the reasoning a model produces even without --effort
     // (deepseek-r1 and friends always think). Not on Anthropic: there it

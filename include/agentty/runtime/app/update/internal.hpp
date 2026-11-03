@@ -529,6 +529,9 @@ Cmd  apply_pending_switch(Model& m);
 // fused_picker query, and returns the ordered/sectioned FusedRow list. The
 // view renders it and derives the visual cursor; the reducer selects from it.
 [[nodiscard]] std::vector<FusedRow> fused_rows_for_model(const Model& m);
+// Re-enumerate the open model picker's providers and rows (no-op when it is
+// closed). For replies that change which providers are signed in.
+void refresh_open_model_picker(Model& m);
 Cmd  thread_list_update   (Model& m, msg::ThreadListMsg     tm);
 Cmd  palette_update       (Model& m, msg::PaletteMsg pm);
 Cmd  mention_update       (Model& m, msg::MentionMsg mm);

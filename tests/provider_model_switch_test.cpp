@@ -1029,6 +1029,72 @@ TEST_CASE("ModelsLoaded refreshes the open fused picker") {
     CHECK(after);
 }
 
+// Halano's bug: a custom host whose /v1/models 401s left the Anthropic
+// launch seed in the picker, labelled as the host, and picking one sent
+// claude-opus-4-5 to it. A failed fetch must clear that list and say why.
+TEST_CASE("ModelsLoaded failure clears another provider's list and keeps the reason") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    const std::string host = "https://backend.example.com/v1";
+    g_settings = store::Settings{};
+    g_settings.provider_keys[host] = "sk-wrong";
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection(host));
+
+    Model m = seeded_model();
+    m.d.available_models = {mi("claude-opus-4-5", "anthropic")};
+    auto [m1, c1] = app::update(std::move(m), Msg{OpenModels{}});
+    apply_fx(c1);
+
+    ModelsLoaded ml;
+    ml.provider_id = host;
+    ml.error = "HTTP 401: Invalid API key";
+    auto [m2, c2] = app::update(std::move(m1), Msg{std::move(ml)});
+    apply_fx(c2);
+
+    CHECK(m2.d.available_models.empty());
+    for (const auto& r : m2.d.fused_rows)
+        CHECK(r.model.id.value != "claude-opus-4-5");
+    CHECK(m2.s.models_error == "HTTP 401: Invalid API key");
+    bool shown = false;
+    for (const auto& c : m2.d.provider_catalogs)
+        if (c.provider_id == host && c.error == "HTTP 401: Invalid API key") shown = true;
+    CHECK(shown);
+
+    // The fixed key's fetch clears the error.
+    ModelsLoaded ok;
+    ok.provider_id = host;
+    ok.models = {mi("Qwen3-32B", host.c_str())};
+    auto [m3, c3] = app::update(std::move(m2), Msg{std::move(ok)});
+    apply_fx(c3);
+    CHECK(m3.s.models_error.empty());
+    for (const auto& c : m3.d.provider_catalogs)
+        if (c.provider_id == host) CHECK(c.error.empty());
+}
+
+// A message sent while the Anthropic token probe was out sat as "1 queued"
+// forever when the probe found nothing to refresh.
+TEST_CASE("a message queued behind the OAuth probe is sent when it settles") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    g_settings = store::Settings{};
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection("anthropic"));
+    Model m = seeded_model();
+    m.d.model_id = ModelId{"claude-opus-4-5"};
+    m.s.oauth_refresh_in_flight = true;
+    m.ui.composer.text = "hi";
+    m.ui.composer.cursor = 2;
+    auto [m1, c1] = app::update(std::move(m), Msg{ComposerEnter{}});
+    apply_fx(c1);
+    REQUIRE(m1.ui.composer.queued.size() == 1);
+    CHECK(m1.s.is_idle());
+
+    auto [m2, c2] = app::update(std::move(m1),
+                                Msg{msg::LoginMsg{OAuthRefreshNotDue{}}});
+    apply_fx(c2);
+    CHECK(m2.ui.composer.queued.empty());
+    CHECK(!m2.s.is_idle());   // the turn started
+}
+
 // OpenModels refreshes the ACTIVE provider immediately and defers the
 // OTHER providers (FusedRefreshOthers) so the active result isn't queued
 // behind slower providers. The deferred pass marks the others Loading.

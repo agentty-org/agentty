@@ -281,6 +281,11 @@ json build_body(const provider::Request& req, std::string_view site) {
     // there has to mean off on the wire.
     if (!req.effort.empty())
         body["reasoning"] = json{{"effort", req.effort}, {"summary", "auto"}};
+    else if (req.no_reasoning
+             && req.reasoning_off
+                    == static_cast<std::uint8_t>(::agentty::ReasoningOff::EffortNone))
+        // gpt-5.1+ reason by default; leaving the field out is "medium".
+        body["reasoning"] = json{{"effort", "none"}};
     // Output cap. Chat sends `max_tokens`, Anthropic sends `max_tokens`,
     // Ollama sends `num_predict` — this dialect spells it
     // `max_output_tokens`, and used to send nothing at all.

@@ -925,8 +925,12 @@ Cmd launch_stream(Model& m) {
     // Gpt), so the SAME clamp path applies: gpt-5.6 takes the full low..max
     // ladder, gpt-5.4/5.5 top out at xhigh, and a stale `max` pick on a model
     // that only reaches xhigh degrades instead of being sent verbatim.
-    std::string effort = std::string{
-        effort_wire_for(m.d.effort, resolved_caps(model_id))};
+    const auto launch_caps = resolved_caps(model_id);
+    std::string effort = std::string{effort_wire_for(m.d.effort, launch_caps)};
+    // The user picked off (not "Auto on a model with no ladder"): the
+    // transport sends an explicit off where the model has one.
+    const bool no_reasoning = m.d.effort == Effort::None;
+    const std::uint8_t reasoning_off = launch_caps.reasoning_off;
 
     // Whether to ask the provider for visible reasoning at all.
     //
@@ -1092,6 +1096,8 @@ Cmd launch_stream(Model& m) {
         std::string         compaction_model;
         int                 compaction_model_window;
         std::string         effort;
+        bool                no_reasoning = false;
+        std::uint8_t        reasoning_off = 0;
         std::optional<bool> model_supports_tools;
         std::optional<bool> model_supports_vision;
         // Resolved on the UI thread from `m.d.persisted`, not read from the
@@ -1124,6 +1130,8 @@ Cmd launch_stream(Model& m) {
         auto& compaction_model        = in.compaction_model;
         const auto compaction_model_window = in.compaction_model_window;
         auto& effort                  = in.effort;
+        // The picker's model, before routing/compaction picks another.
+        const std::string picked_model = in.model_id;
         const auto model_supports_tools  = in.model_supports_tools;
         const auto model_supports_vision = in.model_supports_vision;
         const auto model_context_window  = in.model_context_window;
@@ -1261,6 +1269,12 @@ Cmd launch_stream(Model& m) {
         // false for it; the explicit `!compacting` stays as documentation
         // of the intent rather than a load-bearing term.
         req.show_reasoning = !compacting && !req.effort.empty();
+        // Off is sent explicitly. Compaction is mechanical and never needs
+        // thinking, so it asks for off too. The routed model may differ
+        // from the picker's, so read its own off-switch.
+        req.no_reasoning  = req.effort.empty() && (compacting || in.no_reasoning);
+        req.reasoning_off = req.model == picked_model
+            ? in.reasoning_off : resolved_caps(req.model).reasoning_off;
         req.session_key   = std::move(session_key);
 
         // Capability gate: withhold tools ONLY on an explicit declaration of
@@ -1505,6 +1519,8 @@ Cmd launch_stream(Model& m) {
             .compaction_model        = std::move(compaction_model),
             .compaction_model_window = compaction_model_window,
             .effort                  = std::move(effort),
+            .no_reasoning            = no_reasoning,
+            .reasoning_off           = reasoning_off,
             .model_supports_tools    = model_supports_tools,
             .model_supports_vision   = model_supports_vision,
             .org_blocks_vision       = detail::entitlement_blocked(
@@ -2503,7 +2519,8 @@ Cmd fetch_models(provider::Selection sel,
                 // on the same axes as the stream path. No
                 // is_chatgpt/OpenAI/Anthropic ladder here — a new provider
                 // inherits its catalog from its row.
-                auto models = provider::list_models_for(io, cap, sel, auth);
+                std::string err;
+                auto models = provider::list_models_for(io, cap, sel, auth, err);
             // EMPTY catalog on a LOCAL host = the server didn't answer (down,
             // wrong port, wrong path) — list_models returns {} on any HTTP
             // failure rather than throwing. Attach the reason so the reducer
@@ -2511,13 +2528,17 @@ Cmd fetch_models(provider::Selection sel,
             // in a silent "no models" that the user discovers later. This is
             // the probe-on-connect: the switch always fetches, so a broken
             // host is called out within seconds of Enter.
-            std::string err;
-            if (models.empty()) {
+            if (!err.empty()) {
+                // The picker shows the error under the provider's own name;
+                // the toast (built in the reducer) adds the host.
+            } else if (models.empty()) {
                 if (sel.kind == provider::Kind::OpenAI
                     && !sel.openai_endpoint.use_tls)
                     err = "no response from " + sel.openai_endpoint.host + ":"
                         + std::to_string(sel.openai_endpoint.port)
                         + " \xe2\x80\x94 is the server running?";
+                else if (sel.kind == provider::Kind::OpenAI)
+                    err = sel.openai_endpoint.host + " listed no models";
             }
             // The model catalog is the other half of "which model ran".
             // An empty list is how BOTH the custom-host Copilot bug and a
@@ -2604,11 +2625,17 @@ Cmd fetch_models_for(std::string spec) {
                 sel.kind == provider::Kind::OpenAI
                     ? sel.openai_endpoint.label
                     : std::string{provider::default_provider_id()};
+            std::string err;
             auto models = provider::list_models_for(io, cap,
-                sel, provider::credentials::resolve(io, pid));
-            out.send(Msg{FusedCatalogLoaded{spec, std::move(models), true}});
+                sel, provider::credentials::resolve(io, pid), err);
+            const bool ok = err.empty() || !models.empty();
+            out.send(Msg{FusedCatalogLoaded{spec, std::move(models), ok,
+                                            std::move(err)}});
+        } catch (const std::exception& e) {
+            out.send(Msg{FusedCatalogLoaded{spec, std::vector<ModelInfo>{}, false,
+                                            e.what()}});
         } catch (...) {
-            out.send(Msg{FusedCatalogLoaded{spec, std::vector<ModelInfo>{}, false}});
+            out.send(Msg{FusedCatalogLoaded{spec, std::vector<ModelInfo>{}, false, {}}});
         }
     }, std::move(spec));
 }

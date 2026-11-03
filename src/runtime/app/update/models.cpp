@@ -245,7 +245,8 @@ void refresh_fused_sources(Model& m) {
                 }
             }
             m.d.provider_catalogs.push_back(ProviderCatalog{
-                src.id, std::move(label), ProviderCatalog::State::Idle, {}, {}});
+                .provider_id = src.id, .label = std::move(label),
+                .state = ProviderCatalog::State::Idle});
             c = &m.d.provider_catalogs.back();
         }
         // Active backend: MIRROR the live catalog we already hold
@@ -258,6 +259,7 @@ void refresh_fused_sources(Model& m) {
         // fires a background fetch through cmd::fetch_models_for(id), which
         // resolves a preset's auth or a custom host's saved key alike; the
         // row list simply grows as each resolves.
+        if (src.id == active_pid) c->error = m.s.models_error;
         if (src.id == active_pid && !m.d.available_models.empty()) {
             if (c->models != m.d.available_models) {
                 c->models = m.d.available_models;
@@ -520,6 +522,11 @@ Cmd open_login_for(Model& m, const std::string& provider_id,
 
 } // namespace
 
+void refresh_open_model_picker(Model& m) {
+    if (!m.ui.panel.get<pn::Models>()) return;
+    rebuild_fused_rows(m);   // syncs sources first
+}
+
 // A model picked during a turn, applied once the turn has ended. Called from
 // publish_derived after every fold, so it fires on whichever fold returns the
 // phase to Idle (finish, error, cancel, thread switch) with no reducer having
@@ -701,6 +708,7 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
             // mid-fetch is simply not in the list anymore).
             for (auto& c : m.d.provider_catalogs) {
                 if (c.provider_id != e.provider_id) continue;
+                c.error = std::move(e.error);
                 if (e.ok && !e.models.empty()) {
                     c.models = std::move(e.models);
                     // Same bake as the active provider's load. Without it a
@@ -1086,12 +1094,36 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
             // The fetch finished (success OR failure) — always clear the
             // in-flight flag so the picker leaves "Loading models…".
             m.s.models_loading = false;
+            // Remember why it failed so the picker can say so.
+            const std::string loaded_for =
+                e.provider_id.empty() ? active_provider_id(m) : e.provider_id;
+            for (auto& c : m.d.provider_catalogs)
+                if (c.provider_id == loaded_for) c.error = e.error;
+            m.s.models_error = e.error;
+            // A failed or empty fetch must not leave the previous list in
+            // place: it can be another provider's (the Anthropic launch seed
+            // under a custom host), and picking from it sends that
+            // provider's model ids here.
+            if (e.models.empty() && !m.d.available_models.empty()) {
+                m.d.available_models.clear();
+                for (auto& c : m.d.provider_catalogs)
+                    if (c.provider_id == loaded_for) {
+                        c.models.clear();
+                        c.invalidate_derived();
+                        c.state = e.error.empty() ? ProviderCatalog::State::Ready
+                                                  : ProviderCatalog::State::Failed;
+                    }
+                rebuild_fused_rows(m);
+            }
             // A failed fetch surfaces its reason as a transient toast —
             // never as a StreamError, which would feed the live turn's
             // retry machinery (see the ModelsLoaded msg comment).
-            if (!e.error.empty()) {
-                auto toast = set_status_toast(m, std::move(e.error),
-                                              std::chrono::seconds{6});
+            if (!e.error.empty() && e.models.empty()) {
+                std::string who = provider::provider_display_name(m.d.selection);
+                std::string text = e.error.starts_with(who)
+                    ? std::move(e.error) : who + ": " + e.error;
+                auto toast = set_status_toast(m, std::move(text),
+                                              std::chrono::seconds{8});
                 return toast;
             }
             if (e.models.empty()) return Cmd::none();

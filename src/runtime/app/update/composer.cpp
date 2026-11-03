@@ -449,7 +449,10 @@ Cmd composer_update(Model& m, msg::ComposerMsg cm) {
         const bool probe_throttled =
             m.s.last_refresh_probe_at.time_since_epoch().count() != 0
             && now - m.s.last_refresh_probe_at < std::chrono::seconds(30);
-        if (!probe_throttled && !m.s.active() && !m.s.oauth_refresh_in_flight) {
+        // The token is Anthropic's; on any other provider there is nothing
+        // to refresh, and the in-flight flag would hold the next send.
+        if (!probe_throttled && !m.s.active() && !m.s.oauth_refresh_in_flight
+            && m.d.selection.kind == provider::Kind::Anthropic) {
             m.s.last_refresh_probe_at = now;
             // The worker reads the token and refreshes only if it is due.
             m.s.oauth_refresh_in_flight = true;

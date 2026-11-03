@@ -19,6 +19,7 @@
 
 #include "agentty/auth/auth.hpp"
 #include "agentty/domain/conversation.hpp"
+#include "agentty/domain/reasoning_off.hpp"
 #include "agentty/io/http.hpp"
 #include "agentty/provider/selection.hpp"
 #include "agentty/runtime/msg.hpp"
@@ -111,6 +112,13 @@ struct Request {
     // say "don't think" to the server do; others ignore it.
     bool quick = false;
 
+    // The user turned reasoning OFF (not merely "no ladder"), and how this
+    // model says off (a ReasoningOff, raw; 0 = unknown). Leaving effort out
+    // is not off for a model that thinks by default, so transports that can
+    // send an explicit off do.
+    bool         no_reasoning  = false;
+    std::uint8_t reasoning_off = 0;
+
     // Stable host-conversation identity. Providers with native server-side
     // threads (notably Codex app-server) use this to retain the provider
     // thread instead of serialising the entire transcript into every prompt.
@@ -190,6 +198,10 @@ void lower_shared(TReq& dst, Request& src) {
         dst.show_reasoning = src.show_reasoning;
     if constexpr (requires { dst.quick = src.quick; })
         dst.quick = src.quick;
+    if constexpr (requires { dst.reasoning_off = src.reasoning_off; }) {
+        dst.no_reasoning  = src.no_reasoning;
+        dst.reasoning_off = src.reasoning_off;
+    }
 }
 
 // How a streamed turn ended, as a value (defined in stream_epilogue.hpp, which

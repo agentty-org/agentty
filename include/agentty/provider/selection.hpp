@@ -235,6 +235,11 @@ void prewarm_active_provider(Io);
 // over the network (and refreshes OAuth tokens): `unlocked`.
 [[nodiscard]] std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap,
     const Selection& sel, const auth::AuthHeader& auth);
+// Same, and sets `error` to why the live fetch failed (empty when it worked).
+// The result can still be non-empty on failure: hosted providers fall back
+// to their bundled seed.
+[[nodiscard]] std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap,
+    const Selection& sel, const auth::AuthHeader& auth, std::string& error);
 
 // ── Provider-picker search filter (shared by the reducer + the view) ────────
 // Returns the indices into `providers()` whose id/label/blurb match `query`

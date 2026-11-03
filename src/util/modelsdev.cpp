@@ -88,17 +88,24 @@ void register_model(CatalogBatch& out,
     // when values are actually named. An oddly typed entry is skipped: one
     // bad field must not cost the rest of the document.
     int set = -1;
+    bool has_toggle = false, has_none = false, has_effort = false;
     if (simdjson::dom::array ro; !m["reasoning_options"].get_array().get(ro)) {
         for (const simdjson::dom::element opt : ro) {
             std::string_view type;
             if (opt["type"].get_string().get(type)) continue;
             if (type == "effort") {
+                has_effort = true;
                 std::uint8_t bits = 0;
                 if (simdjson::dom::array vals; !opt["values"].get_array().get(vals))
                     for (const simdjson::dom::element v : vals)
-                        if (std::string_view s; !v.get_string().get(s)) bits |= bit_of(s);
+                        if (std::string_view s; !v.get_string().get(s)) {
+                            bits |= bit_of(s);
+                            if (s == "none") has_none = true;
+                        }
                 if (bits != 0) set = bits;
-            } else if (type == "toggle" && set < 0) {
+            } else if (type == "toggle") {
+                has_toggle = true;
+                if (set >= 0) continue;
                 // Toggle-only reasoning (Kimi k2.5, some Qwen): on/off with
                 // no tiers. Model it as the binary {high} mask — the ladder
                 // renders off·high (an honest on/off switch) and any
@@ -109,6 +116,17 @@ void register_model(CatalogBatch& out,
             }
         }
     }
+    // How "off" is said for this model. An effort list with no "none" and
+    // no toggle means the model always reasons (o3, gpt-oss): its lowest
+    // tier is the floor. A reasoning model with no options at all is
+    // unknown, not "impossible".
+    using agentty::ReasoningOff;
+    const ReasoningOff off =
+        !reasons    ? ReasoningOff::Omit
+        : has_none  ? ReasoningOff::EffortNone
+        : has_toggle ? ReasoningOff::Toggle
+        : has_effort ? ReasoningOff::Impossible
+                     : ReasoningOff::Unknown;
 
     // The scope for these records: agentty's OWN provider id when the
     // models.dev entry's identity resolves to a registry row (exact id →
@@ -136,6 +154,7 @@ void register_model(CatalogBatch& out,
     }
 
     out.set_reasoning(scope + "/" + mid, reasons);
+    out.set_reasoning_off(scope + "/" + mid, off);
     if (dev_ctx > 0) out.set_context_window(scope + "/" + mid, dev_ctx);
     if (set >= 0)
         out.set_effort_set(scope + "/" + mid, static_cast<std::uint8_t>(set));
@@ -149,6 +168,7 @@ void register_model(CatalogBatch& out,
     const std::string tail = capkey::norm_tail(mid);
     if (tail != capkey::norm_model(mid)) {
         out.set_reasoning(scope + "/" + tail, reasons);
+        out.set_reasoning_off(scope + "/" + tail, off);
         if (dev_ctx > 0) out.set_context_window(scope + "/" + tail, dev_ctx);
         if (set >= 0)
             out.set_effort_set(scope + "/" + tail, static_cast<std::uint8_t>(set));
@@ -158,6 +178,7 @@ void register_model(CatalogBatch& out,
     // (agree → keep, disagree → no-info; RULE 3 in capkey.hpp).
     if (!tail.empty()) {
         out.merge_reasoning(tail, reasons);
+        out.merge_reasoning_off(tail, off);
         if (dev_ctx > 0) out.merge_context_window(tail, dev_ctx);
         if (set >= 0)
             out.merge_effort_set(tail, static_cast<std::uint8_t>(set));

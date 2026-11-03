@@ -1195,6 +1195,20 @@ Cmd login_device_done(Model& m, std::string provider, std::string provider_label
     return commit_provider_switch(m, provider, provider_label);
 }
 
+namespace {
+// Send the first message queued behind an OAuth refresh/probe, now that it
+// has settled. A no-op when a turn is running or nothing is queued.
+Cmd drain_queued_after_refresh(Model& m) {
+    if (!m.s.is_idle() || m.ui.composer.queued.empty()) return Cmd::none();
+    auto& head = m.ui.composer.queued.front();
+    m.ui.composer.text        = std::move(head.text);
+    m.ui.composer.attachments = std::move(head.attachments);
+    m.ui.composer.cursor      = static_cast<int>(m.ui.composer.text.size());
+    m.ui.composer.queued.erase(m.ui.composer.queued.begin());
+    return submit_message(m);
+}
+} // namespace
+
 Cmd token_refreshed(Model& m, auth::TokenResult result) {
     // Background-refresh result. Distinct from login_exchanged: this
     // path was kicked off either by `init()` (stale-but-refreshable
@@ -1225,7 +1239,7 @@ Cmd token_refreshed(Model& m, auth::TokenResult result) {
             if (stream_parked)
                 return Cmd::after(std::chrono::milliseconds{0},
                                         Msg{RetryStream{}});
-            return Cmd::none();
+            return drain_queued_after_refresh(m);
         }
         // Refresh failed — surface the typed error in the bottom row.
         // The "error:" prefix triggers shortcut_row.cpp's danger
@@ -1285,29 +1299,15 @@ Cmd token_refreshed(Model& m, auth::TokenResult result) {
     // Resume by dispatching RetryStream — the existing RetryStream arm
     // flips retry back to Fresh and calls launch_stream, which picks
     // up the freshly-installed bearer from Deps.
+    // Drain any text the user queued while the refresh was in flight.
     if (stream_parked) {
         return Cmd::batch(
                 std::move(install), std::move(toast_cmd),
                 Cmd::after(std::chrono::milliseconds{0},
                                 Msg{RetryStream{}}));
     }
-
-    // Drain any text the user queued while the refresh was in flight.
-    // Mirrors the stream-finish drain at update/stream.cpp:617 — pull
-    // the front off `composer.queued`, hand it to submit_message, and
-    // batch its Cmd alongside the toast so the user's first turn fires
-    // the moment fresh creds are live.
-    if (m.s.is_idle() && !m.ui.composer.queued.empty()) {
-        auto& head = m.ui.composer.queued.front();
-        m.ui.composer.text        = std::move(head.text);
-        m.ui.composer.attachments = std::move(head.attachments);
-        m.ui.composer.cursor      = static_cast<int>(m.ui.composer.text.size());
-        m.ui.composer.queued.erase(m.ui.composer.queued.begin());
-        auto sub_cmd = submit_message(m);
-        return Cmd::batch(
-                std::move(install), std::move(toast_cmd), std::move(sub_cmd));
-    }
-    return Cmd::batch(std::move(install), std::move(toast_cmd));
+    return Cmd::batch(std::move(install), std::move(toast_cmd),
+                      drain_queued_after_refresh(m));
 }
 
 // ============================================================================
@@ -1378,6 +1378,9 @@ Cmd login_update(Model& m, msg::LoginMsg lm) {
             m.d.auth = std::move(e.view);
             // The vault is the host's; take its keys as they now stand.
             m.d.persisted.provider_keys = std::move(e.provider_keys);
+            // A model picker opened by the same switch was built from the
+            // keys before this reply; rebuild it so a just-added host shows.
+            refresh_open_model_picker(m);
             // An open account list reflects the registry; rebuild it in
             // place, keeping the cursor near where it was.
             if (auto* al = std::get_if<login::AccountList>(&m.ui.login)) {
@@ -1393,7 +1396,10 @@ Cmd login_update(Model& m, msg::LoginMsg lm) {
         },
         [&](OAuthRefreshNotDue)     -> Cmd {
             m.s.oauth_refresh_in_flight = false;
-            return Cmd::none();
+            // A message sent while the probe was out was queued behind it.
+            // Nothing was refreshed, so send it now; without this it sat as
+            // "1 queued" until the next turn ended.
+            return drain_queued_after_refresh(m);
         },
     }, lm);
 }

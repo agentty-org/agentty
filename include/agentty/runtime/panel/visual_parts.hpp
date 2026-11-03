@@ -127,6 +127,7 @@ inline auto visual_parts(const Id<Tag>& id) {
 inline auto visual_parts(const ProviderCatalog& c) {
     return std::make_tuple(visual::ref(c.provider_id), visual::ref(c.label),
                            c.state, visual::ref(c.models),
+                           visual::ref(c.error),
                            visual::ref(c.account_label),
                            visual::exempt,   // loaded_at_ms: TTL clock
                            visual::exempt,   // search_keys:  derived cache

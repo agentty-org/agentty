@@ -412,6 +412,9 @@ enum class OptionalField : std::uint8_t {
     CacheControl     = 1u << 4,
     Reasoning        = 1u << 5,   // OpenRouter's {reasoning:{effort}}
     SessionId        = 1u << 6,
+    // How "reasoning off" is sent to hosts that think by default. Only
+    // sent when the user picked off; a host that rejects it learns it once.
+    ChatTemplateKwargs = 1u << 7,
 };
 [[nodiscard]] constexpr std::uint8_t bit(OptionalField f) noexcept {
     return static_cast<std::uint8_t>(f);
@@ -425,6 +428,7 @@ enum class OptionalField : std::uint8_t {
         case OptionalField::CacheControl:     return "cache_control";
         case OptionalField::Reasoning:        return "reasoning";
         case OptionalField::SessionId:        return "session_id";
+        case OptionalField::ChatTemplateKwargs: return "chat_template_kwargs";
         case OptionalField::None:             break;
     }
     return {};
@@ -461,6 +465,7 @@ enum class OptionalField : std::uint8_t {
     for (auto f : {OptionalField::PromptCacheKey, OptionalField::StreamOptions,
                    OptionalField::ReasoningDetails, OptionalField::ExtraContent,
                    OptionalField::CacheControl, OptionalField::SessionId,
+                   OptionalField::ChatTemplateKwargs,
                    OptionalField::Reasoning})
         if (icontains(wire_name(f))) return f;
     return OptionalField::None;

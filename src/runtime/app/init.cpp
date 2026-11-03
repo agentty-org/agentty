@@ -32,14 +32,15 @@
 namespace agentty::app {
 
 namespace {
-std::vector<ModelInfo> seed_models() {
-    // The launch floor is the single bundled catalog (base rows + their `[1m]`
-    // companions), so the picker is full IMMEDIATELY on launch — not only
-    // after the first /models fetch (which the live catalog supersedes
-    // anyway). One source shared with the transport fallback, so seed and
-    // live catalog can't drift. Entitlement self-heals downstream
-    // (context_1m_blocked strips the [1m] rows if the account can't stream 1M).
-    return catalog::bundled("anthropic");
+std::vector<ModelInfo> seed_models(const provider::Selection& sel) {
+    // The launch floor is the ACTIVE provider's bundled catalog, so the
+    // picker is full immediately; the live fetch supersedes it. A custom
+    // host has no bundled list and starts empty until it answers. Seeding
+    // Anthropic's list here regardless put Claude models under whatever
+    // provider was active, and picking one sent a Claude id to that host.
+    if (sel.kind == provider::Kind::Anthropic) return catalog::bundled("anthropic");
+    if (sel.kind == provider::Kind::OpenAI) return catalog::bundled(sel.openai_endpoint.label);
+    return {};
 }
 } // namespace
 
@@ -81,7 +82,7 @@ std::pair<Model, Cmd> init() {
     // when it lands. The thread picker reads `m.s.threads_loading` to
     // show a "loading…" hint until then.
     m.s.threads_loading  = true;
-    m.d.available_models = seed_models();
+    m.d.available_models = seed_models(m.d.selection);
 
     auto settings = deps(io).load_settings();
     startup::mark("  settings loaded");
@@ -152,6 +153,13 @@ std::pair<Model, Cmd> init() {
     // is assigned ONCE, whole, rather than field by field: a preference
     // nobody has migrated yet still round-trips.
     m.d.persisted = settings;
+    // The model to start on. The per-provider recall wins: the global
+    // model_id is whatever ran last on ANY provider, so on a provider
+    // switch at launch it names the wrong backend's model.
+    if (const auto recall = detail::model_for_provider(settings,
+                                                       detail::active_provider_id(m));
+        !recall.empty())
+        settings.model_id = ModelId{recall};
     if (!settings.model_id.empty()) {
         // Guard against a cross-provider model id collision. A persisted
         // model id belongs to whatever provider was active when it was
@@ -181,6 +189,14 @@ std::pair<Model, Cmd> init() {
                 for (const auto& mi : m.d.available_models)
                     if (mi.id == settings.model_id) { honour = true; break; }
             }
+        } else if (m.d.selection.kind == provider::Kind::OpenAI
+                   && provider::preset_for(m.d.selection.openai_endpoint.label) == nullptr
+                   && settings.model_id.value.starts_with("claude-")) {
+            // A bare Claude id on a custom host is a leftover from the
+            // Anthropic default, not a model the host listed (gateways that
+            // serve Claude name it by their own id). Drop it; the live
+            // fetch picks a real one.
+            honour = false;
         }
         if (honour) {
             m.d.model_id = settings.model_id;
@@ -194,8 +210,19 @@ std::pair<Model, Cmd> init() {
                 m.d.available_models.insert(
                     m.d.available_models.begin(),
                     ModelInfo{m.d.model_id, m.d.model_id.value,
-                              "anthropic", 200000, false});
+                              detail::active_provider_id(m),
+                              anthropic_active ? 200000 : 0, false});
+        } else if (!anthropic_active) {
+            m.d.model_id = m.d.available_models.empty()
+                ? ModelId{} : m.d.available_models.front().id;
         }
+    } else if (m.d.selection.kind == provider::Kind::OpenAI
+               && !m.d.available_models.empty()) {
+        // Nothing saved for this provider: start on its first bundled model
+        // rather than the Claude default, which this host can't serve.
+        m.d.model_id = m.d.available_models.front().id;
+    } else if (m.d.selection.kind != provider::Kind::Anthropic) {
+        m.d.model_id = ModelId{};
     }
     // Set the per-model context window now (before any stream runs) so
     // the ctx % bar uses the right denominator from frame 1, not after

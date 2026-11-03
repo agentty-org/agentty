@@ -385,6 +385,17 @@ std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap, const S
     return models;
 }
 
+std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap,
+    const Selection& sel, const auth::AuthHeader& auth, std::string& error) {
+    auto models = list_models_for(io, cap, sel, auth);
+    // Only the OpenAI-compat path records a reason; the others either throw
+    // or have no failure mode worth naming.
+    error = (sel.kind == Kind::OpenAI && !sel.is_copilot() && !sel.is_kimi()
+             && !sel.is_chatgpt())
+        ? openai::last_list_models_error() : std::string{};
+    return models;
+}
+
 std::vector<int> filter_provider_indices(std::string_view query) {
     const auto ps = providers();
     const int n = static_cast<int>(ps.size());

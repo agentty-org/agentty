@@ -717,6 +717,10 @@ struct StreamState {
     // cleared by the `ModelsLoaded` handler, which fetch_models()
     // dispatches on BOTH success and failure.
     bool models_loading = false;
+    // Why the active provider's last model fetch failed, or empty. Kept
+    // here because the fetch can land before the picker has built its
+    // per-provider catalogs.
+    std::string models_error;
 
     // ── Self-update signal ──────────────────────────────────
     // Filled by UpdateCheckDone (background release check). Non-empty

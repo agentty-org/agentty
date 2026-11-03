@@ -553,6 +553,7 @@ struct FusedCatalogLoaded {
     std::string            provider_id;
     std::vector<ModelInfo> models;
     bool                   ok = true;
+    std::string            error;   // why the live fetch failed, if it did
 };
 // ^Tab MRU cycle: walk the recent (provider,model) ring to progressively
 // older models (A → B → C → D → A), no overlay. Reuses the atomic-switch

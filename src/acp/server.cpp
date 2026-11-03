@@ -2863,6 +2863,8 @@ StopReason AgentServer::stream_completion(Io io, const Cap& cap, const std::stri
                                                 : effort_from_wire(snap->effort);
         req.effort         = std::string{effort_wire_for(e, caps)};
         req.show_reasoning = snap->show_reasoning && !req.effort.empty();
+        req.no_reasoning   = e == Effort::None;
+        req.reasoning_off  = caps.reasoning_off;
     }
     // Per-model output-token ceiling (mirrors cmd_factory::launch_stream).
     // Without this the default 16384 is shared across reasoning + tool JSON

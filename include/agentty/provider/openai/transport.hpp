@@ -95,6 +95,9 @@ struct Request {
     bool show_reasoning = false;
     // Mirrors provider::Request::quick: ask the server not to think.
     bool quick = false;
+    // Mirror provider::Request::no_reasoning / reasoning_off.
+    bool         no_reasoning  = false;
+    std::uint8_t reasoning_off = 0;
 };
 
 using EventSink = std::function<void(Msg)>;
@@ -134,6 +137,12 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink,
 [[nodiscard]] std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth,
                                                  const Endpoint& endpoint,
                                                  bool force_probe = false);
+
+// Why this thread's last list_models() call came back empty, as one sentence
+// ("HTTP 401: Invalid API key"), or empty when it succeeded or the host
+// answered with an empty list. Lets callers say why instead of showing
+// an empty picker.
+[[nodiscard]] std::string last_list_models_error();
 
 // The context window a /v1/models row DECLARES, or 0 when it declares none.
 //

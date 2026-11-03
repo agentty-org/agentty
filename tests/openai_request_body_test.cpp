@@ -18,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "agentty/domain/reasoning_off.hpp"
 #include "agentty/provider/openai/transport.hpp"
 #include "agentty/provider/ollama/transport.hpp"
 #include "agentty/provider/registry.hpp"
@@ -332,4 +333,78 @@ TEST_CASE("body: a quick call never sends chat_template_kwargs to a preset") {
     auto req = base(oa::Endpoint::from_spec("openai"));
     req.quick = true;
     CHECK(!oa::build_request_body(req).contains("chat_template_kwargs"));
+}
+
+// ═══ Reasoning off ═════════════════════════════════════════════════════════════════════
+// Off has to be SENT: Qwen3 / DeepSeek V3.1 / gpt-5.1+ think when the effort
+// field is just left out.
+
+namespace {
+constexpr std::uint8_t off(agentty::ReasoningOff r) { return static_cast<std::uint8_t>(r); }
+}
+
+TEST_CASE("body: off on a custom host flips the chat template switch") {
+    auto req = base(oa::Endpoint::from_spec("https://backend.sovereigneg.com/v1"));
+    req.model         = "Qwen3.8-27B-FP8";
+    req.no_reasoning  = true;
+    req.reasoning_off = off(agentty::ReasoningOff::Toggle);
+    const json b = oa::build_request_body(req);
+    CHECK(b["chat_template_kwargs"]["enable_thinking"] == false);
+    CHECK(!b.contains("reasoning_effort"));
+
+    // Unknown model on a custom host: same switch (servers ignore it).
+    req.reasoning_off = off(agentty::ReasoningOff::Unknown);
+    CHECK(oa::build_request_body(req)["chat_template_kwargs"]["enable_thinking"] == false);
+
+    // Not off (auto with no ladder): nothing sent.
+    req.no_reasoning = false;
+    CHECK(!oa::build_request_body(req).contains("chat_template_kwargs"));
+}
+
+TEST_CASE("body: off on a model that takes effort none sends none") {
+    auto req = base(oa::Endpoint::from_spec("mistral"));
+    req.no_reasoning  = true;
+    req.reasoning_off = off(agentty::ReasoningOff::EffortNone);
+    const json b = oa::build_request_body(req);
+    CHECK(b["reasoning_effort"] == "none");
+    CHECK(!b.contains("chat_template_kwargs"));
+}
+
+TEST_CASE("body: off never puts unknown fields on a hosted preset") {
+    auto req = base(oa::Endpoint::from_spec("groq"));
+    req.no_reasoning  = true;
+    req.reasoning_off = off(agentty::ReasoningOff::Toggle);
+    const json b = oa::build_request_body(req);
+    CHECK(!b.contains("chat_template_kwargs"));
+    CHECK(!b.contains("reasoning_effort"));
+}
+
+TEST_CASE("body: off on OpenRouter uses its reasoning object") {
+    auto req = base(oa::Endpoint::from_spec("openrouter"));
+    req.model         = "qwen/qwen3-32b";
+    req.no_reasoning  = true;
+    req.reasoning_off = off(agentty::ReasoningOff::Toggle);
+    const json b = oa::build_request_body(req);
+    CHECK(b["reasoning"]["enabled"] == false);
+    CHECK(!b.contains("chat_template_kwargs"));
+}
+
+TEST_CASE("body: a model that can't stop reasoning gets no fake off") {
+    auto req = base(oa::Endpoint::from_spec("https://backend.sovereigneg.com/v1"));
+    req.model         = "gpt-oss-20b";
+    req.no_reasoning  = true;
+    req.reasoning_off = off(agentty::ReasoningOff::Impossible);
+    const json b = oa::build_request_body(req);
+    CHECK(!b.contains("chat_template_kwargs"));
+    CHECK(!b.contains("reasoning_effort"));
+}
+
+TEST_CASE("body: a chosen effort is never overridden by off") {
+    auto req = base(oa::Endpoint::from_spec("https://backend.sovereigneg.com/v1"));
+    req.effort        = "high";
+    req.no_reasoning  = true;   // stale flag must not win
+    req.reasoning_off = off(agentty::ReasoningOff::Toggle);
+    const json b = oa::build_request_body(req);
+    CHECK(b["reasoning_effort"] == "high");
+    CHECK(!b.contains("chat_template_kwargs"));
 }

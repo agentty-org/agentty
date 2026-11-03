@@ -152,6 +152,51 @@ TEST_CASE("modelsdev parse: one malformed entry doesn't cost the document") {
     CHECK(has("local-m"));                  // the last provider
 }
 
+TEST_CASE("modelsdev parse: how each model turns reasoning off") {
+    constexpr const char* doc = R"({
+      "p": { "models": {
+        "none-ok":   {"reasoning": true,  "reasoning_options": [{"type": "effort", "values": ["none", "low", "high"]}]},
+        "toggle":    {"reasoning": true,  "reasoning_options": [{"type": "toggle"}]},
+        "always":    {"reasoning": true,  "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high"]}]},
+        "both":      {"reasoning": true,  "reasoning_options": [{"type": "toggle"}, {"type": "effort", "values": ["low", "high"]}]},
+        "bare":      {"reasoning": true},
+        "plain":     {"reasoning": false}
+      }}
+    })";
+    CatalogBatch b;
+    (void)modelsdev::parse_into(doc, b);
+    auto kind = [&](std::string_view id) -> int {
+        for (const auto& [k, v] : b.reasoning_off.sets)
+            if (k.ends_with("/" + std::string{id})) return v;
+        return -1;
+    };
+    using R = ReasoningOff;
+    CHECK(kind("none-ok") == int(R::EffortNone));
+    CHECK(kind("toggle")  == int(R::Toggle));
+    CHECK(kind("always")  == int(R::Impossible));
+    CHECK(kind("both")    == int(R::Toggle));
+    CHECK(kind("bare")    == -1);   // unknown: not recorded
+    CHECK(kind("plain")   == int(R::Omit));
+}
+
+TEST_CASE("reasoning off: picker never offers off on a model that can't stop") {
+    ModelCapabilities caps;
+    caps.effort_set_known = true;
+    caps.effort_set = effort_bit(Effort::Low) | effort_bit(Effort::Medium) | effort_bit(Effort::High);
+    caps.reasoning_off = static_cast<std::uint8_t>(ReasoningOff::Impossible);
+    const auto ladder = available_efforts(caps);
+    CHECK(std::find(ladder.begin(), ladder.end(), Effort::None) == ladder.end());
+    // A stored off clamps up to the floor, on screen and on the wire.
+    CHECK(clamp_effort(Effort::None, caps) == Effort::Low);
+    CHECK(effort_wire_for(Effort::None, caps) == "low");
+
+    // A model that CAN stop keeps off.
+    caps.reasoning_off = static_cast<std::uint8_t>(ReasoningOff::Toggle);
+    const auto l2 = available_efforts(caps);
+    CHECK(std::find(l2.begin(), l2.end(), Effort::None) != l2.end());
+    CHECK(effort_wire_for(Effort::None, caps).empty());
+}
+
 TEST_CASE("modelsdev parse: the real cache gives the same facts") {
     const char* home = std::getenv("HOME");
     if (!home) return;
