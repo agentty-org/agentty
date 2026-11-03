@@ -354,6 +354,8 @@ void prewarm_active_provider(Io io) {
     // testable function, not this side-effecting wrapper.
     const PrewarmTarget t = prewarm_target(active());
     if (!t.should_warm()) return;
+    // Cheap now: the client no longer builds its TLS context up front; the
+    // dial (a pool job) builds it off the launch path.
     http::default_client(io).prewarm(t.host, t.port, t.override_host,
                                    t.override_port);
 }

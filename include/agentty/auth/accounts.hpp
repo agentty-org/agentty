@@ -27,6 +27,8 @@
 
 #include <maya/runtime.hpp>
 
+namespace agentty::store { struct Settings; }
+
 namespace agentty::auth::accounts {
 
 // One saved account. `secret` is the provider-specific credential blob,
@@ -53,6 +55,17 @@ struct Account {
 // The label of the account currently marked active for `provider`, if the
 // registry knows one. Empty when the provider has no registered accounts.
 [[nodiscard]] std::string active_label(Io, const std::string& provider);
+
+// The whole registry from one read. For callers asking about every
+// provider at once (the startup auth view): list_for / active_label each
+// read and unseal the file again.
+struct Snapshot {
+    std::vector<Account>                            all;     // newest first
+    std::vector<std::pair<std::string,std::string>> active;  // provider → label
+    [[nodiscard]] std::vector<std::string> labels_for(const std::string& provider) const;
+    [[nodiscard]] std::string              active_for(const std::string& provider) const;
+};
+[[nodiscard]] Snapshot snapshot(Io);
 
 // Insert or update the (provider, label) slot with a fresh secret, mark it
 // active for that provider, and persist. Used right after a successful login
@@ -112,5 +125,9 @@ bool activate(Io, const maya::unlocked&, const std::string& provider,
 // Returns "" when nothing is signed in. Used to auto-register the pre-existing
 // login as "default" the first time the account picker opens.
 [[nodiscard]] std::string derive_current_label(Io, const std::string& provider);
+// Same, with the settings the caller already loaded (custom-host keys live
+// there), so a loop over providers doesn't re-read settings.json each time.
+[[nodiscard]] std::string derive_current_label(Io, const std::string& provider,
+                                               const store::Settings& settings);
 
 } // namespace agentty::auth::accounts

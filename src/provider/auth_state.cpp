@@ -143,6 +143,10 @@ bool signed_in(std::string_view id, const store::Settings& settings,
 auth::AuthView load_auth_view(Io io, const store::Settings& settings) {
     auth::AuthView v;
     v.loaded = true;
+    // One registry read for every provider, and the settings we were given
+    // for custom-host keys. Per-provider calls re-read (and unsealed) both
+    // files each time: ~1.8 ms a provider, ~25 ms of every startup.
+    const auto reg = auth::accounts::snapshot(io);
     auto fill = [&](const std::string& id, const ProviderDescriptor* p) {
         auth::ProviderAuth a;
         switch (auth::vault::of(id).kind) {
@@ -155,11 +159,10 @@ auth::AuthView load_auth_view(Io io, const store::Settings& settings) {
         if (p)
             for (auto env : p->auth_env)
                 if (env_has(env)) { a.env_var = std::string{env}; break; }
-        for (auto& acc : auth::accounts::list_for(io, id))
-            a.accounts.push_back(std::move(acc.label));
-        a.active_account = auth::accounts::active_label(io, id);
+        a.accounts       = reg.labels_for(id);
+        a.active_account = reg.active_for(id);
         if (a.accounts.empty())
-            a.unregistered_label = auth::accounts::derive_current_label(io, id);
+            a.unregistered_label = auth::accounts::derive_current_label(io, id, settings);
         v.providers.emplace(id, std::move(a));
     };
     for (const auto& p : providers()) fill(std::string{p.id}, &p);

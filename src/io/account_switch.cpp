@@ -222,10 +222,8 @@ bool activate(Io io, const maya::unlocked& cap, const std::string& provider,
     return set_active(io, cap, provider, label);
 }
 
-std::string derive_current_label(Io io, const std::string& provider) {
-    const Backend b = backend_for(provider);
-    if (b.store == Store::SettingsKey)
-        return settings_key_label(settings_key(io, provider));
+namespace {
+std::string derive_from_file(Io io, const Backend& b) {
     auto blob = read_all(io, b.file);
     if (!blob) return {};
     auto body = body_of(*blob);
@@ -239,6 +237,24 @@ std::string derive_current_label(Io io, const std::string& provider) {
         util::dbglog("accounts.derive_label.parse", "non-std exception");
     }
     return "signed in";
+}
+}  // namespace
+
+std::string derive_current_label(Io io, const std::string& provider) {
+    const Backend b = backend_for(provider);
+    if (b.store == Store::SettingsKey)
+        return settings_key_label(settings_key(io, provider));
+    return derive_from_file(io, b);
+}
+
+std::string derive_current_label(Io io, const std::string& provider,
+                                 const store::Settings& settings) {
+    const Backend b = backend_for(provider);
+    if (b.store == Store::SettingsKey) {
+        auto it = settings.provider_keys.find(provider);
+        return settings_key_label(it != settings.provider_keys.end() ? it->second : std::string{});
+    }
+    return derive_from_file(io, b);
 }
 
 } // namespace agentty::auth::accounts

@@ -80,6 +80,7 @@
 #include <maya/platform/io.hpp>   // query_terminal_size (sandbox banner)
 #include "agentty/runtime/app/host.hpp"   // agentty::app::Host
 #include "agentty/runtime/mem.hpp"        // tune_allocator
+#include "agentty/util/startup_trace.hpp"
 
 #include "agentty/acp/server.hpp"
 #include "agentty/version.hpp"
@@ -1255,6 +1256,7 @@ std::string window_title() {
 // against. main() (at the bottom of this file) mints it, once.
 int run_main(int argc, char** argv, const maya::unlocked& cap) {
     using namespace agentty;
+    startup::mark("run_main");
 
     // Any setenv happens here, before a thread exists: setenv racing a getenv
     // on another thread is undefined. The old opt-in spelling for maya's
@@ -1314,7 +1316,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             // Order matters: stop the workers that LOG before running the
             // registry, because logx's own worker is one of the registered
             // teardowns.
-            http::default_client(::agentty::IoAccess::grant()).join_prewarm(cap);
+            if (auto* c = http::default_client_if_made()) c->join_prewarm(cap);
             modelsdev::join_background_refresh(cap);
             blobs::join_background_gc(cap);
             util::teardown::run(cap);
@@ -1354,6 +1356,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
 #endif
 
     auto args = parse_args(argc, argv);
+    startup::mark("args parsed");
 
     // `agentty paste …` runs before the log banner and every init below:
     // ssh runs `agentty paste ssh-hook` on each connection, so it must be
@@ -1520,6 +1523,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // From here on this is a session (TUI, run, acp, mcp-serve), and it
     // writes the store. Held to exit so `agentty config move` waits for us.
     const auto store_lock = util::hold_store_shared();
+    startup::mark("store lock");
 
     // Missing creds is no longer a fatal error: we install with an empty
     // auth header, init.cpp opens the in-app login modal, and the user
@@ -1527,6 +1531,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // LoginSubmit handlers call auth::update_auth() which live-swaps the
     // creds in the Deps without requiring a process restart.
     auto creds = auth::resolve(IoAccess::grant(), args.cli_key);
+    startup::mark("creds resolved");
 
     // Persist -m as the new default — but NOT in ACP mode, where the model
     // is an ephemeral per-subprocess override (handled below) that must not
@@ -1563,6 +1568,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     }
 
     // ── UI language ─────────────────────────────────────────────────────
+    startup::mark("workspace root");
     // Before ANYTHING renders or prints, so a status line, an error, or a
     // first paint cannot escape in the wrong language. Cheap: parse one
     // embedded JSON catalog and store a pointer.
@@ -1588,6 +1594,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     }
 
     // ── Bash / diagnostics sandbox ──────────────────────────────────────
+    startup::mark("i18n + settings");
     // Wraps shell commands in claybin (sandbox-exec as the macOS fallback) so
     // an approved bash call can't read ~/.ssh, write /etc, or `rm -rf ~`.
     // `auto` (default): use if available, log warning otherwise. `on`:
@@ -1813,6 +1820,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // ("openai" | "groq" | "openrouter" | "ollama" | "host[:port]") routes
     // through the OpenAI-compatible transport.
     std::string provider_spec = args.cli_provider;
+    startup::mark("sandbox + rest");
     if (provider_spec.empty()) {
         auto s = persistence::load_settings(::agentty::IoAccess::grant());
         provider_spec = s.provider;          // empty → anthropic
@@ -1859,6 +1867,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     provider::set_custom_auth_header(::agentty::IoAccess::grant(), args.cli_auth_header);
     auto selection = provider::parse_selection(provider_spec);
     provider::select(::agentty::IoAccess::grant(), selection);
+    startup::mark("provider selected");
 
     // Auth header per provider, registry-driven. Anthropic uses the
     // OAuth/key creds resolved above; OpenAI-family backends read their
@@ -1905,6 +1914,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         std::make_shared<provider::copilot::CopilotProvider>();
     auto kimi_provider = std::make_shared<provider::kimi::KimiProvider>();
     io::FsStore                            store{::agentty::IoAccess::grant()};
+    startup::mark("providers built");
 
     // The seam: a single std::function the runtime calls. It dispatches on
     // provider::active() AT CALL TIME (not on a frozen branch), so the
@@ -2002,6 +2012,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // called by the effect host and init() on the loop thread between steps
     // (no lock held), so the seam re-states that as a capability root here.
     auto settings_seam = maya::thread_root([&](const maya::unlocked& cap) {
+        startup::mark("settings seam");
         return app::settings_cache::wrap(cap,
             [&store] { return store.load_settings(); },
             [&store](const maya::unlocked& c, const store::Settings& x) {
@@ -2036,6 +2047,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         },
         .auth          = provider_auth,
     });
+    startup::mark("deps installed");
 
     // ── Wire the subagent (`task` tool) seam ────────────────────
     // Process-global config the `task` tool reads to spin up an isolated
@@ -2171,6 +2183,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // diagnostics go to stderr. Reuses the provider/subagent/sandbox seams
     // wired above, so `bash`, `task`, the git_* family, etc. behave exactly
     // as they do in the TUI (filesystem tools stay sandboxed to --workspace).
+    startup::mark("subagent + tools wired");
     if (args.subcommand == "mcp-serve") {
         provider::prewarm_active_provider(::agentty::IoAccess::grant());   // `task`/web tools reuse the warm session
         int rc = mcp::serve_stdio(cap);
@@ -2412,6 +2425,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // Uniform: whether the user launched on Claude or ChatGPT/Codex, the
     // active backend gets the head start — no provider is privileged.
     provider::prewarm_active_provider(::agentty::IoAccess::grant());
+    startup::mark("prewarm queued");
 
     // ── Keep diagnostics OFF the rendered terminal ──────────────────────
     // agentty's TUI runs in INLINE mode (not the alt-screen), so anything
@@ -2529,6 +2543,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         const std::string title = window_title();
         maya::Options cfg{.title = title, .fps = 0,
                           .mode = maya::Mode::Inline, .backend = backend};
+        startup::mark("maya::run");
         if (const int rc = maya::run<app::AgenttyApp, app::Host>(cfg);
             rc == 70) {
             // Couldn't take the terminal (or a fault stopped the program).
@@ -2601,6 +2616,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
 // capability from here, from a job/task entry, or from a lock body.
 // (lint: cap_roots lists this file.)
 int main(int argc, char** argv) {
+    agentty::startup::mark("main");
     agentty::tune_allocator();
     const int rc = maya::thread_root(
         [&](const maya::unlocked& cap) { return run_main(argc, argv, cap); });

@@ -18,6 +18,7 @@
 #include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/mem.hpp"
+#include "agentty/util/startup_trace.hpp"
 #include "agentty/runtime/app/update/internal.hpp"  // detail::live_tail_reveal_settled
 #include "agentty/runtime/view/composer.hpp"        // composer_uses_hardware_caret
 #include "agentty/runtime/model.hpp"
@@ -126,6 +127,7 @@ struct AgenttyApp {
         const auto t0 = std::chrono::steady_clock::now();
         auto e = ::agentty::ui::view(m);
         ::agentty::app::note_slow("view", t0);
+        if (static bool first = true; first) { first = false; ::agentty::startup::mark("first view built"); }
         return e;
     }
 

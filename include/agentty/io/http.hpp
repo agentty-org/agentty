@@ -421,6 +421,9 @@ private:
 // across all call sites. Equivalent to Zed's `GlobalHttpClient`. Dialing out
 // is IO, so getting it takes an Io.
 [[nodiscard]] Client& default_client(Io);
+// The default client if something already made it, else null. For exit
+// paths: making one just to join it loads the whole CA bundle.
+[[nodiscard]] Client* default_client_if_made() noexcept;
 
 namespace test {
 // Pure incremental HTTP/1 chunk decoder seam used by framing regressions.

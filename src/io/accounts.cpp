@@ -143,6 +143,28 @@ std::string active_label(Io io, const std::string& provider) {
     return read_registry(io).active_for(provider);
 }
 
+Snapshot snapshot(Io io) {
+    Registry reg = read_registry(io);
+    Snapshot s;
+    std::stable_sort(reg.all.begin(), reg.all.end(),
+                     [](const Account& a, const Account& b) { return a.saved_at_ms > b.saved_at_ms; });
+    s.all    = std::move(reg.all);
+    s.active = std::move(reg.active);
+    return s;
+}
+
+std::vector<std::string> Snapshot::labels_for(const std::string& provider) const {
+    std::vector<std::string> out;
+    for (const auto& a : all)
+        if (a.provider == provider) out.push_back(a.label);
+    return out;
+}
+
+std::string Snapshot::active_for(const std::string& provider) const {
+    for (const auto& [p, l] : active) if (p == provider) return l;
+    return {};
+}
+
 std::optional<Account> get(Io io, const std::string& provider, const std::string& label) {
     for (auto& a : read_registry(io).all)
         if (a.provider == provider && a.label == label) return a;

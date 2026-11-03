@@ -2867,7 +2867,9 @@ Client::Client(Config cfg) : impl_(std::make_unique<Impl>()) {
         cfg.insecure = true;
     impl_->cfg = std::move(cfg);
     ensure_net_init();
-    (void)tls::shared_context(impl_->cfg.insecure);
+    // The TLS context (which parses the whole system CA bundle, ~15 ms) is
+    // built on first use by wrap_client, under its own once-guard. Building
+    // it here put that on every launch, even `agentty --version`.
 }
 
 // No explicit join: a destructor can't be handed `unlocked`. The prewarm
@@ -3263,11 +3265,23 @@ void Client::join_prewarm(const maya::unlocked& cap) noexcept {
     (void)impl_->prewarm_pool.shutdown(cap);
 }
 
+namespace {
+std::atomic<Client*> g_default_client{nullptr};
+}  // namespace
+
 Client& default_client(Io) {
     // Deliberately leaked: process lifetime.  Avoids destruction-order
     // races with maya's worker threads that may be mid-request at exit.
-    static Client* c = new Client{};
+    static Client* c = [] {
+        auto* made = new Client{};
+        g_default_client.store(made, std::memory_order_release);
+        return made;
+    }();
     return *c;
+}
+
+Client* default_client_if_made() noexcept {
+    return g_default_client.load(std::memory_order_acquire);
 }
 
 namespace {

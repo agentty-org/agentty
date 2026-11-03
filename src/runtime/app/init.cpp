@@ -1,6 +1,7 @@
 #include "agentty/runtime/app/program.hpp"
 #include "agentty/runtime/app/cmd_factory.hpp"
 #include "agentty/runtime/app/env.hpp"
+#include "agentty/util/startup_trace.hpp"
 #include <maya/terminal/scrollback.hpp>
 #include "agentty/mcp/client.hpp"   // mcp_config_present()
 #include "agentty/runtime/login.hpp"
@@ -43,12 +44,14 @@ std::vector<ModelInfo> seed_models() {
 } // namespace
 
 std::pair<Model, Cmd> init() {
+    startup::mark("init");
     Model m;
     // The launch environment, captured once. Every reducer reads m.env;
     // none calls getenv (enforced by the elm_purity lint).
     // init() is the host's one launch read: env, settings, credentials.
     const Io io = IoAccess::grant();
     m.env = read_launch_env(io);
+    startup::mark("  launch env");
     // Anchor the calendar to the steady clock, once. Every fold derives its
     // wall time (Model::wall_now) from this pair and the step time jaal
     // hands it, so no reducer reads system_clock. init() runs before the
@@ -81,10 +84,12 @@ std::pair<Model, Cmd> init() {
     m.d.available_models = seed_models();
 
     auto settings = deps(io).load_settings();
+    startup::mark("  settings loaded");
     // Credential state outside the record (token files, env, accounts),
     // read once here like the launch env; later changes arrive as
     // AuthViewLoaded.
     m.d.auth = provider::load_auth_view(io, settings);
+    startup::mark("  auth view");
 
     // Bake the seeded rows through the SAME ladder the refresh path uses.
     //
@@ -305,6 +310,7 @@ std::pair<Model, Cmd> init() {
     m.d.current.auto_title_ok = true;
     m.d.current.workspace = m.env.cwd;
     m.s.status = "ready";
+    startup::mark("  model filled");
 
     // Deferred startup Cmds (declared early: the first-run branch below may
     // queue an OpenProviders dispatch).
@@ -452,6 +458,7 @@ std::pair<Model, Cmd> init() {
     // Same opt-outs as the release check (airgap installs must not dial
     // out).
     const bool no_net = m.env.no_update_check;
+    startup::mark("  cmds queued");
     agentty::modelsdev::start_background_refresh(no_net);
 
     // Prewarm the composer's `@` (files) and `#` (symbols) indices so that by
@@ -561,6 +568,7 @@ std::pair<Model, Cmd> init() {
     // still running at exit touched freed statics and crashed Windows CI.
     blobs::start_background_gc();
 
+    startup::mark("init done");
     return {std::move(m), Cmd::batch(std::move(cmds))};
 }
 
