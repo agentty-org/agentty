@@ -24,6 +24,11 @@ namespace agentty::tls {
 using SSL_CTX = ssl_ctx_st;
 using SSL     = ssl_st;
 
+// Init OpenSSL without reading openssl.cnf. We configure everything in code,
+// and parsing the system config was ~0.4 ms of every launch. Idempotent; call
+// it before the first libcrypto/libssl use.
+void init_openssl() noexcept;
+
 // Opaque handle with process lifetime. First call does the one-time init
 // (OPENSSL_init_ssl, build SSL_CTX, load system roots, install ALPN).
 // Thread-safe; internal locks mean later callers on other threads just

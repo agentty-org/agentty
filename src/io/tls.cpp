@@ -343,8 +343,7 @@ int pin_verify_cb(int preverify_ok, X509_STORE_CTX* store_ctx) {
 // outlives main's cleanup.
 // --------------------------------------------------------------------------
 SSL_CTX* build_ctx(bool insecure) {
-    OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS,
-                     nullptr);
+    init_openssl();
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) return nullptr;
 
@@ -463,6 +462,12 @@ SharedCtx& shared() {
 }
 
 } // namespace
+
+void init_openssl() noexcept {
+    OPENSSL_init_ssl(OPENSSL_INIT_NO_LOAD_CONFIG | OPENSSL_INIT_LOAD_SSL_STRINGS
+                         | OPENSSL_INIT_LOAD_CRYPTO_STRINGS,
+                     nullptr);
+}
 
 SSL_CTX* shared_context(bool insecure) {
     auto& s = shared();

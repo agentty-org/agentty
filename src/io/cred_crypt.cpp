@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 #include <maya/runtime.hpp>   // maya::once
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
@@ -35,6 +36,12 @@ using json = nlohmann::json;
 // string invalidates every previously-sealed file (they'll fail auth and
 // be treated as unrecoverable → the user re-runs `agentty login`).
 constexpr std::string_view kInfo = "agentty-credentials-v1";
+
+// libcrypto's first use would otherwise read and parse openssl.cnf (~0.4 ms
+// on every launch). Nothing here needs it.
+void init_crypto() {
+    OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
+}
 
 // ── Machine-stable seed ────────────────────────────────────────────────
 // Mixes: a per-machine id, the current user id, and the app context. This
@@ -93,6 +100,7 @@ std::string machine_seed() {
 bool derive_key(const std::string& seed,
                 const unsigned char* salt, size_t salt_len,
                 std::array<unsigned char, 32>& out_key) {
+    init_crypto();
     EVP_KDF* kdf = EVP_KDF_fetch(nullptr, "HKDF", nullptr);
     if (!kdf) return false;
     EVP_KDF_CTX* ctx = EVP_KDF_CTX_new(kdf);
@@ -243,6 +251,7 @@ constexpr uint32_t kArgonM = 64 * 1024; // memory in KiB (64 MiB)
 constexpr uint32_t kArgonP = 1;         // parallelism / lanes
 
 bool argon2id_available() {
+    init_crypto();
     static const bool ok = [] {
         EVP_KDF* k = EVP_KDF_fetch(nullptr, "ARGON2ID", nullptr);
         if (!k) return false;
@@ -347,6 +356,7 @@ bool looks_sealed(const std::string& s) noexcept {
 }
 
 std::optional<std::string> seal(const std::string& plaintext) {
+    init_crypto();
     unsigned char salt[16];
     unsigned char nonce[12];
     if (!rand_bytes(salt, sizeof(salt)) || !rand_bytes(nonce, sizeof(nonce)))
@@ -427,6 +437,7 @@ std::optional<std::string> seal(const std::string& plaintext) {
 }
 
 std::optional<std::string> unseal(const std::string& envelope) {
+    init_crypto();
     json j;
     try {
         j = json::parse(envelope);
