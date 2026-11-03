@@ -949,6 +949,12 @@ commit_provider_switch(Model& m, std::string_view spec,
     Cmd install = Cmd(InstallAuth{.provider = spec_s});
     m.d.available_models.clear();
     m.s.models_loading = true;
+    // State learned from the provider being left. Its fetch error ("HTTP
+    // 401") would otherwise show on the new provider's rows and in the
+    // send refusal until the new list lands, and its token calibration
+    // describes another tokenizer.
+    m.s.models_error.clear();
+    m.s.est_calibration = 1.0;
 
     // Stale-token guard for the switched-TO provider. The account-picker
     // switch path (account_select) has always done this; the CROSS-provider

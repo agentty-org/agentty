@@ -124,6 +124,25 @@ struct ModelRef {
     }
 };
 
+// A starred model is a (provider, model) pair: the same id behind Groq and
+// OpenRouter is two models. Stored "provider\tmodel" (the recents
+// encoding). A bare id written by an older build stars it everywhere.
+[[nodiscard]] inline std::string favorite_key(std::string_view provider_id,
+                                              std::string_view model_id) {
+    std::string k{provider_id};
+    k += '\t';
+    k += model_id;
+    return k;
+}
+[[nodiscard]] inline bool is_favorite(const std::vector<ModelId>& favs,
+                                      std::string_view provider_id,
+                                      std::string_view model_id) {
+    const std::string scoped = favorite_key(provider_id, model_id);
+    for (const auto& f : favs)
+        if (f.value == scoped || f.value == model_id) return true;
+    return false;
+}
+
 // One authenticated provider's model catalog, held in the fused picker's
 // merged view. `state` drives the per-provider group header (loading… /
 // ready / failed); `models` is the list_models_for() result (which is
@@ -1666,7 +1685,7 @@ inline void set_reasoning_override(std::string model_id, bool on) {
 }
 inline void clear_reasoning_override(const std::string& model_id) {
     bump_caps_epoch();
-    reasoning_override_detail::erase(model_id);
+    reasoning_override_detail::erase(norm_caps_key(model_id));
 }
 inline void clear_reasoning_overrides() {
     bump_caps_epoch();
@@ -1682,12 +1701,15 @@ inline void set_reasoning_overrides(std::map<std::string, bool> all) {
     reasoning_override_detail::reg().replace(std::move(normed));
 }
 // Tri-state lookup: 1 (force on), 0 (force off), -1 (no override for this id).
-// Lock-free when no overrides exist (the common case). Otherwise a SHARED lock
-// — concurrent per-frame readers never block each other; only the rare write
-// (init / ^E toggle) is exclusive.
-[[nodiscard]] inline int reasoning_override_for(std::string_view model_id) {
+// Scoped first ("groq/<model>": ^E sets it per provider, because the same
+// id behind two gateways can differ), then a bare key from older builds.
+[[nodiscard]] inline int reasoning_override_for(std::string_view model_id,
+                                                std::string_view scope = {}) {
+    if (!reasoning_override_detail::reg().any()) return -1;
+    const auto scoped = scope.empty() ? scoped_caps_key(model_id)
+                                      : scoped_caps_key(model_id, scope);
     const auto v = reasoning_override_detail::reg().find(
-        std::string{}, std::string{capkey::norm_tail(model_id)});
+        scoped, std::string{capkey::norm_tail(model_id)});
     return v ? (*v ? 1 : 0) : -1;
 }
 
@@ -1894,7 +1916,7 @@ learned_effort_sets_snapshot() {
     // provider drift — e.g. Mistral flipping magistral to accept
     // reasoning_effort, or a dated mistral-medium revision that rejects it —
     // without a code change.
-    const int per_model = reasoning_override_for(model_id);
+    const int per_model = reasoning_override_for(model_id, scope);
     if (per_model >= 0) {
         caps.reasoning_compat = (per_model == 1);
         // An explicit user override beats even the learned set: force-on

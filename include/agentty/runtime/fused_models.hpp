@@ -136,10 +136,9 @@ find_catalog(const std::vector<ProviderCatalog>& cats, std::string_view pid) {
     const auto& recents  = in.recents  ? *in.recents  : kNoRecents;
     // Starred? From the settings list when given, else the row's own flag
     // (unit tests that build catalogs by hand).
-    auto is_fav = [&](const ModelInfo& mi) {
+    auto is_fav = [&](const ModelInfo& mi, std::string_view provider_id) {
         if (!in.favorites) return mi.favorite;
-        return std::find(in.favorites->begin(), in.favorites->end(), mi.id)
-            != in.favorites->end();
+        return is_favorite(*in.favorites, provider_id, mi.id.value);
     };
 
     const std::string& q = in.query;
@@ -235,7 +234,7 @@ find_catalog(const std::vector<ProviderCatalog>& cats, std::string_view pid) {
         if (!c) return false;                              // provider signed out
         const ModelInfo* mi = find_model(*c, r.model_id);
         if (!mi) return false;                             // model gone from catalog
-        if (is_fav(*mi)) return false;                     // shown in FAVORITES
+        if (is_fav(*mi, r.provider_id)) return false;      // shown in FAVORITES
         if (!matches(c->label, *mi)) return false;
         FusedRow row;
         row.provider_id = r.provider_id;
@@ -401,7 +400,7 @@ find_catalog(const std::vector<ProviderCatalog>& cats, std::string_view pid) {
             row.provider_id = c.provider_id;
             row.label       = c.label;
             row.model       = mi;
-            row.model.favorite = is_fav(mi);
+            row.model.favorite = is_fav(mi, c.provider_id);
             row.model_label = model_label;
             row.authed      = true;
             row.active      = (c.provider_id == in.active.provider_id

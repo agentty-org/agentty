@@ -713,7 +713,9 @@ TurnRouting resolve_turn_routing(const Model& m) {
     // Session cascade bias only. The per-workspace learned prior, the regret
     // denominator it needed and the plan-recall few-shot all went with the
     // self-supervised layers — see RoleConfig's comment.
-    const auto caps = resolved_caps(prof.model);
+    const auto caps = prof.provider.empty()
+        ? resolved_caps(prof.model)
+        : resolved_caps(prof.model, prof.provider);
     r.prompt = std::string{newest_user};
     r.model  = prof.model;
     r.base   = prof.effort;

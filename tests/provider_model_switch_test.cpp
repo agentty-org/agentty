@@ -267,10 +267,12 @@ TEST_CASE("model picker ^E toggles reasoning override + feedback") {
           "^E forces the override on");
     CHECK(agentty::resolved_caps("codestral-latest").supports_effort(),
           "effort capability now open for the model");
-    CHECK(g_settings.reasoning_effort_overrides.count("codestral-latest") == 1,
-          "override persisted to Settings");
-    CHECK(g_settings.reasoning_effort_overrides.at("codestral-latest"),
+    CHECK(g_settings.reasoning_effort_overrides.count("mistral/codestral-latest") == 1,
+          "override persisted to Settings, under this provider");
+    CHECK(g_settings.reasoning_effort_overrides.at("mistral/codestral-latest"),
           "persisted value is ON");
+    CHECK(g_settings.reasoning_effort_overrides.count("codestral-latest") == 0,
+          "not as a bare id that would also flip other providers");
     CHECK(!m1.s.status.empty(), "a status toast is set as feedback");
 
     // 2nd ^E: ON -> force OFF.
@@ -287,7 +289,7 @@ TEST_CASE("model picker ^E toggles reasoning override + feedback") {
     apply_fx(c3);
     CHECK(agentty::reasoning_override_for("codestral-latest") == -1,
           "^E a third time clears the override (auto)");
-    CHECK(g_settings.reasoning_effort_overrides.count("codestral-latest") == 0,
+    CHECK(g_settings.reasoning_effort_overrides.count("mistral/codestral-latest") == 0,
           "cleared override removed from Settings");
     CHECK(!m3.s.status.empty(), "clear-to-auto also gives feedback");
 
@@ -1125,6 +1127,91 @@ TEST_CASE("a host rejection learned by the transport is saved when the turn ends
     agentty::set_rejected_fields({});
 }
 
+
+TEST_CASE("same model id on two providers: a reasoning override is per provider") {
+    agentty::clear_reasoning_overrides();
+    agentty::set_reasoning_override("groq/acme-r1-test", true);
+    CHECK(agentty::reasoning_override_for("acme-r1-test", "groq") == 1);
+    CHECK(agentty::reasoning_override_for("acme-r1-test", "openrouter") == -1);
+    // A bare override saved by an older build still applies everywhere.
+    agentty::set_reasoning_override("acme-bare-test", false);
+    CHECK(agentty::reasoning_override_for("acme-bare-test", "groq") == 0);
+    CHECK(agentty::reasoning_override_for("acme-bare-test", "openrouter") == 0);
+    agentty::clear_reasoning_overrides();
+}
+
+// Two providers serving the same model id, both in the open picker. ^F and
+// ^E on one row must leave the other provider's copy exactly as it was.
+TEST_CASE("same model id on two providers: ^F and ^E touch only the highlighted one") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    agentty::clear_reasoning_overrides();
+    g_settings = store::Settings{};
+    g_settings.provider_keys["groq"] = "sk-a";
+    g_settings.provider_keys["openrouter"] = "sk-b";
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection("groq"));
+    Model m0 = seeded_model();
+    m0.d.available_models = {mi("acme-twin-model", "groq")};
+    m0.d.model_id = ModelId{"acme-twin-model"};
+    auto [m, c] = app::update(std::move(m0), Msg{OpenModels{}});
+    apply_fx(c);
+    // Give OpenRouter the same id.
+    FusedCatalogLoaded fl;
+    fl.provider_id = "openrouter";
+    fl.models = {mi("acme-twin-model", "openrouter")};
+    auto [m1, c1] = app::update(std::move(m), Msg{std::move(fl)});
+    apply_fx(c1);
+
+    auto row_of = [](const Model& mm, const char* pid) {
+        for (std::size_t i = 0; i < mm.d.fused_rows.size(); ++i)
+            if (mm.d.fused_rows[i].provider_id == pid
+                && mm.d.fused_rows[i].model.id.value == "acme-twin-model")
+                return static_cast<int>(i);
+        return -1;
+    };
+    REQUIRE(row_of(m1, "groq") >= 0);
+    REQUIRE(row_of(m1, "openrouter") >= 0);
+
+    // Highlight OpenRouter's copy and star + force reasoning on it.
+    m1.ui.panel.get<pn::Models>()->index = row_of(m1, "openrouter");
+    auto [m2, c2] = app::update(std::move(m1), Msg{ModelsToggleFavorite{}});
+    apply_fx(c2);
+    m2.ui.panel.get<pn::Models>()->index = row_of(m2, "openrouter");
+    auto [m3, c3] = app::update(std::move(m2), Msg{ModelsToggleReasoning{}});
+    apply_fx(c3);
+
+    for (const auto& r : m3.d.fused_rows)
+        if (r.model.id.value == "acme-twin-model")
+            CHECK_MESSAGE(r.model.favorite == (r.provider_id == "openrouter"),
+                          "star on " << r.provider_id);
+    CHECK(agentty::reasoning_override_for("acme-twin-model", "openrouter") == 1);
+    CHECK(agentty::reasoning_override_for("acme-twin-model", "groq") == -1);
+
+    // Enter on OpenRouter's copy switches to OpenRouter, not to Groq's
+    // model of the same name.
+    m3.ui.panel.get<pn::Models>()->index = row_of(m3, "openrouter");
+    auto [m4, c4] = app::update(std::move(m3), Msg{ModelsSelect{}});
+    apply_fx(c4);
+    CHECK(app::detail::active_provider_id(m4) == "openrouter");
+    CHECK(m4.d.model_id.value == "acme-twin-model");
+    agentty::clear_reasoning_overrides();
+}
+
+// Leaving a provider whose model list failed must not carry its error onto
+// the next one.
+TEST_CASE("provider switch drops the old provider's fetch error") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    g_settings = store::Settings{};
+    g_settings.provider_keys["https://bad.example.com/v1"] = "sk-wrong";
+    g_settings.provider_keys["groq"] = "sk-a";
+    provider::select(::agentty::IoAccess::grant(),
+                     provider::parse_selection("https://bad.example.com/v1"));
+    Model m = seeded_model();
+    m.s.models_error = "HTTP 401: Invalid API key";
+    (void)app::detail::commit_provider_switch(m, "groq", "Groq");
+    CHECK(m.s.models_error.empty());
+}
 
 TEST_CASE("no model yet: the default pick is a usable chat model, not the first row") {
     using namespace agentty::msg;

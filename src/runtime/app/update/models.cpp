@@ -753,15 +753,33 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
             const auto& row = m.d.fused_rows[static_cast<std::size_t>(c->index)];
             if (row.is_signin_offer()) return Cmd::none();
             auto& s = m.d.persisted;
-            ModelId mid = row.model.id;
-            auto it = std::find(s.favorite_models.begin(),
-                                s.favorite_models.end(), mid);
-            const bool now_fav = (it == s.favorite_models.end());
-            if (now_fav) s.favorite_models.push_back(mid);
-            else         s.favorite_models.erase(it);
+            const std::string key = favorite_key(row.provider_id, row.model.id.value);
+            const bool was_fav = is_favorite(s.favorite_models, row.provider_id,
+                                             row.model.id.value);
+            const bool now_fav = !was_fav;
+            if (now_fav) {
+                s.favorite_models.push_back(ModelId{key});
+            } else {
+                // Unstar this provider's model. A bare entry from an older
+                // build stars every provider's copy; convert it so the
+                // others keep their star and only this one loses it.
+                const std::string bare = row.model.id.value;
+                const bool had_bare = std::erase_if(s.favorite_models,
+                    [&](const ModelId& f) { return f.value == bare; }) > 0;
+                std::erase_if(s.favorite_models,
+                    [&](const ModelId& f) { return f.value == key; });
+                if (had_bare)
+                    for (const auto& c : m.d.provider_catalogs)
+                        if (c.provider_id != row.provider_id)
+                            for (const auto& mi : c.models)
+                                if (mi.id.value == bare)
+                                    s.favorite_models.push_back(
+                                        ModelId{favorite_key(c.provider_id, bare)});
+            }
             auto save = save_record(m);
+            const std::string active_pid = active_provider_id(m);
             for (auto& mi : m.d.available_models)
-                if (mi.id == mid) mi.favorite = now_fav;
+                mi.favorite = is_favorite(s.favorite_models, active_pid, mi.id.value);
             // Starring moves the model into (or out of) FAVORITES at the top.
             // rebuild_fused_rows keeps the cursor on the same (provider,
             // model), so it follows the row you just starred.
@@ -936,32 +954,42 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                     return toast;
                 }
             }
-            const int cur = reasoning_override_for(id);   // -1 auto, 0 off, 1 on
+            // Scoped to the ROW's provider: the same id behind Groq and a
+            // custom gateway can disagree about reasoning, and a bare key
+            // flipped both. An older bare override is migrated on first edit.
+            const std::string key = scoped_caps_key(id, row.provider_id);
+            const int cur = reasoning_override_for(id, row.provider_id);
             auto& s = m.d.persisted;
+            // A legacy bare override (any spelling) applied to every
+            // provider; drop it so this provider's edit stands on its own.
+            const std::string bare = capkey::norm_tail(id);
+            std::erase_if(s.reasoning_effort_overrides, [&](const auto& kv) {
+                return kv.first.find('/') == std::string::npos
+                    && norm_caps_key(kv.first) == norm_caps_key(bare);
+            });
+            clear_reasoning_override(norm_caps_key(bare));
             const char* label = nullptr;
             if (cur < 0) {
-                s.reasoning_effort_overrides[id] = true;
-                set_reasoning_override(id, true);
+                s.reasoning_effort_overrides[key] = true;
+                set_reasoning_override(key, true);
                 label = "reasoning: forced ON for this model";
             } else if (cur == 1) {
-                s.reasoning_effort_overrides[id] = false;
-                set_reasoning_override(id, false);
+                s.reasoning_effort_overrides[key] = false;
+                set_reasoning_override(key, false);
                 label = "reasoning: forced OFF for this model";
             } else {
-                s.reasoning_effort_overrides.erase(id);
-                clear_reasoning_override(id);
+                s.reasoning_effort_overrides.erase(key);
+                clear_reasoning_override(key);
                 label = "reasoning: auto (catalog default)";
             }
             auto save = save_record(m);
-            // Clamp against the ROW's provider scope, not the ambient one:
-            // the fused picker lists models from providers that are NOT
-            // active, and capability facts are keyed "provider/model".
-            // Using the ambient scope here (as this arm used to) resolved
-            // a non-active row's effort ladder against the CURRENT
-            // provider's facts — the sibling ModelsCycleEffort arm
-            // already passes row.provider_id for exactly this reason.
-            m.d.effort = clamp_effort(m.d.effort,
-                                      resolved_caps(id, row.provider_id));
+            // m.d.effort is the ACTIVE model's tier. Re-clamp it only when
+            // the row is the active model; toggling another row must not
+            // change what the current conversation sends.
+            if (row.provider_id == active_provider_id(m)
+                && id == m.d.model_id.value)
+                m.d.effort = clamp_effort(m.d.effort,
+                                          resolved_caps(id, row.provider_id));
             auto toast = set_status_toast(m, label);
             return Cmd::batch(std::move(save), std::move(toast));
         },
@@ -1162,8 +1190,10 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                         active_provider_id(m), wire_model_id(mi.id.value))
                     && mi.id.value.find("[1m]") != std::string::npos)
                     continue;
-                for (const auto& fav : settings.favorite_models)
-                    if (mi.id == fav) mi.favorite = true;
+                mi.favorite = is_favorite(settings.favorite_models,
+                                          e.provider_id.empty() ? active_provider_id(m)
+                                                                : e.provider_id,
+                                          mi.id.value);
                 // Stamp the window the row will actually show. Applied ONCE
                 // here, so every downstream reader — the picker column, the
                 // fused rows, the routing candidate pool — sees the effective

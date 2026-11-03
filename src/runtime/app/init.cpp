@@ -330,8 +330,8 @@ std::pair<Model, Cmd> init() {
         if (hash != 0) m.d.grant_def_hash[name] = hash;
     }
     for (auto& mi : m.d.available_models)
-        for (const auto& fav : settings.favorite_models)
-            if (mi.id == fav) mi.favorite = true;
+        mi.favorite = is_favorite(settings.favorite_models,
+                                  detail::active_provider_id(m), mi.id.value);
 
     m.d.current.id  = deps(io).new_thread_id();
     m.d.current.auto_title_ok = true;

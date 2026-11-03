@@ -1133,7 +1133,9 @@ provider::StreamResult run_one_completion(Thread& thread,
         // Effort through the resolved model's capabilities (None → "", i.e.
         // effort off — which is the case today since parent_effort is None).
         req.effort = std::string(effort_wire_for(
-            role_prof.effort, resolved_caps(role_prof.model)));
+            role_prof.effort,
+            role_prof.provider.empty() ? resolved_caps(role_prof.model)
+                                       : resolved_caps(role_prof.model, role_prof.provider)));
         route_provider = role_prof.provider;
     } else {
         // Read-only roles are routed DOWN from the parent, but only to the

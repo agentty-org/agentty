@@ -983,3 +983,31 @@ TEST_CASE("fused: unknown tool support is treated as capable") {
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].tool_capable);
 }
+
+// The same model id on two providers is two models. Starring Groq's
+// gpt-oss must not star OpenRouter's.
+TEST_CASE("fused: a favorite belongs to one provider") {
+    std::vector<ProviderCatalog> cats = {
+        cat("groq", "Groq", {mk("gpt-oss-120b", "gpt-oss-120b", "groq")}),
+        cat("openrouter", "OpenRouter",
+            {mk("gpt-oss-120b", "gpt-oss-120b", "openrouter")}),
+    };
+    std::vector<ModelId> favs = {ModelId{favorite_key("groq", "gpt-oss-120b")}};
+    FusedInputs in;
+    in.catalogs  = &cats;
+    in.favorites = &favs;
+    int starred = 0;
+    for (const auto& r : build_fused_rows(in))
+        if (r.model.favorite) {
+            ++starred;
+            CHECK(r.provider_id == "groq");
+        }
+    CHECK(starred == 1);
+
+    // A bare entry saved by an older build still stars it on every provider.
+    std::vector<ModelId> legacy = {ModelId{"gpt-oss-120b"}};
+    in.favorites = &legacy;
+    int legacy_starred = 0;
+    for (const auto& r : build_fused_rows(in)) legacy_starred += r.model.favorite;
+    CHECK(legacy_starred == 2);
+}
