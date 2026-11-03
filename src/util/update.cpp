@@ -219,6 +219,17 @@ bool self_update_possible(std::string& reason) {
              "installer from https://github.com/agentty-org/agentty/releases";
     return false;
 #else
+#ifndef NDEBUG
+    constexpr bool dev_build = true;
+#else
+    constexpr bool dev_build = false;
+#endif
+    // A dev build lives in a build tree. Replacing it with the release
+    // binary silently swaps out the code you're working on.
+    if (dev_build) {
+        reason = "this is a development build; rebuild it instead";
+        return false;
+    }
     fs::path self = self_path();
     if (self.empty()) {
         reason = "could not resolve the running binary's path";
