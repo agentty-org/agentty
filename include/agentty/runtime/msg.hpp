@@ -1600,7 +1600,11 @@ using MetaMsg = std::variant<
 //
 // std::visit on a Msg dispatches on domain, not leaf — see update.cpp.
 // ============================================================================
-using Msg = std::variant<
+// Msg is a struct over this, not an alias of it: every type that mentions
+// an alias spells all 26 domains into its RTTI and symbol names (~10 KB
+// each, ~730 KB of the release binary). std::visit, get_if and
+// holds_alternative all work on the derived type.
+using MsgBase = std::variant<
     msg::ComposerMsg,
     msg::StreamMsg,
     msg::ToolMsg,
@@ -1628,6 +1632,11 @@ using Msg = std::variant<
     msg::SandboxMsg,
     msg::MetaMsg
 >;
+struct Msg : MsgBase {
+    using MsgBase::MsgBase;
+    using MsgBase::operator=;
+    using base = MsgBase;
+};
 
 // ── Msg-domain proofs ─────────────────────────────────────────
 // The Msg variant relies on `std::variant`'s converting constructor to
@@ -1738,7 +1747,7 @@ static_assert(leaf_domain_count<OpenWebSearch>()             == 1,
 // they must also update the kDomains array used by the dispatcher in
 // update.cpp, which currently exhausts on 12 arms. Mismatch → dispatch
 // switch loses a domain silently.
-static_assert(std::variant_size_v<Msg> == 26,
+static_assert(std::variant_size_v<MsgBase> == 26,
               "Msg domain count changed — update the dispatcher in "
               "src/runtime/app/update.cpp and this proof to match");
 

@@ -108,7 +108,7 @@ template <class V> struct all_domains_grouped;
 template <class... Ds> struct all_domains_grouped<std::variant<Ds...>> {
     static constexpr bool value = (maya::handled_as_group<Ds> && ...);
 };
-static_assert(all_domains_grouped<::agentty::Msg>::value,
+static_assert(all_domains_grouped<::agentty::MsgBase>::value,
               "a Msg domain is missing its AGENTTY_MSG_GROUP line above");
 } // namespace agentty::msg_groups
 
