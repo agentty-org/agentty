@@ -85,6 +85,20 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# ── Release optimises for size ─────────────────────────────────────────
+# -Os cut .text 31% across the tree (42.9 -> 29.5 MB before LTO). The perf
+# benches, built all -Os, came out within noise or faster (markdown render
+# 10-15% faster); the one loss was a first full save of a 16 MB thread,
+# ~6% slower. maya still adds its own -O3 after this for its render path.
+# Set before any add_subdirectory so every submodule sees it.
+option(AGENTTY_OPTIMIZE_SIZE "Release builds use -Os instead of -O3 (maya keeps -O3)" ON)
+if(AGENTTY_OPTIMIZE_SIZE AND NOT MSVC)
+    foreach(_v CMAKE_CXX_FLAGS_RELEASE CMAKE_C_FLAGS_RELEASE)
+        string(REGEX REPLACE "(^| )-O[0-3s]( |$)" " -Os " ${_v} "${${_v}}")
+        string(STRIP "${${_v}}" ${_v})
+    endforeach()
+endif()
+
 # ── MSVC Release: strip default /Ob2 so our /Ob3 doesn't trigger D9025 ──
 #    CMake's default MSVC Release flags are "/MD /O2 /Ob2 /DNDEBUG". We
 #    want our per-target /Ob3 (aggressive inlining) instead. We also want
