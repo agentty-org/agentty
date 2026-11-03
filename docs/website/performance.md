@@ -40,6 +40,22 @@ The biggest lever in an agent session isn't milliseconds — it's the number of 
 
 Neither changes the result. Tool-heavy turns simply finish sooner.
 
+## Fast to start
+
+Nothing slow runs before the first frame. The TLS context (which reads every system CA certificate) is built on the first connection, in the background. The tool definitions are built the first time a tool is used, not when the program loads. Account and settings files are read once, not once per provider. Inside tmux agentty asks tmux one question instead of four, and the startup questions to the terminal go out together, so over SSH the first frame waits one network round-trip instead of two.
+
+`AGENTTY_STARTUP_TRACE=/tmp/t.txt agentty` writes a timestamp for each startup stage, so you can see where the time goes on your machine.
+
+## Light on memory
+
+The conversation itself is cheap: a 10 MB thread holds about 16 MB once loaded. What costs memory is redrawing history into the terminal's scrollback when you open a thread or resize. agentty keeps that bounded:
+
+- **It redraws only what your terminal keeps.** Appearance → **Scrollback** defaults to *auto*, the length of your terminal's own scrollback; rows past it would be thrown away anyway. See [Scrollback](/docs/interface#scrollback).
+- **Nothing from the redraw is kept that can't be reused.** Each block's render data is dropped as soon as the block is drawn, and the scratch buffers last for one redraw, not the session.
+- **Freed memory goes straight back to the OS**, on every thread, not only the main one.
+
+Opening that 10 MB thread used about 670 MB before these changes and about 120–160 MB after (debug build, depending on the Scrollback level).
+
 ## Compiled for the machine
 
 - **Optimized release builds** ship with link-time optimization and a stripped symbol table. A scripted profile-guided-optimization workload (`scripts/pgo-train.sh`) can train the binary on the real hot paths — boot, typing, picker navigation, redraw — for another single-digit-percent win on the streaming and layout paths.

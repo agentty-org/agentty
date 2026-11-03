@@ -31,6 +31,8 @@ channel list and line format.
 | `AGENTTY_TRACE_TOOLS` | Older spelling of `--events jsonl`; `=1` selects the same stream. Prefer the flag — it shows up in `--help`. |
 | `AGENTTY_RAG_TRACE` | Fold rag-cpp's per-stage trace into the retrieval `mode` string shown on the tool card. On by default; `=0` disables. |
 | `AGENTTY_NO_STDERR_REDIRECT` | Keep subsystem stderr (MCP servers, sandbox) on the terminal instead of capturing it. Debug-only — it will scribble over the TUI. |
+| `AGENTTY_STARTUP_TRACE` | A file path. Each startup stage appends `+12.3 ms  name` to it, timed from launch, so you can see where launch time goes. Unset: no cost. |
+| `MIMALLOC_PURGE_DELAY` | mimalloc's own knob. agentty sets it to `0` (give freed memory back to the OS at once) unless you set it. |
 
 ## Providers & models
 
@@ -47,7 +49,7 @@ channel list and line format.
 | `AGENTTY_CHATGPT_DEVICE_AUTH` | Use the device-code flow for ChatGPT sign-in instead of the loopback browser flow — for headless or remote machines. |
 | `AGENTTY_NO_PREWARM` | Skip the TLS/connection prewarm at startup. |
 | `AGENTTY_POOL_IDLE_TTL` | Seconds an idle HTTP/2 connection may be reused (default 90, or 450 under a SOCKS proxy; `0` disables pooling). **Lower this if you see `h2 socket hangup (server accepted request; not replayed automatically)` mid-answer** — that means a proxy/VPN/CDN killed the connection before agentty did. Set it below your network's idle timeout and the pool evicts first, turning a visible failure into an invisible re-dial. `grep http.stream_hangup` in the log shows each hangup's idle age, so the right value is measurable. |
-| `AGENTTY_FORCE_REMOTE` | Force the remote streaming cadence even on a local endpoint. Takes precedence over autodetection. |
+| `AGENTTY_FORCE_REMOTE` | No effect since 0.9.42: there is no separate remote cadence any more. Still accepted. |
 
 ## Smart Mode
 
@@ -159,7 +161,7 @@ by meaning turns on by itself. `agentty diagnostics` shows what is in use.
 | `AGENTTY_SOCKS_PROXY` | Route provider traffic through a SOCKS proxy. See **[Proxies](/docs/proxies)**. |
 | `SSL_CERT_FILE` · `SSL_CERT_DIR` · `CURL_CA_BUNDLE` | Standard OpenSSL root-store overrides. |
 | `AGENTTY_AIRGAP_SSH` | SSH target for airgap mode. See **[Airgap](/docs/airgap)**. |
-| `AGENTTY_NO_SSH_THROTTLE` | Skip render throttling over SSH. A fast LAN hop doesn't need it. |
+| `AGENTTY_NO_SSH_THROTTLE` | No effect since 0.9.42: SSH no longer changes how agentty renders or animates, so there is nothing to turn off. Still accepted. |
 | `AGENTTY_NO_UPDATE_CHECK` | Disable the background update check (also implied by airgap mode). |
 
 ### Keeping config local and bulk elsewhere
@@ -263,7 +265,8 @@ defaults: **[Configuration → Paste](/docs/configuration#paste)**.
 | `AGENTTY_REVEAL` | Master switch for the streaming reveal effect. **On by default everywhere, tmux included**; `0`/`false`/`off`/`no` turns it off, anything else forces it on. Set it to `0` if your terminal/multiplexer combination ghosts the live tail. |
 | `AGENTTY_REVEAL_TYPEWRITER` | The typewriter clip alone — text arriving character-by-character. ANDed with `AGENTTY_REVEAL`; same default and same truthiness rule. |
 | `AGENTTY_REVEAL_DECORATE` | The decorative overlay on the revealing tail alone. ANDed with `AGENTTY_REVEAL`; same default and same truthiness rule. |
-| `AGENTTY_NO_REVEAL_GLIDE` | `=1` disables the bounded **end-of-turn glide** (the visible catch-up when a turn finishes) and restores the immediate finish. Not the reveal animation itself — that's `AGENTTY_REVEAL`. The glide is otherwise on only where frames are dense: not over SSH, and only with synchronized-output support. |
+| `AGENTTY_NO_REVEAL_GLIDE` | `=1` disables the bounded **end-of-turn glide** (the visible catch-up when a turn finishes) and restores the immediate finish. Not the reveal animation itself — that's `AGENTTY_REVEAL`. The glide needs synchronized-output support; it runs over SSH too. |
+| `AGENTTY_REPLAY_ROWS` | Rows of history redrawn into scrollback on open and resize, overriding Appearance → **Scrollback**. `0` turns the redraw off. |
 | `AGENTTY_NO_TAPE` | `=1` replaces the animated activity tape with a quiet static row carrying the same elapsed / tok-s detail. |
 | `AGENTTY_FROZEN_COLLAPSE` | `=1` opts **in** to collapsing frozen turns. Off by default. |
 | `AGENTTY_NO_TRANSFORMS` | Disable output transforms. |

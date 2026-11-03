@@ -23,7 +23,7 @@ Terminal-first AI coding agents let you stay on the command line — no IDE swit
 
 agentty was built to hit all of the above:
 
-- **Native C++26 single binary** — 16.7 MB, ~3 ms cold start, no Node/Python.
+- **Native C++26 single binary** — {{sizeMB}}, starts in a few milliseconds, no Node/Python.
 - **Multi-provider** — Claude Pro/Max, OpenAI, Groq, OpenRouter, Cerebras, or local Ollama.
 - **Built-in hybrid retrieval** with a learning loop.
 - **Sandboxed by default**, SSH air-gap in one command.

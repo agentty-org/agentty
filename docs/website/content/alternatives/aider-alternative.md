@@ -18,7 +18,7 @@ Aider pioneered terminal AI pair-programming. agentty takes the same idea and sh
 
 ## How agentty compares
 
-- **Single static binary** — 16.7 MB, ~3 ms cold start. No Python.
+- **Single static binary** — {{sizeMB}}, starts in a few milliseconds. No Python.
 - **Multi-provider** — Claude Pro/Max, OpenAI, Groq, OpenRouter, Cerebras, or local Ollama.
 - **Sandboxed by default**; one-command SSH air-gap.
 - **Built-in retrieval (RAG)** over your repo so it sends only the relevant code to the model.

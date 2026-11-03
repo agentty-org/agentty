@@ -13,7 +13,7 @@ Like the idea of a terminal coding agent but want **provider freedom** and an **
 ## How agentty compares
 
 - **Provider-agnostic** — Claude Pro/Max, OpenAI, Groq, OpenRouter, Cerebras, or local Ollama.
-- **Single native binary** — 16.7 MB, ~3 ms cold start.
+- **Single native binary** — {{sizeMB}}, starts in a few milliseconds.
 - **Sandboxed by default**, SSH air-gap in one command.
 - **Built-in retrieval** so only relevant code reaches the model.
 - **Open source (MIT)**, MCP-capable, runs in Zed over ACP.

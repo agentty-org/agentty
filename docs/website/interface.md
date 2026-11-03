@@ -94,11 +94,11 @@ Each tool gets a purpose-built widget — agentty doesn't just print raw JSON:
 
 ## Smooth streaming
 
-SSE deltas drip into the screen at ⅛ buffer per tick (clamped 32–256 chars), so server-side batching doesn't translate into chunky on-screen text. Where the terminal supports it, frames are wrapped in DEC 2026 begin/end-sync to avoid tearing.
+Text is revealed at a steady pace, smoothing out the bursts a server sends, so a reply that arrives in big chunks still types out evenly. When a turn ends, any text still waiting glides out over a moment instead of appearing all at once. This works over SSH too. Where the terminal supports it, frames are wrapped in DEC 2026 begin/end-sync to avoid tearing. Set **Motion** to *off* to turn the animation off.
 
 ## Appearance
 
-[[Ctrl+K]] → **Appearance** opens a form with fourteen look-and-feel knobs. Changes apply immediately — there is no apply step — and persist to your user config, not the project's, because a light terminal is a property of your eyes rather than of the repo you happen to be in.
+[[Ctrl+K]] → **Appearance** opens a form with fifteen look-and-feel knobs. Changes apply immediately — there is no apply step — and persist to your user config, not the project's, because a light terminal is a property of your eyes rather than of the repo you happen to be in.
 
 | Setting | Options |
 |---|---|
@@ -112,6 +112,7 @@ SSE deltas drip into the screen at ⅛ buffer per tick (clamped 32–256 chars),
 | Thread preview | on / off: the card above the [[Ctrl+J]] list showing the highlighted thread |
 | Codex & Claude sessions | on / off: list [those sessions](/docs/switching) in [[Ctrl+J]] |
 | Motion | full / reduced / off |
+| Scrollback | auto / tiny / small / big / full: how much history is redrawn on open and resize ([below](#scrollback)) |
 | Syntax highlighting | on / off |
 | Tool output | collapsed / preview / full |
 | Thinking | shown / collapsed / hidden |
@@ -122,6 +123,20 @@ SSE deltas drip into the screen at ⅛ buffer per tick (clamped 32–256 chars),
 The theme browser previews live: arrowing through the list restyles the transcript under you, [[Enter]] keeps it, [[Esc]] puts back the one you opened on. Typing filters by fuzzy subsequence — `gvd` finds Gruvbox Dark.
 
 Colour changes repaint; **layout** changes (density, prose width, compact turns) apply to new output only. Rows already committed to your scrollback are the terminal's, not ours — rewriting them would tear the canvas.
+
+### Scrollback
+
+When you open a thread or resize the window, agentty redraws the conversation into your terminal's scrollback so you can scroll back through it. For a long thread that redraw is the biggest cost in time and memory, and anything past the terminal's own scrollback limit is thrown away anyway. **Scrollback** decides how much is redrawn:
+
+| Level | Rows |
+|---|---|
+| **auto** (default) | as many as your terminal keeps |
+| tiny | about 1,000 |
+| small | about 5,000 |
+| big | about 20,000 |
+| full | the whole thread |
+
+*auto* reads your terminal's scrollback setting: tmux's `history-limit`, zellij, GNU screen, kitty, WezTerm, Alacritty, foot, Ghostty, Konsole, xfce4-terminal, GNOME Terminal, Windows Terminal, the Windows console, iTerm2, Terminal.app and VS Code. When the setting isn't in the config, it uses that terminal's default. A terminal it can't identify gets 5,000 rows. None of this slows startup: the config is read in the background. `AGENTTY_REPLAY_ROWS` overrides every level (`0` turns the redraw off).
 
 ### Why `native` is the default
 

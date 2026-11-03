@@ -17,7 +17,7 @@ If you already like Claude Code's workflow but want it faster, dependency-free, 
 | | agentty | Claude Code |
 |---|---|---|
 | **Runtime** | Single static C++26 binary | Node.js app (`npm install -g`) |
-| **Cold start** | < 1 ms | ~hundreds of ms (Node boot) |
+| **Cold start** | a few ms | ~hundreds of ms (Node boot) |
 | **Install size** | {{sizeMB}}, one file | Node runtime + `node_modules` |
 | **Dependencies** | None (no Node, Python, Electron, npm) | Node.js ≥ 18 |
 | **Models** | Claude, OpenAI, DeepSeek, Kimi, Gemini, Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, local Ollama, any OpenAI-compatible host | Claude only |
@@ -71,7 +71,7 @@ Being honest: Claude Code is a mature, first-party Anthropic product with a larg
 Choose agentty if you want:
 
 - A **single-binary coding agent** with zero runtime dependencies.
-- **Sub-millisecond startup** and a TUI that never GC-pauses.
+- **Startup in a few milliseconds** and a TUI that never GC-pauses.
 - **Your choice of model** — Claude, GPT, DeepSeek, Kimi, or a local Ollama model — behind one client.
 - Shell calls **sandboxed by default**.
 - To drive an agent on an **air-gapped host** over SSH.

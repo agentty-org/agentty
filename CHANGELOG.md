@@ -4,6 +4,32 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Appearance → Scrollback**: how much history is redrawn into the
+  terminal when a thread opens or the window resizes. *auto* (the default)
+  matches your terminal's own scrollback length, read from tmux, zellij,
+  screen, kitty, WezTerm, Alacritty, foot, Ghostty, Konsole, xfce4-terminal,
+  GNOME Terminal, Windows Terminal, the Windows console, iTerm2,
+  Terminal.app or VS Code; *tiny*, *small*, *big* and *full* are fixed
+  sizes. `AGENTTY_REPLAY_ROWS` still overrides it.
+- `AGENTTY_STARTUP_TRACE=<file>` writes a timestamp for each startup stage.
+
+### Changed
+- Opening a long thread uses far less memory: a 10 MB thread took ~670 MB,
+  now ~120–160 MB (debug build). The redraw no longer keeps render data
+  it can't reuse, and freed memory goes straight back to the OS.
+- Faster startup: the TLS certificate bundle is read on the first
+  connection instead of at launch, tool definitions are built when first
+  used, account files are read once instead of once per provider, tmux is
+  asked once instead of four times, and the startup terminal queries go
+  out together (one round-trip over SSH, not two). `agentty --version`
+  went from ~27 ms to ~4 ms (debug build).
+
+### Fixed
+- `AGENTTY_NO_SSH_THROTTLE` and `AGENTTY_FORCE_REMOTE` are documented as
+  doing nothing: since 0.9.42 SSH doesn't change rendering. Both are still
+  accepted.
+
 ## [0.9.42] - 2026-11-02
 
 ### Fixed

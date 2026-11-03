@@ -358,6 +358,22 @@ This is an accessibility switch before it is a preference. Vestibular
 disorders make a typewriter reveal genuinely unpleasant, and "mostly
 stopped" is not an accommodation. See §7.
 
+### Scrollback
+
+| Row | Values | Drives |
+|---|---|---|
+| Scrollback | auto / tiny / small / big / full | Rows the scrollback replay prints on thread open and resize |
+
+`auto` (the default) is the terminal's own scrollback length, from
+`maya/terminal/scrollback.hpp`: tmux's history-limit from the probe that
+already runs, else the terminal's config file read on a startup worker
+(`TerminalScrollbackProbed`), else that terminal's documented default.
+Until the worker answers, an env-only guess is used. tiny / small / big are
+1k / 5k / 20k rows; full has no limit. Every level is capped at tmux's
+history-limit, and `AGENTTY_REPLAY_ROWS` overrides them all. Resolved in
+`scrollback_replay_limits()` (frozen.cpp), which maya asks before each
+replay, so a change applies to the next one.
+
 ### Content
 
 | Row | Values | Drives |

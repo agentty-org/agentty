@@ -2,7 +2,7 @@
 title: "agentty vs Claude Code: an honest comparison (2026)"
 description: "A candid, side-by-side comparison of agentty and Claude Code — speed, footprint, cost, providers, sandboxing, and when to pick each. From the agentty team."
 competitor: "Claude Code"
-verdict: "If you want the official, batteries-included Anthropic experience, use Claude Code. If you want a single 16.7 MB native binary with millisecond startup, provider choice (Claude, OpenAI, Groq, Ollama…), and a sandbox by default, agentty is the leaner, faster, open-source pick."
+verdict: "If you want the official, batteries-included Anthropic experience, use Claude Code. If you want a single {{sizeMB}} native binary with millisecond startup, provider choice (Claude, OpenAI, Groq, Ollama…), and a sandbox by default, agentty is the leaner, faster, open-source pick."
 updated: "2026-11-01"
 ---
 
@@ -15,7 +15,7 @@ Both are terminal-first coding agents. Claude Code is Anthropic's official CLI; 
 | | agentty | Claude Code |
 |---|---|---|
 | Language / runtime | C++26 — single static binary | TypeScript / Node.js |
-| Binary size | 16.7 MB, no runtime | Node + npm install |
+| Binary size | {{sizeMB}}, no runtime | Node + npm install |
 | Cold start | ~3 ms | Node startup |
 | Providers | Claude, OpenAI, Groq, OpenRouter, Cerebras, Ollama | Anthropic only |
 | Sandbox | On by default (claybin: landlock+seccomp on Linux, seatbelt on macOS, AppContainer+job objects on Windows) | — |

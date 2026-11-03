@@ -19,7 +19,7 @@ If you like the Codex CLI's terminal workflow but want to **use more than one pr
 ## How agentty compares
 
 - **Provider-agnostic** — OpenAI, Claude Pro/Max, Groq, OpenRouter, Cerebras, or local Ollama.
-- **Single static binary** — 16.7 MB, ~3 ms cold start.
+- **Single static binary** — {{sizeMB}}, starts in a few milliseconds.
 - **Sandboxed by default**; one-command SSH air-gap.
 - **Retrieval built in** so only relevant code is sent to the model.
 - **Open source (MIT)**, MCP-capable, runs in Zed over ACP.

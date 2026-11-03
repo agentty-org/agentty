@@ -12,7 +12,7 @@ OpenCode and agentty share a philosophy: open-source, terminal-first AI coding. 
 
 ## How agentty compares
 
-- **Native C++26 single binary** — 16.7 MB, ~3 ms cold start, zero runtime dependencies.
+- **Native C++26 single binary** — {{sizeMB}}, starts in a few milliseconds, zero runtime dependencies.
 - **Multi-provider** — Claude Pro/Max, OpenAI, Groq, OpenRouter, Cerebras, local Ollama.
 - **Sandboxed by default**; SSH air-gap in one command.
 - **Built-in RAG** — hybrid BM25 + dense retrieval so only relevant code reaches the model.
