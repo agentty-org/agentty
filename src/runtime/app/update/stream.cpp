@@ -1927,6 +1927,17 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // hosted providers, a couple of localhost GETs otherwise.
             cmd = Cmd::batch(std::move(cmd),
                                         cmd::probe_model_window(m, std::move(ran_model)));
+            // The transport may have learned a field this host refuses (and
+            // resent without it). Fold that into the record so it survives
+            // a restart instead of costing a 400 on every launch.
+            {
+                bool grew = false;
+                for (const auto& [host, bits] : rejected_fields_snapshot()) {
+                    auto& have = m.d.persisted.rejected_fields[host];
+                    if ((have | bits) != have) { have |= bits; grew = true; }
+                }
+                if (grew) cmd = Cmd::batch(std::move(cmd), save_record(m));
+            }
             // No force_redraw arming. The previous version armed
             // needs_force_redraw here so the next user input would
             // trigger maya's case-(B) soft redraw — meant to flush
@@ -2405,34 +2416,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 }
             }
 
-            // ── reasoning_effort "none" rejected while off: drop it, keep the
-            // template switch, resend. Custom hosts get both off fields;
-            // older vLLM only knows low/medium/high and 400s on "none".
-            if (err_ctx && !has_committed && m.d.effort == Effort::None
-                && m.d.selection.kind == provider::Kind::OpenAI
-                && provider::preset_for(m.d.selection.openai_endpoint.label) == nullptr
-                && (e.http_status == 400 || e.http_status == 422)
-                && e.message.find("reasoning_effort") != std::string::npos
-                && prior_transient < provider::kMaxRetries) {
-                const std::string& served = m.s.smart_turn_model.empty()
-                    ? m.d.model_id.value : m.s.smart_turn_model.value;
-                if (resolved_caps(served).reasoning_off
-                        != static_cast<std::uint8_t>(ReasoningOff::TemplateOnly)) {
-                    set_catalog_reasoning_off(scoped_caps_key(served),
-                                              ReasoningOff::TemplateOnly);
-                    AGT_LOG(Model, Warn, "caps.effort_none_rejected",
-                            "model={} http={} msg={}", served, e.http_status,
-                            std::string_view{e.message}.substr(0, 256));
-                    if (!reschedule_streaming(m.s.phase, [&](phase::Active& c) {
-                            c.transient_retries = prior_transient + 1;
-                            c.last_failure_at   = m.now;
-                            c.retry             = retry::Scheduled{};
-                        }))
-                        return Cmd::none();
-                    return Cmd::after(std::chrono::milliseconds{50},
-                                      Msg{RetryStream{}});
-                }
-            }
+            // (A custom host that 400s the "off" fields is healed inside the
+            // OpenAI transport, so `run`, ACP and subagents get it too.)
 
             // ── reasoning_effort rejection 4xx: learn, clamp, retry ─────
             // The provider rejected the effort value we sent — and usually

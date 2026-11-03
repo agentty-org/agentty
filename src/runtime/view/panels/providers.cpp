@@ -129,8 +129,24 @@ Element providers_panel(const Model& m) {
                 row.trailing       = "\xe2\x9c\x97 press again to remove";
                 row.trailing_style = fg_of(warn);
             } else {
-                row.trailing       = "\xe2\x9c\x93 ready";
-                row.trailing_style = fg_of(success);
+                // What the host last told us, not a blanket "ready": a key
+                // it rejected is the thing the user came here to fix.
+                std::string err;
+                for (const auto& c : m.d.provider_catalogs)
+                    if (c.provider_id == *spec) err = c.error;
+                if (active && err.empty()) err = m.s.models_error;
+                const bool auth_err = err.find("HTTP 401") != std::string::npos
+                                   || err.find("HTTP 403") != std::string::npos;
+                if (auth_err) {
+                    row.trailing       = "\xe2\x9a\xa0 key rejected \xc2\xb7 Enter to fix";
+                    row.trailing_style = fg_of(warn);
+                } else if (!err.empty()) {
+                    row.trailing       = "\xe2\x9a\xa0 couldn't list models";
+                    row.trailing_style = fg_of(warn);
+                } else {
+                    row.trailing       = "\xe2\x9c\x93 ready";
+                    row.trailing_style = fg_of(success);
+                }
             }
             row.active         = active;
         } else if (const std::string* prefill = r.new_host_prefill()) {

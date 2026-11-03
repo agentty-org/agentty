@@ -27,6 +27,7 @@
 #include "agentty/provider/selection.hpp"
 #include "agentty/provider/catalog_sources.hpp"
 #include "agentty/domain/bundled_catalog.hpp"
+#include "agentty/provider/error_class.hpp"
 #include "agentty/auth/accounts.hpp"
 #include "agentty/io/persistence.hpp"
 
@@ -1093,6 +1094,35 @@ TEST_CASE("a message queued behind the OAuth probe is sent when it settles") {
     apply_fx(c2);
     CHECK(m2.ui.composer.queued.empty());
     CHECK(!m2.s.is_idle());   // the turn started
+}
+
+// The transport learns a field a host refused (off-thread) and resends. The
+// record must pick it up when the turn ends, or the next launch pays again.
+TEST_CASE("a host rejection learned by the transport is saved when the turn ends") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    g_settings = store::Settings{};
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection("anthropic"));
+    Model m = seeded_model();
+    m.d.model_id = ModelId{"claude-opus-4-5"};
+    for (int i = 0; i < 3; ++i) {
+        Message u; u.role = Role::User; u.text = "question " + std::to_string(i);
+        m.d.current.messages.push_back(u);
+        Message a; a.role = Role::Assistant; a.text = "answer";
+        m.d.current.messages.push_back(a);
+    }
+    auto [m1, c1] = app::update(std::move(m), Msg{CompactContext{}});
+    REQUIRE(m1.s.compacting);
+
+    agentty::set_rejected_fields({});
+    agentty::add_rejected_field("old-vllm.example:8000",
+        agentty::provider::bit(agentty::provider::OptionalField::EffortNone));
+    m1.ui.composer.text.clear();
+    auto [m2, c2] = app::update(std::move(m1), Msg{StreamTextDelta{"<summary>s</summary>"}});
+    auto [m3, c3] = app::update(std::move(m2), Msg{StreamFinished{StopReason::EndTurn}});
+    CHECK(m3.d.persisted.rejected_fields["old-vllm.example:8000"]
+          == agentty::provider::bit(agentty::provider::OptionalField::EffortNone));
+    agentty::set_rejected_fields({});
 }
 
 // OpenModels refreshes the ACTIVE provider immediately and defers the

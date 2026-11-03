@@ -2528,7 +2528,38 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     // error at the post-loop.
     http::CancelTokenPtr cancel_for_end = cancel;
     auto result = http::default_client(::agentty::IoAccess::grant()).stream(hreq, std::move(handler),
-                                                tos, std::move(cancel));
+                                                tos, cancel);
+
+    // An off field this host doesn't take (an older server 400s
+    // reasoning_effort:"none", a strict one the template field): learn it
+    // for the host and resend once without it. Here rather than in the
+    // reducer so `agentty run`, ACP and subagents heal the same way; the TUI
+    // persists the learned bit with the rest of the host's rejected fields.
+    // A 4xx body goes to error_body, never the sink, so nothing has shown.
+    if (sc.http_status == 400 || sc.http_status == 422) {
+        using provider::OptionalField;
+        const std::string host = host_key(req.endpoint.host, req.endpoint.port);
+        const std::string_view said = sc.error_body;
+        auto names = [&](std::string_view f) {
+            return said.find(f) != std::string_view::npos;
+        };
+        std::uint16_t learn = 0;
+        if (body.contains("reasoning_effort") && body["reasoning_effort"] == "none"
+            && names("reasoning_effort"))
+            learn = provider::bit(OptionalField::EffortNone);
+        else if (body.contains("chat_template_kwargs") && names("chat_template_kwargs"))
+            learn = provider::bit(OptionalField::ChatTemplateKwargs);
+        if (learn != 0 && (rejected_fields_for(host) & learn) == 0
+            && !(cancel && cancel->is_cancelled())) {
+            add_rejected_field(host, learn);
+            AGT_LOG(Model, Warn, "caps.field_rejected",
+                    "host={} field={} http={} (resending)", host,
+                    learn == provider::bit(OptionalField::EffortNone)
+                        ? "reasoning_effort:none" : "chat_template_kwargs",
+                    sc.http_status);
+            return run_stream_sync(std::move(req), std::move(ctx.sink), std::move(cancel));
+        }
+    }
 
     // One end-of-turn line + the raw error body on failure — the pair every
     // "why did my provider fail?" report needs. Mirrors the Anthropic
@@ -2843,7 +2874,7 @@ json build_request_body(const Request& req) {
     // Optional fields this host has REJECTED before (its own 400, learned
     // by the stream reducer and persisted). Checked per field below so a
     // strict host gets a body it accepts on every turn after the first.
-    const std::uint8_t rejected =
+    const std::uint16_t rejected =
         rejected_fields_for(host_key(req.endpoint.host, req.endpoint.port));
     auto allowed = [&](provider::OptionalField f) {
         return (rejected & provider::bit(f)) == 0;
@@ -2945,19 +2976,19 @@ json build_request_body(const Request& req) {
                 for (auto& c : *tc) c.erase("extra_content");
 
     // Reasoning OFF. Omitting the effort field is not off for a model that
-    // thinks by default, so say it, in the form this model takes:
-    //   OpenRouter            reasoning.enabled=false (it maps per model)
-    //   effort "none" models  reasoning_effort: "none" (gpt-5.1+, Mistral)
-    //   custom hosts          both reasoning_effort: "none" and
-    //                         chat_template_kwargs.enable_thinking=false.
-    //                         Gateways differ in which one they read:
-    //                         SovereignEG's vLLM honours only the first
-    //                         (0 reasoning tokens vs 33 with the second),
-    //                         a bare llama.cpp only the second.
-    // Hosted presets get only fields they're known to take (unknown ones
-    // 400). Models that can't stop reasoning get nothing: the picker never
-    // offers them off. A host that rejects a field learns it once
-    // (parse_rejected_field / parse_effort_rejection) and the turn is resent.
+    // thinks by default, so off is sent:
+    //   OpenRouter    reasoning.enabled=false (it maps per model)
+    //   custom host   reasoning_effort:"none" (the OpenAI value; vLLM and
+    //                 llama.cpp both read it) plus
+    //                 chat_template_kwargs.enable_thinking=false for older
+    //                 servers that silently ignore "none" (a silent ignore
+    //                 can't be caught, a 400 can)
+    //   hosted preset reasoning_effort:"none" only where the model declares
+    //                 it; unknown fields 400 on strict schemas
+    // A host that 400s either field learns it once (parse_rejected_field /
+    // the effort-none arm in stream.cpp), persisted per host, and the turn
+    // is resent. Models that can't stop reasoning get nothing: the picker
+    // never offers them off.
     using agentty::ReasoningOff;
     const auto off_how = static_cast<ReasoningOff>(req.reasoning_off);
     const bool custom_host = provider::preset_for(req.endpoint.label) == nullptr;
@@ -2968,7 +2999,7 @@ json build_request_body(const Request& req) {
                 && (off_how == ReasoningOff::EffortNone || off_how == ReasoningOff::Toggle))
                 body["reasoning"] = {{"enabled", false}};
         } else if (custom_host) {
-            if (off_how != ReasoningOff::TemplateOnly)
+            if (allowed(provider::OptionalField::EffortNone))
                 body["reasoning_effort"] = "none";
             if (allowed(provider::OptionalField::ChatTemplateKwargs))
                 body["chat_template_kwargs"] = {{"enable_thinking", false},

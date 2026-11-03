@@ -13,7 +13,6 @@ enum class ReasoningOff : std::uint8_t {
     EffortNone,    // reasoning_effort: "none" (gpt-5.1+, Mistral, many hosts)
     Toggle,        // an on/off switch (chat template enable_thinking, etc.)
     Impossible,    // always reasons (gpt-oss, o-series, R1): lowest tier is the floor
-    TemplateOnly,  // learned: this host 400'd reasoning_effort "none"; use the template switch
 };
 
 } // namespace agentty

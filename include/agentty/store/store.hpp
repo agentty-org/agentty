@@ -226,7 +226,7 @@ struct Settings {
     // fields it rejected with a 400 (provider::OptionalField bits). Written
     // by the reject→learn→retry arm in stream.cpp (#93), hydrated at init
     // so the transport never sends that host the field again.
-    std::map<std::string, std::uint8_t> rejected_fields;
+    std::map<std::string, std::uint16_t> rejected_fields;
     // LEARNED: "host|model" → which earlier assistant turns that model needs
     // reasoning_content on (provider::ReasoningEcho: 1 tool-call turns, 2
     // every turn). Written by the reject→learn→retry arm in stream.cpp

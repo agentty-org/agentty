@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "agentty/provider/registry.hpp"
+#include "agentty/provider/selection.hpp"
 #include "agentty/runtime/login.hpp"
 #include "agentty/runtime/view/palette.hpp"
 
@@ -465,7 +466,8 @@ Element panel_custom_host(const login::CustomHostInput& s) {
 //           label survives narrow terminals
 //   + Add another account… rides as the last item, dim until selected
 Element panel_account_list(const login::AccountList& s,
-                           maya::ScrollState* scroll) {
+                           maya::ScrollState* scroll,
+                           std::string_view active_error) {
     maya::Panel::Config cfg;
     cfg.title     = " " + s.provider_label + " accounts ";
     cfg.accent    = accent;
@@ -495,6 +497,14 @@ Element panel_account_list(const login::AccountList& s,
             it.leading_style   = fg_bold(danger);
             it.trailing        = "press d again to confirm";
             it.trailing_style  = fg_of(danger);
+        } else if (r.active && !active_error.empty()) {
+            // The host refused this key on the last request: say so here,
+            // where the user can add a working one.
+            it.badge         = "\xe2\x9a\xa0";           // ⚠
+            it.badge_style   = fg_of(warn);
+            it.leading_style = fg_bold(warn);
+            it.trailing       = "rejected by the host";
+            it.trailing_style = fg_of(warn);
         } else if (r.active) {
             it.badge         = "\xe2\x9c\x93";             // ✓
             it.badge_style   = fg_of(accent);
@@ -544,7 +554,18 @@ Element login_modal(const Model& m) {
         } else if constexpr (std::same_as<T, login::HostProbing>) {
             return panel_host_probing(s);
         } else if constexpr (std::same_as<T, login::AccountList>) {
-            return panel_account_list(s, &m.ui.account_list_scroll);
+            // The active provider's last fetch said its key was refused.
+            std::string_view key_err;
+            const bool auth_err = m.s.models_error.find("HTTP 401") != std::string::npos
+                               || m.s.models_error.find("HTTP 403") != std::string::npos;
+            const auto& sel = m.d.selection;
+            const std::string active_id = !sel.provider_id().empty()
+                ? std::string{sel.provider_id()}
+                : (sel.kind == provider::Kind::OpenAI ? sel.openai_endpoint.label
+                                                      : std::string{});
+            if (auth_err && !active_id.empty() && s.provider == active_id)
+                key_err = m.s.models_error;
+            return panel_account_list(s, &m.ui.account_list_scroll, key_err);
         } else if constexpr (std::same_as<T, login::Failed>) {
             return panel_picking("", true, s.message);
         }

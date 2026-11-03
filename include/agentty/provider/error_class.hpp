@@ -401,7 +401,7 @@ enum class VisionRejection : std::uint8_t {
 // a rejection of `messages`/`model`/`tools` is a real error, never
 // "learned" away. The reducer records it for this host and retries the
 // SAME turn without the field.
-enum class OptionalField : std::uint8_t {
+enum class OptionalField : std::uint16_t {
     None = 0,
     PromptCacheKey   = 1u << 0,
     StreamOptions    = 1u << 1,
@@ -415,9 +415,12 @@ enum class OptionalField : std::uint8_t {
     // How "reasoning off" is sent to hosts that think by default. Only
     // sent when the user picked off; a host that rejects it learns it once.
     ChatTemplateKwargs = 1u << 7,
+    // reasoning_effort:"none" sent for "off" to a custom host. Most servers
+    // take it (vLLM, current llama.cpp); an older one 400s on the value.
+    EffortNone       = 1u << 8,
 };
-[[nodiscard]] constexpr std::uint8_t bit(OptionalField f) noexcept {
-    return static_cast<std::uint8_t>(f);
+[[nodiscard]] constexpr std::uint16_t bit(OptionalField f) noexcept {
+    return static_cast<std::uint16_t>(f);
 }
 [[nodiscard]] constexpr std::string_view wire_name(OptionalField f) noexcept {
     switch (f) {
@@ -429,6 +432,7 @@ enum class OptionalField : std::uint8_t {
         case OptionalField::Reasoning:        return "reasoning";
         case OptionalField::SessionId:        return "session_id";
         case OptionalField::ChatTemplateKwargs: return "chat_template_kwargs";
+        case OptionalField::EffortNone:       return "reasoning_effort";
         case OptionalField::None:             break;
     }
     return {};
@@ -462,6 +466,10 @@ enum class OptionalField : std::uint8_t {
     for (auto w : kRejectionWords) if (icontains(w)) { says_unknown = true; break; }
     if (!says_unknown) return OptionalField::None;
     // Longest names first: "reasoning" is a prefix of "reasoning_details".
+    // reasoning_effort has its own arms (effort-set learning, and the
+    // custom-host "none" arm); a message naming it is not about `reasoning`.
+    if (icontains("reasoning_effort") || icontains("reasoning.effort"))
+        return OptionalField::None;
     for (auto f : {OptionalField::PromptCacheKey, OptionalField::StreamOptions,
                    OptionalField::ReasoningDetails, OptionalField::ExtraContent,
                    OptionalField::CacheControl, OptionalField::SessionId,

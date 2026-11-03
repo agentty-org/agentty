@@ -1869,6 +1869,16 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     provider::select(::agentty::IoAccess::grant(), selection);
     startup::mark("provider selected");
 
+    // What hosts taught us in past sessions (fields they 400'd, effort sets,
+    // reasoning echo). The TUI's init() loads these too; `run`, ACP and
+    // subagents need them as well or every run pays the same 400 again.
+    {
+        const auto learned = persistence::load_settings(IoAccess::grant());
+        set_learned_effort_sets(learned.learned_effort_sets);
+        set_rejected_fields(learned.rejected_fields);
+        set_reasoning_echoes(learned.reasoning_echo);
+    }
+
     // Auth header per provider, registry-driven. Anthropic uses the
     // OAuth/key creds resolved above; OpenAI-family backends read their
     // provider-specific env var (GROQ_API_KEY, …) then OPENAI_API_KEY, or

@@ -310,6 +310,9 @@ struct AgenttyApp {
         }
 
         // ── Composer / UI.
+        // The active provider's model-fetch error shows in the model
+        // picker, provider rows and account list.
+        mix_str(m.s.models_error);
         mix_str(m.ui.composer.text);
         mix(static_cast<std::uint64_t>(m.ui.composer.cursor));
         // The `/` menu: its selection, an Esc, and the names it lists.

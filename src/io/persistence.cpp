@@ -3061,7 +3061,7 @@ store::Settings load_settings_from_disk() {
             for (auto& [k, v] : j["rejected_fields"].items())
                 if (v.is_number_unsigned())
                     s.rejected_fields[k] =
-                        static_cast<std::uint8_t>(v.get<unsigned>() & 0xFFu);
+                        static_cast<std::uint16_t>(v.get<unsigned>() & 0xFFFFu);
         }
         if (j.contains("reasoning_echo") && j["reasoning_echo"].is_object()) {
             // Scopes past All (2) are not ours: a hand edit or a newer build.

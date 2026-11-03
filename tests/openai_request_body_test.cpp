@@ -18,7 +18,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "agentty/domain/catalog.hpp"
 #include "agentty/domain/reasoning_off.hpp"
+#include "agentty/provider/error_class.hpp"
 #include "agentty/provider/openai/transport.hpp"
 #include "agentty/provider/ollama/transport.hpp"
 #include "agentty/provider/registry.hpp"
@@ -359,11 +361,19 @@ TEST_CASE("body: off on a custom host sends both off fields") {
     req.reasoning_off = off(agentty::ReasoningOff::Unknown);
     CHECK(oa::build_request_body(req)["reasoning_effort"] == "none");
 
-    // Learned that this host rejects "none": only the template switch.
-    req.reasoning_off = off(agentty::ReasoningOff::TemplateOnly);
+    // Learned that this host rejects "none" (persisted per host): only the
+    // template switch, and never the rejected value again.
+    const auto hk = agentty::host_key(req.endpoint.host, req.endpoint.port);
+    agentty::add_rejected_field(hk, agentty::provider::bit(
+        agentty::provider::OptionalField::EffortNone));
     const json t = oa::build_request_body(req);
     CHECK(!t.contains("reasoning_effort"));
     CHECK(t["chat_template_kwargs"]["enable_thinking"] == false);
+    // A chosen tier is a different value and still goes out.
+    req.effort = "low";
+    CHECK(oa::build_request_body(req)["reasoning_effort"] == "low");
+    req.effort.clear();
+    agentty::set_rejected_fields({});
 
     // Not off (auto with no ladder): nothing sent.
     req.no_reasoning = false;
@@ -425,4 +435,19 @@ TEST_CASE("body: the old quick-call switch still works on a custom host") {
     req.quick = true;
     const json b = oa::build_request_body(req);
     CHECK(b["chat_template_kwargs"]["enable_thinking"] == false);
+}
+
+TEST_CASE("off: a rejection naming reasoning_effort is not read as OpenRouter's reasoning") {
+    using agentty::provider::OptionalField;
+    using agentty::provider::parse_rejected_field;
+    // vLLM-style 400 on the value; must reach the effort-none arm, not the
+    // generic one that would drop OpenRouter's `reasoning` object.
+    CHECK(parse_rejected_field(
+              "1 validation error: reasoning_effort: Input should be 'low', "
+              "'medium' or 'high' [type=literal_error] (not supported)", 400)
+          == OptionalField::None);
+    CHECK(parse_rejected_field("Unrecognized request argument: reasoning", 400)
+          == OptionalField::Reasoning);
+    CHECK(parse_rejected_field("Unknown field: chat_template_kwargs", 400)
+          == OptionalField::ChatTemplateKwargs);
 }

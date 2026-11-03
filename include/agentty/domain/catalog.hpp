@@ -1722,7 +1722,7 @@ inline void set_effort_force(int v) noexcept {
 // host never sees the field again — persisted in Settings, so not even on
 // the next launch. Same lock discipline as the other registries.
 namespace rejected_fields_detail {
-inline Registry<std::uint8_t>& reg() { static Registry<std::uint8_t> r; return r; }
+inline Registry<std::uint16_t>& reg() { static Registry<std::uint16_t> r; return r; }
 } // namespace rejected_fields_detail
 
 [[nodiscard]] inline std::string host_key(std::string_view host, std::uint16_t port) {
@@ -1731,22 +1731,22 @@ inline Registry<std::uint8_t>& reg() { static Registry<std::uint8_t> r; return r
     if (port != 0 && port != 443) k += ":" + std::to_string(port);
     return k;
 }
-inline void add_rejected_field(const std::string& host, std::uint8_t bit) {
+inline void add_rejected_field(const std::string& host, std::uint16_t bit) {
     // OR in one snapshot update so two concurrent learns can't drop a bit.
     (void)rejected_fields_detail::reg().facts.update(
-        [](const Facts<std::uint8_t>& f, const std::string& k, std::uint8_t b) {
-            Facts<std::uint8_t> out = f;
-            out.map[k] = static_cast<std::uint8_t>(out.map[k] | b);
+        [](const Facts<std::uint16_t>& f, const std::string& k, std::uint16_t b) {
+            Facts<std::uint16_t> out = f;
+            out.map[k] = static_cast<std::uint16_t>(out.map[k] | b);
             return out;
         }, host, bit);
 }
-inline void set_rejected_fields(std::map<std::string, std::uint8_t> all) {
+inline void set_rejected_fields(std::map<std::string, std::uint16_t> all) {
     rejected_fields_detail::reg().replace(std::move(all));
 }
-[[nodiscard]] inline std::uint8_t rejected_fields_for(const std::string& host) {
+[[nodiscard]] inline std::uint16_t rejected_fields_for(const std::string& host) {
     return rejected_fields_detail::reg().find("", host).value_or(0);
 }
-[[nodiscard]] inline std::map<std::string, std::uint8_t> rejected_fields_snapshot() {
+[[nodiscard]] inline std::map<std::string, std::uint16_t> rejected_fields_snapshot() {
     return rejected_fields_detail::reg().snapshot();
 }
 
