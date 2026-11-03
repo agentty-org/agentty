@@ -100,17 +100,27 @@ jobs:
             --pattern 'SHA256SUMS' --skip-existing
           sum_for() {
             want=$(awk -v f="$1" '$2==f {print $1}' SHA256SUMS)
-            [ -n "$want" ] || { echo "::error::$1 missing from SHA256SUMS"; exit 1; }
+            [ -n "$want" ] || { echo "::error::$1 missing from SHA256SUMS" >&2; exit 1; }
             got=$(sha256sum "$1" | awk '{print $1}')
-            [ "$want" = "$got" ] || { echo "::error::$1 drift: SHA256SUMS=$want bytes=$got"; exit 1; }
+            [ "$want" = "$got" ] || { echo "::error::$1 drift: SHA256SUMS=$want bytes=$got" >&2; exit 1; }
             printf '%s' "$want"
           }
+          # Into variables first: a failing $(sum_for ...) inside sed's
+          # arguments isn't caught by set -e, and v0.9.44 (no macOS build)
+          # got a formula whose sha256 lines were the error text.
+          LX=$(sum_for agentty-linux-x86_64)
+          LA=$(sum_for agentty-linux-aarch64)
+          MX=$(sum_for agentty-macos-x86_64)
+          MA=$(sum_for agentty-macos-arm64)
           sed -e "s/^  version \".*\"/  version \"$V\"/" \
-              -e "s|@LINUX_X86_64_SHA256@|$(sum_for agentty-linux-x86_64)|g" \
-              -e "s|@LINUX_AARCH64_SHA256@|$(sum_for agentty-linux-aarch64)|g" \
-              -e "s|@MACOS_X86_64_SHA256@|$(sum_for agentty-macos-x86_64)|g" \
-              -e "s|@MACOS_ARM64_SHA256@|$(sum_for agentty-macos-arm64)|g" \
+              -e "s|@LINUX_X86_64_SHA256@|$LX|g" \
+              -e "s|@LINUX_AARCH64_SHA256@|$LA|g" \
+              -e "s|@MACOS_X86_64_SHA256@|$MX|g" \
+              -e "s|@MACOS_ARM64_SHA256@|$MA|g" \
               packaging/homebrew/agentty.rb > agentty.rb
+          if grep -q -E '::error::|@[A-Z0-9_]+_SHA256@' agentty.rb; then
+            echo "::error::formula has unresolved hashes; not publishing"; exit 1
+          fi
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/1ay1/homebrew-tap.git" tap
           mkdir -p tap/Formula && cp agentty.rb tap/Formula/agentty.rb
           cd tap
