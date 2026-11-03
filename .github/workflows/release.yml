@@ -212,6 +212,14 @@ jobs:
               "$expected"*) echo "  OK" ;;
               *) echo "FATAL: binary did not run on $img (got '$out', want '$expected*')"; exit 1 ;;
             esac
+            # A thrown-and-caught exception must exit 2, not abort: the static
+            # link skips libgcc's frame registration and relies on PT_GNU_EH_FRAME.
+            rc=0
+            docker run --rm --platform linux/amd64 -e HOME=/tmp \
+              -v "$PWD/agentty-linux-x86_64":/agentty:ro "$img" \
+              /agentty rag-eval /etc/os-release || rc=$?
+            if [ "$rc" != 2 ]; then echo "FATAL: exception path broken on $img (rc=$rc)"; exit 1; fi
+            echo "  exceptions OK"
           done
       - name: Upload to release + stash for packaging
         run: gh release upload "$TAG" agentty-linux-x86_64 --clobber
@@ -333,6 +341,12 @@ jobs:
               "$expected"*) echo "  OK" ;;
               *) echo "FATAL: binary did not run on $img (got '$out', want '$expected*')"; exit 1 ;;
             esac
+            rc=0
+            docker run --rm -e HOME=/tmp \
+              -v "$PWD/agentty-linux-aarch64":/agentty:ro "$img" \
+              /agentty rag-eval /etc/os-release || rc=$?
+            if [ "$rc" != 2 ]; then echo "FATAL: exception path broken on $img (rc=$rc)"; exit 1; fi
+            echo "  exceptions OK"
           done
       - name: Upload to release + stash for packaging
         run: gh release upload "$TAG" agentty-linux-aarch64 aarch64.diag.txt --clobber
@@ -430,6 +444,12 @@ jobs:
               "$expected"*) echo "  OK" ;;
               *) echo "FATAL: binary did not run on $img (got '$out', want '$expected*')"; exit 1 ;;
             esac
+            rc=0
+            docker run --rm --platform linux/386 -e HOME=/tmp \
+              -v "$PWD/agentty-linux-i686":/agentty:ro "$img" \
+              /agentty rag-eval /etc/os-release || rc=$?
+            if [ "$rc" != 2 ]; then echo "FATAL: exception path broken on $img (rc=$rc)"; exit 1; fi
+            echo "  exceptions OK"
           done
       - name: Upload to release
         run: gh release upload "$TAG" agentty-linux-i686 --clobber

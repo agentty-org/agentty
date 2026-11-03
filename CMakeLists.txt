@@ -591,6 +591,13 @@ if(AGENTTY_STANDALONE AND NOT MSVC)
                 # (clang says so: -Wunused-command-line-argument).
                 target_compile_options(agentty PRIVATE -fno-pie)
                 target_link_options(agentty PRIVATE -static -no-pie)
+                # crtbeginT.o registers every FDE with libgcc before main
+                # (~0.5 ms, half of `--version`). The unwinder finds FDEs
+                # through PT_GNU_EH_FRAME anyway, so make that a no-op.
+                target_sources(agentty PRIVATE src/runtime/static_eh.cpp)
+                target_link_options(agentty PRIVATE -Wl,--eh-frame-hdr
+                    -Wl,--defsym=__register_frame_info=agentty_skip_frame_registration
+                    -Wl,--defsym=__deregister_frame_info=agentty_skip_frame_registration)
             endif()
             # musl's default new-thread stack is 128 KiB, vs glibc's 8 MiB.
             # OpenSSL's SSL_connect (cert-chain verification) plus
