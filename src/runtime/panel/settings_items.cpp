@@ -144,8 +144,8 @@ std::vector<Item> general(const Model& m) {
         Item i;
         i.primary   = "Appearance";
         i.secondary = m.d.ui().theme.empty()
-            ? "native \xc2\xb7 theme, density, motion"
-            : (m.d.ui().theme + " \xc2\xb7 theme, density, motion");
+            ? "native \xc2\xb7 theme, density, motion, scrollback"
+            : (m.d.ui().theme + " \xc2\xb7 theme, density, motion, scrollback");
         i.hint      = "Enter: configure";
         i.action    = Action::OpenAppearance;
         out.push_back(std::move(i));

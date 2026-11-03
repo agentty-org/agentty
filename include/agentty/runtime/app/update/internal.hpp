@@ -272,10 +272,9 @@ void clear_frozen(Model& m);
 // call (SIZE_MAX = at the live prefix). A capped replay only builds what
 // it keeps. Same output as build_history_blocks when concatenated.
 [[nodiscard]] maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor);
-// The replay's (max rows, max bytes), from Model::Env (terminal-aware).
-[[nodiscard]] inline std::pair<int, std::size_t> scrollback_replay_limits(const Model& m) {
-    return {m.env.replay_max_rows, m.env.replay_max_bytes};
-}
+// The replay's (max rows, max bytes): AGENTTY_REPLAY_ROWS if set, else the
+// Scrollback setting, never past what the terminal keeps (tmux reports it).
+[[nodiscard]] std::pair<int, std::size_t> scrollback_replay_limits(const Model& m);
 
 // restyle_sealed_turns: re-publish the theme, drop built colours, and
 // rebuild the frozen prefix so EVERYTHING ON SCREEN carries the new

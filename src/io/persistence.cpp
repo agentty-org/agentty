@@ -2983,6 +2983,9 @@ store::Settings load_settings_from_disk() {
             s.ui.polarity      = en("polarity",   ui_prefs::Polarity::Auto);
             s.ui.density       = en("density",    ui_prefs::Density::Normal);
             s.ui.motion        = en("motion",     ui_prefs::Motion::Full);
+            s.ui.scrollback    = en("scrollback", ui_prefs::Scrollback::Small);
+            if (static_cast<int>(s.ui.scrollback) > static_cast<int>(ui_prefs::Scrollback::Full))
+                s.ui.scrollback = ui_prefs::Scrollback::Small;
             s.ui.tool_output   = en("tool_output",ui_prefs::ToolOutput::Preview);
             s.ui.thinking      = en("thinking",   ui_prefs::Thinking::Collapsed);
             s.ui.timestamps    = en("timestamps", ui_prefs::Timestamps::Off);
@@ -3422,6 +3425,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         u["polarity"]      = static_cast<int>(s.ui.polarity);
         u["density"]       = static_cast<int>(s.ui.density);
         u["motion"]        = static_cast<int>(s.ui.motion);
+        u["scrollback"]    = static_cast<int>(s.ui.scrollback);
         u["tool_output"]   = static_cast<int>(s.ui.tool_output);
         u["thinking"]      = static_cast<int>(s.ui.thinking);
         u["timestamps"]    = static_cast<int>(s.ui.timestamps);

@@ -31,6 +31,7 @@
 #endif
 
 #include <cstddef>
+#include <cstdlib>
 #include <optional>
 
 namespace agentty {
@@ -42,6 +43,18 @@ inline void release_to_kernel() noexcept {
     ::malloc_trim(0);
 #else
     // No-op on musl / macOS / Windows.
+#endif
+}
+
+// Call once at startup. mimalloc keeps freed pages for 10 ms before giving
+// them back, and pages freed on a worker thread wait for that thread to
+// allocate again, so a burst of work (a long thread's scrollback replay)
+// stayed resident. Giving them back at once measured no slower per frame.
+// MIMALLOC_PURGE_DELAY still overrides it.
+inline void tune_allocator() noexcept {
+#if defined(AGENTTY_USE_MIMALLOC)
+    if (!std::getenv("MIMALLOC_PURGE_DELAY"))
+        mi_option_set(mi_option_purge_delay, 0);
 #endif
 }
 

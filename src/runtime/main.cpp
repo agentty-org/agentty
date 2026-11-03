@@ -79,6 +79,7 @@
 #include <maya/host/run.hpp>   // maya::run: the jaal host
 #include <maya/platform/io.hpp>   // query_terminal_size (sandbox banner)
 #include "agentty/runtime/app/host.hpp"   // agentty::app::Host
+#include "agentty/runtime/mem.hpp"        // tune_allocator
 
 #include "agentty/acp/server.hpp"
 #include "agentty/version.hpp"
@@ -2600,6 +2601,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
 // capability from here, from a job/task entry, or from a lock body.
 // (lint: cap_roots lists this file.)
 int main(int argc, char** argv) {
+    agentty::tune_allocator();
     const int rc = maya::thread_root(
         [&](const maya::unlocked& cap) { return run_main(argc, argv, cap); });
     // run_main's teardown is done. If a bounded shutdown gave up on a thread

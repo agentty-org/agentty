@@ -239,3 +239,24 @@ TEST_CASE("settings: a web search env override is never written to settings.json
     CHECK(ps::load_settings(::agentty::IoAccess::grant()).web_search.count == 10);   // gone with the export
     fs::remove_all(root);
 }
+
+TEST_CASE("settings: the scrollback level survives a restart") {
+    const auto root = scratch("scrollback");
+    use_store(root);
+    CHECK(ps::load_settings(::agentty::IoAccess::grant()).ui.scrollback
+          == agentty::ui_prefs::Scrollback::Small);   // the default
+    {
+        auto s = ps::load_settings(::agentty::IoAccess::grant());
+        s.ui.scrollback = agentty::ui_prefs::Scrollback::Tiny;
+        ps::save_settings(::agentty::IoAccess::grant(), agtest::cap(), s);
+    }
+    CHECK(ps::load_settings(::agentty::IoAccess::grant()).ui.scrollback
+          == agentty::ui_prefs::Scrollback::Tiny);
+    // A value from a newer build reads as the default, not as garbage.
+    auto doc = read_raw(root);
+    doc["ui"]["scrollback"] = 9;
+    other_instance_writes(root, doc);
+    CHECK(ps::load_settings(::agentty::IoAccess::grant()).ui.scrollback
+          == agentty::ui_prefs::Scrollback::Small);
+    fs::remove_all(root);
+}

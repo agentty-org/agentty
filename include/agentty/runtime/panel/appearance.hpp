@@ -44,6 +44,7 @@ inline constexpr std::string_view kApCompact    = "compact_turns";
 inline constexpr std::string_view kApThreadPeek = "thread_preview";
 inline constexpr std::string_view kApForeign    = "foreign_sessions";
 inline constexpr std::string_view kApMotion     = "motion";
+inline constexpr std::string_view kApScrollback = "scrollback";
 inline constexpr std::string_view kApSyntax     = "syntax";
 inline constexpr std::string_view kApToolOutput = "tool_output";
 inline constexpr std::string_view kApThinking   = "thinking";

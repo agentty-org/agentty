@@ -929,6 +929,20 @@ std::vector<maya::ReplayBlock> build_history_blocks(const Model& m) {
     return out;
 }
 
+// Rows a replay may print: AGENTTY_REPLAY_ROWS if set, else the Scrollback
+// setting, and never more than tmux keeps.
+std::pair<int, std::size_t> scrollback_replay_limits(const Model& m) {
+    constexpr int kAll = std::numeric_limits<int>::max();
+    int rows = m.env.replay_rows_override >= 0
+        ? m.env.replay_rows_override
+        : ui_prefs::scrollback_rows(m.d.ui().scrollback);
+    if (m.env.replay_rows_override < 0 && rows == 0) rows = kAll;   // Full
+    // Rows past what the terminal keeps are dropped by it anyway.
+    if (m.env.terminal_history_rows > 0 && rows > m.env.terminal_history_rows)
+        rows = m.env.terminal_history_rows;
+    return {rows, m.env.replay_max_bytes};
+}
+
 // The same history, pulled newest-first a chunk at a time, so a replay with
 // a row cap only builds what it shows. `cursor` is the message index the
 // previous chunk started at (SIZE_MAX = start at the live prefix). Each
@@ -1074,6 +1088,9 @@ maya::ScrollbackReplay::Chunk history_chunk(const Model& m, std::size_t cursor) 
     for (std::size_t k : settled_here)
         m.ui.view_cache.drop(m.d.current.id, msgs[k].id);
     out.next = lo;
+    // Kept for the next replay (a resize back, a thread switch back) so it
+    // only re-lays out. Only the current thread's chunks are kept: the
+    // others are built again on demand, which is the cold path anyway.
     chunks[lo] = Model::UI::HistoryChunk{key, out.blocks, out.next};
     return out;
 }

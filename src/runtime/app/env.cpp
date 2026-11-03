@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include <maya/terminal/ansi.hpp>
+#include <maya/terminal/tmux.hpp>
 
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/user_root.hpp"
@@ -77,19 +78,21 @@ bool detect_remote() noexcept {
     return false;
 }
 
-// Scrollback replay has NO cap by default: it prints the whole conversation
-// and the terminal keeps however much its own scrollback setting allows.
-// No terminal reports that setting, so any number here would be a guess.
-// AGENTTY_REPLAY_ROWS=0 turns replay off; a positive value limits it.
+// How much history a replay prints is the Scrollback setting
+// (scrollback_replay_limits). These are the launch facts around it:
+// AGENTTY_REPLAY_ROWS (0 = replay off, N = exactly N rows) beats the
+// setting, and tmux's history-limit caps it, since tmux drops anything
+// past that anyway. Other terminals don't report theirs.
 void read_replay_caps(Model::Env& e) noexcept {
-    e.replay_max_rows  = std::numeric_limits<int>::max();
+    e.replay_rows_override = -1;
     e.replay_max_bytes = std::numeric_limits<std::size_t>::max();
     if (const char* v = std::getenv("AGENTTY_REPLAY_ROWS"); v && *v) {
         char* end = nullptr;
         const long n = std::strtol(v, &end, 10);
         if (end && *end == '\0' && n >= 0)
-            e.replay_max_rows = static_cast<int>(std::min<long>(n, std::numeric_limits<int>::max()));
+            e.replay_rows_override = static_cast<int>(std::min<long>(n, std::numeric_limits<int>::max()));
     }
+    e.terminal_history_rows = maya::tmux::history_limit();
 }
 
 }  // namespace

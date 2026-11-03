@@ -252,6 +252,20 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
         enum_choice(b, kApMotion, "Animation", kMot, p.motion,
                     "reduce or stop movement", kMotBlurbs);
     }
+    {
+        static constexpr std::array kScroll = {
+            up::Scrollback::Tiny, up::Scrollback::Small, up::Scrollback::Big,
+            up::Scrollback::Full,
+        };
+        static constexpr std::array<const char*, 4> kScrollBlurbs = {
+            "last ~1k rows \xc2\xb7 lightest",
+            "last ~5k rows",
+            "last ~20k rows",
+            "the whole thread \xc2\xb7 most memory",
+        };
+        enum_choice(b, kApScrollback, "Scrollback", kScroll, p.scrollback,
+                    "how much history is redrawn on open and resize", kScrollBlurbs);
+    }
 
     // ── Content ─────────────────────────────────────────────────────
     b.header(std::string{i18n::t("appearance.content")});

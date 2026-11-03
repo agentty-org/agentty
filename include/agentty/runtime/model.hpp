@@ -754,7 +754,7 @@ struct Model {
             ThreadId id;
             std::unordered_map<std::size_t, HistoryChunk> chunks;
         };
-        static constexpr std::size_t kHistoryThreads = 4;
+        static constexpr std::size_t kHistoryThreads = 1;
         mutable std::vector<ThreadHistory> history;   // most recent first
         // Run starts of the current thread + the turn number at each, so
         // every replay chunk finds its range in O(log n) instead of walking
@@ -977,11 +977,13 @@ struct Model {
         // Running under a cooperating editor host (AGENTTY_HOST=emacs or
         // INSIDE_EMACS with vterm): emit file-event OSCs.
         bool host_integration     = false;
-        // Scrollback replay limits (maya/render/scrollback_replay.hpp). No
-        // cap by default: the whole conversation is printed back and the
-        // terminal keeps what its own scrollback setting allows (no terminal
-        // reports that setting). AGENTTY_REPLAY_ROWS=0 turns replay off.
-        int         replay_max_rows  = std::numeric_limits<int>::max();
+        // Scrollback replay limits (maya/render/scrollback_replay.hpp). The
+        // Scrollback setting picks how many rows; these are launch facts
+        // around it. replay_rows_override: AGENTTY_REPLAY_ROWS (-1 = unset,
+        // 0 = replay off). terminal_history_rows: what the terminal keeps,
+        // when it says (tmux's history-limit); 0 = unknown.
+        int         replay_rows_override = -1;
+        int         terminal_history_rows = 0;
         std::size_t replay_max_bytes = std::numeric_limits<std::size_t>::max();
         // Colour tier and background polarity the terminal reports (TERM,
         // COLORTERM, COLORFGBG, NO_COLOR). "auto" appearance resolves here.
