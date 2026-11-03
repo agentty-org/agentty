@@ -148,6 +148,14 @@ Cmd submit_message(Model& m) {
     // lost. (Hosted providers always have a model id, so this only bites the
     // local-preset-before-models-loaded window it's meant to cover.)
     if (m.d.model_id.value.empty()) {
+        // When the model list failed, that failure is the reason there's no
+        // model (a rejected key, most often); say it, not "pick a model".
+        if (!m.s.models_loading && !m.s.models_error.empty()) {
+            m.s.status = provider::provider_display_name(m.d.selection) + ": "
+                       + m.s.models_error + " \xc2\xb7 ^P to fix";
+            m.s.status_until = m.now + std::chrono::seconds{8};
+            return Cmd::none();
+        }
         m.s.status = m.s.models_loading
             ? "loading models\xe2\x80\xa6 pick one (^/) before sending"
             : "no model selected \xe2\x80\x94 open the model picker (^/) first";

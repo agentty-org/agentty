@@ -1293,6 +1293,11 @@ provider::StreamResult run_one_completion(Thread& thread,
     // fan-out of parallel subagents (each turn otherwise billed at the full
     // ceiling). The wrap-up nudge already forces a tight final report.
     req.max_tokens    = 8192;
+    // A small served window (vLLM 4096) 400s a request whose max_tokens
+    // alone fills it; same cap as the main loop.
+    if (req.context_window > 0)
+        req.max_tokens = std::min(req.max_tokens,
+                                  std::max(256, req.context_window / 4));
     req.messages      = thread.messages;
     // Same preflight the main loop runs. The subagent assembles its own
     // request — its own thread, its own tool advertisement, its own

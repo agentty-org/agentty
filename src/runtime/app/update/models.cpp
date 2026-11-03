@@ -1229,7 +1229,22 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
             if (exact || m.d.available_models.empty()) {
                 // Offered as-is (or nothing to compare against): leave it.
             } else if (want.empty()) {
-                adopt(m.d.available_models.front().id);
+                // No model chosen yet for this host. A raw /v1/models dump
+                // starts with whatever sorts first (SovereignEG: a 4k-window
+                // Qwen3-0.6B, then embedding models), so pick the first one
+                // an agent can actually drive: a chat model with room for a
+                // system prompt and tools. Fall back to the first entry.
+                const ModelInfo* pick = nullptr;
+                for (int min_ctx : {32000, 8192, 0}) {
+                    for (const auto& mi : m.d.available_models) {
+                        if (!is_dispatchable_model(mi.id.value)) continue;
+                        if (mi.context_window > 0 && mi.context_window < min_ctx) continue;
+                        pick = &mi;
+                        break;
+                    }
+                    if (pick) break;
+                }
+                adopt(pick ? pick->id : m.d.available_models.front().id);
             } else if (same_model) {
                 // Offered under another spelling or window: switch only when
                 // the one we hold is a `[1m]` this account can't use. A plain

@@ -1162,6 +1162,13 @@ Cmd launch_stream(Model& m) {
         // truncated as "arguments look incomplete". Raise it to the model's
         // real output capacity. See max_output_tokens_for in catalog.hpp.
         req.max_tokens    = max_output_tokens_for(req.model);
+        // A small served window (vLLM max_model_len 4096) can't take a 16k
+        // output budget: the server 400s before it reads the prompt. Leave
+        // most of the window for the prompt; the transport trims history to
+        // fit, and a quarter is still a usable reply.
+        if (model_context_window > 0 && req.model == picked_model)
+            req.max_tokens = std::min(req.max_tokens,
+                                      std::max(256, model_context_window / 4));
         // Model's real context window (probed from Ollama /api/show; 0 for
         // hosted models). The Ollama transport turns this into options.num_ctx
         // so long agent conversations aren't truncated to Ollama's tiny default.

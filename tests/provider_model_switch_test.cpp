@@ -1125,6 +1125,51 @@ TEST_CASE("a host rejection learned by the transport is saved when the turn ends
     agentty::set_rejected_fields({});
 }
 
+
+TEST_CASE("no model yet: the default pick is a usable chat model, not the first row") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    const std::string host = "https://backend.example.com/v1";
+    g_settings = store::Settings{};
+    g_settings.provider_keys[host] = "sk-good";
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection(host));
+    Model m = seeded_model();
+    m.d.model_id = ModelId{};
+
+    ModelsLoaded ml;
+    ml.provider_id = host;
+    auto row = [&](const char* id, int ctx) {
+        ModelInfo x = mi(id, host.c_str());
+        x.context_window = ctx;
+        return x;
+    };
+    // SovereignEG's real order: a 4k toy model and embedders sort first.
+    ml.models = {row("Qwen/Qwen3-0.6B", 4096), row("all-MiniLM-L6-v2", 512),
+                 row("BAAI/bge-reranker-base", 512),
+                 row("SovereignEG/Qwen3.8-27B-FP8", 131072)};
+    auto [m1, c1] = app::update(std::move(m), Msg{std::move(ml)});
+    apply_fx(c1);
+    CHECK(m1.d.model_id.value == "SovereignEG/Qwen3.8-27B-FP8");
+}
+
+TEST_CASE("sending with no model after a failed list says why") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    const std::string host = "https://backend.example.com/v1";
+    g_settings = store::Settings{};
+    g_settings.provider_keys[host] = "sk-wrong";
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection(host));
+    Model m = seeded_model();
+    m.d.model_id = ModelId{};
+    m.s.models_error = "HTTP 401: Invalid API key";
+    m.ui.composer.text = "Hi";
+    m.ui.composer.cursor = 2;
+    auto [m1, c1] = app::update(std::move(m), Msg{ComposerEnter{}});
+    CHECK(m1.s.status.find("HTTP 401: Invalid API key") != std::string::npos);
+    CHECK(m1.ui.composer.text == "Hi");   // nothing lost
+    CHECK(m1.s.is_idle());
+}
+
 // OpenModels refreshes the ACTIVE provider immediately and defers the
 // OTHER providers (FusedRefreshOthers) so the active result isn't queued
 // behind slower providers. The deferred pass marks the others Loading.

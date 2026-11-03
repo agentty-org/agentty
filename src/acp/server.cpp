@@ -2873,6 +2873,10 @@ StopReason AgentServer::stream_completion(Io io, const Cap& cap, const std::stri
     // transport then applies its safe agent-sized num_ctx default, still 4x
     // Ollama's truncating floor.
     req.max_tokens    = max_output_tokens_for(req.model);
+    // A small served window (vLLM 4096) 400s a request whose max_tokens
+    // alone fills it; the catalog knows the window when /v1/models said it.
+    if (const int win = catalog_context_window_for(req.model); win > 0)
+        req.max_tokens = std::min(req.max_tokens, std::max(256, win / 4));
     // Product-level prompt policy is shared with the TUI request builder:
     // hosted models get the complete agent/tool/RAG contract, while constrained
     // local endpoints get the compact profile.
