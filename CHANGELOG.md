@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.43] - 2026-11-03
+
 ### Added
 - **Appearance → Scrollback**: how much history is redrawn into the
   terminal when a thread opens or the window resizes. *auto* (the default)
