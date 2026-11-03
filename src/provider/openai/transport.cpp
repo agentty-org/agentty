@@ -2948,13 +2948,16 @@ json build_request_body(const Request& req) {
     // thinks by default, so say it, in the form this model takes:
     //   OpenRouter            reasoning.enabled=false (it maps per model)
     //   effort "none" models  reasoning_effort: "none" (gpt-5.1+, Mistral)
-    //   toggle models         chat_template_kwargs.enable_thinking=false
-    //                         (vLLM, SGLang, llama.cpp read it)
-    // Unknown models get the template switch only on custom hosts, where
-    // it is ignored if the template doesn't use it; hosted presets 400 on
-    // unknown fields. Models that can't stop reasoning get nothing: the
-    // picker never offers them off. A host that rejects a field learns it
-    // once (parse_rejected_field) and the turn is resent without it.
+    //   custom hosts          both reasoning_effort: "none" and
+    //                         chat_template_kwargs.enable_thinking=false.
+    //                         Gateways differ in which one they read:
+    //                         SovereignEG's vLLM honours only the first
+    //                         (0 reasoning tokens vs 33 with the second),
+    //                         a bare llama.cpp only the second.
+    // Hosted presets get only fields they're known to take (unknown ones
+    // 400). Models that can't stop reasoning get nothing: the picker never
+    // offers them off. A host that rejects a field learns it once
+    // (parse_rejected_field / parse_effort_rejection) and the turn is resent.
     using agentty::ReasoningOff;
     const auto off_how = static_cast<ReasoningOff>(req.reasoning_off);
     const bool custom_host = provider::preset_for(req.endpoint.label) == nullptr;
@@ -2964,12 +2967,14 @@ json build_request_body(const Request& req) {
             if (allowed(provider::OptionalField::Reasoning)
                 && (off_how == ReasoningOff::EffortNone || off_how == ReasoningOff::Toggle))
                 body["reasoning"] = {{"enabled", false}};
+        } else if (custom_host) {
+            if (off_how != ReasoningOff::TemplateOnly)
+                body["reasoning_effort"] = "none";
+            if (allowed(provider::OptionalField::ChatTemplateKwargs))
+                body["chat_template_kwargs"] = {{"enable_thinking", false},
+                                                {"thinking", false}};
         } else if (off_how == ReasoningOff::EffortNone) {
             body["reasoning_effort"] = "none";
-        } else if (custom_host
-                   && allowed(provider::OptionalField::ChatTemplateKwargs)) {
-            body["chat_template_kwargs"] = {{"enable_thinking", false},
-                                            {"thinking", false}};
         }
     }
 

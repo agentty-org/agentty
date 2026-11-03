@@ -211,7 +211,7 @@ bool valid_resume(std::string_view s) {
 }
 
 bool valid_effort(std::string_view s) {
-    for (auto e : {"low", "medium", "high", "xhigh", "max", "auto"})
+    for (auto e : {"off", "none", "low", "medium", "high", "xhigh", "max", "auto"})
         if (s == e) return true;
     return false;
 }

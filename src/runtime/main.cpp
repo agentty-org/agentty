@@ -2222,7 +2222,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             ro.events = true;
         if (!args.cli_run_effort.empty()) {
             if (!run_cli::valid_effort(args.cli_run_effort)) {
-                std::fprintf(stderr, "agentty run: --effort wants low, medium, high, xhigh, max or auto, got '%s'\n",
+                std::fprintf(stderr, "agentty run: --effort wants off, low, medium, high, xhigh, max or auto, got '%s'\n",
                              args.cli_run_effort.c_str());
                 return 2;
             }

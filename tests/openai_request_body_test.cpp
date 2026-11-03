@@ -343,22 +343,33 @@ namespace {
 constexpr std::uint8_t off(agentty::ReasoningOff r) { return static_cast<std::uint8_t>(r); }
 }
 
-TEST_CASE("body: off on a custom host flips the chat template switch") {
+TEST_CASE("body: off on a custom host sends both off fields") {
+    // SovereignEG's vLLM honours only reasoning_effort:"none" (measured:
+    // 0 reasoning tokens vs 33 with the template switch); llama.cpp only
+    // the template switch. A custom host gets both.
     auto req = base(oa::Endpoint::from_spec("https://backend.sovereigneg.com/v1"));
     req.model         = "Qwen3.8-27B-FP8";
     req.no_reasoning  = true;
     req.reasoning_off = off(agentty::ReasoningOff::Toggle);
     const json b = oa::build_request_body(req);
+    CHECK(b["reasoning_effort"] == "none");
     CHECK(b["chat_template_kwargs"]["enable_thinking"] == false);
-    CHECK(!b.contains("reasoning_effort"));
 
-    // Unknown model on a custom host: same switch (servers ignore it).
+    // Unknown model on a custom host: same.
     req.reasoning_off = off(agentty::ReasoningOff::Unknown);
-    CHECK(oa::build_request_body(req)["chat_template_kwargs"]["enable_thinking"] == false);
+    CHECK(oa::build_request_body(req)["reasoning_effort"] == "none");
+
+    // Learned that this host rejects "none": only the template switch.
+    req.reasoning_off = off(agentty::ReasoningOff::TemplateOnly);
+    const json t = oa::build_request_body(req);
+    CHECK(!t.contains("reasoning_effort"));
+    CHECK(t["chat_template_kwargs"]["enable_thinking"] == false);
 
     // Not off (auto with no ladder): nothing sent.
     req.no_reasoning = false;
-    CHECK(!oa::build_request_body(req).contains("chat_template_kwargs"));
+    const json n = oa::build_request_body(req);
+    CHECK(!n.contains("chat_template_kwargs"));
+    CHECK(!n.contains("reasoning_effort"));
 }
 
 TEST_CASE("body: off on a model that takes effort none sends none") {
@@ -407,4 +418,11 @@ TEST_CASE("body: a chosen effort is never overridden by off") {
     const json b = oa::build_request_body(req);
     CHECK(b["reasoning_effort"] == "high");
     CHECK(!b.contains("chat_template_kwargs"));
+}
+
+TEST_CASE("body: the old quick-call switch still works on a custom host") {
+    auto req = base(oa::Endpoint::from_spec("https://pod-8888.proxy.runpod.net/v1"));
+    req.quick = true;
+    const json b = oa::build_request_body(req);
+    CHECK(b["chat_template_kwargs"]["enable_thinking"] == false);
 }
