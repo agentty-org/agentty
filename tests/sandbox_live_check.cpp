@@ -198,6 +198,47 @@ int main() {
                "EOF", out);
         expect(out.find("tcp80 denied") != std::string::npos, "an unlisted port is refused");
         expect(out.find("bind denied") != std::string::npos, "listening is refused");
+        // UDP in this mode. Ports SHARES the host netns (a port rule is about
+        // reaching real hosts), and landlock's port rules cover TCP only --
+        // UDP is a separate access right, added in abi 10, which claybin does
+        // not handle. So this is the one posture where a guest can still send
+        // a datagram anywhere, and the check records which way it goes rather
+        // than asserting a wall that is not there.
+        out.clear();
+        run(p,
+            "python3 -c \"import socket\n"
+            "for label, addr in (('internet', ('1.1.1.1', 53)), ('lan', ('192.168.1.1', 53))):\n"
+            "    try:\n"
+            "        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)\n"
+            "        s.sendto(b'x', addr); print('udp', label, 'SENT')\n"
+            "    except Exception as e: print('udp', label, type(e).__name__)\" 2>&1",
+            out);
+        std::printf("  udp under Ports: %s", out.c_str());
+        // Not an expect() for the ABI: on a host below abi 10 landlock cannot
+        // model UDP and there is nothing to assert. Where it can, this is a
+        // real wall and the gap was real -- measured SENT before the fix.
+        if (out.find("PermissionError") != std::string::npos) {
+            expect(out.find("udp internet PermissionError") != std::string::npos
+                       && out.find("udp lan PermissionError") != std::string::npos,
+                   "UDP to an unlisted port is refused under Ports (abi 10)");
+            // And the other half of the trade: a port the caller ALLOWED has
+            // to work over UDP too, or allowing 53 breaks DNS. This is the
+            // regression the fix could have caused.
+            auto with_dns = base_posture();
+            with_dns.net_mode = 2;
+            with_dns.allow_ports = {53};
+            out.clear();
+            run(with_dns,
+                "python3 -c \"import socket\n"
+                "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)\n"
+                "try:\n"
+                "    s.sendto(b'x', ('1.1.1.1', 53)); print('dns53 SENT')\n"
+                "except Exception as e: print('dns53', type(e).__name__)\" 2>&1",
+                out);
+            std::printf("  udp on an allowed port: %s", out.c_str());
+            expect(out.find("dns53 SENT") != std::string::npos,
+                   "UDP on an ALLOWED port still works (DNS keeps resolving)");
+        }
     }
 
     // ── Strict still runs a shell, and W^X applies with the filter off ──
