@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.46] - 2026-11-04
+
 ### Added
 - **Allowed hosts.** Settings → Sandbox → Network → Allowed hosts limits
   sandboxed commands to the sites you list: `github.com` exactly, or
