@@ -941,7 +941,7 @@ TEST_CASE("sandbox list: entries are trimmed") {
 TEST_CASE("sandbox list: a port list validates on readback") {
     auto ed = pn::build_sandbox_list(pn::kSbPorts, "Allowed ports", "h",
                                      {"443", "80"}, /*numeric=*/true);
-    CHECK(ed.numeric);
+    CHECK(ed.numeric());
     // TEXT rows, even for ports. maya's Number control has no caret field at
     // all, so a list you type into cannot use one -- "I don't see a caret in
     // the port list" was exactly that. The digit rule moves to readback.
@@ -987,7 +987,7 @@ TEST_CASE("sandbox list: opening one from the pane carries the current values") 
     const auto* ed = m2.ui.panel.get<pn::SandboxList>();
     REQUIRE(ed != nullptr);
     CHECK(ed->pane.row_id == pn::kSbReadPaths);
-    CHECK_FALSE(ed->pane.numeric);
+    CHECK_FALSE(ed->pane.numeric());
     const std::vector<std::string> want{"/opt/sdk"};
     CHECK(pn::read_sandbox_list(ed->pane) == want);
 }
@@ -1030,6 +1030,109 @@ TEST_CASE("sandbox list: closing commits back into the pane") {
     // applying were two different things, and only applying had to wait for a
     // restart (see the autosave note in the reducer).
     CHECK(m3.d.persisted.sandbox.read_paths == want);
+}
+
+// ── Allowed hosts ────────────────────────────────────────────────────────────
+
+TEST_CASE("sandbox hosts: the row exists and says what empty means") {
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    const auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+    const auto* f = [&]() -> const form::Field* {
+        for (const auto& x : form.fields) if (x.id == pn::kSbHosts) return &x;
+        return nullptr;
+    }();
+    REQUIRE(f != nullptr);
+    const auto& pick = std::get<form::field::Pick>(f->value);
+    // empty is not "none": it is the widest setting, and the row must say so
+    // rather than reading like nothing is reachable.
+    CHECK(pick.label.empty());
+    CHECK(pick.placeholder.find("any public host") != std::string::npos);
+}
+
+TEST_CASE("sandbox hosts: readback canonicalises, drops junk, and dedupes") {
+    using K = pn::SandboxListPane::ListKind;
+    auto ed = pn::build_sandbox_list(pn::kSbHosts, "t", "h",
+        {"https://GitHub.com/1ay1", "github.com", ".npmjs.org", "140.82.112.3",
+         "*", "  pypi.org:443 "},
+        K::Host);
+    CHECK(ed.kind == K::Host);
+    CHECK_FALSE(ed.numeric());
+    // the URL and the bare name are ONE host; the IP and "*" are dropped.
+    const std::vector<std::string> want{"github.com", "*.npmjs.org", "pypi.org"};
+    CHECK(pn::read_sandbox_list(ed) == want);
+}
+
+TEST_CASE("sandbox hosts: every entry says what will happen to it") {
+    using K = pn::SandboxListPane::ListKind;
+    auto ed = pn::build_sandbox_list(pn::kSbHosts, "t", "h",
+        {"https://github.com/x", "10.0.0.1", "*.github.com", "github.com"}, K::Host);
+    pn::renumber_sandbox_list(ed);
+    const auto& f = ed.form.fields;
+    // rewritten -> told what it is saved AS
+    CHECK(f[0].help.find("saved as github.com") != std::string::npos);
+    // rejected -> told WHY and that it is dropped
+    CHECK(f[1].error.find("IP address") != std::string::npos);
+    CHECK(f[1].error.find("dropped on close") != std::string::npos);
+    // wildcard -> reminded of the apex rule, naming the apex
+    CHECK(f[2].help.find("add github.com too") != std::string::npos);
+    // already canonical -> silent
+    CHECK(f[3].help.empty());
+    // the add row teaches both forms
+    CHECK(f.back().label == "+");
+    CHECK(f.back().help.find("*.github.com") != std::string::npos);
+}
+
+TEST_CASE("sandbox hosts: open, add, close round-trips to disk") {
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    install(cfg);
+
+    Model m = opened();
+    auto [m2, _] = app::update(std::move(m),
+                               Msg{SandboxEditList{std::string{pn::kSbHosts}}});
+    {
+        auto* ed = m2.ui.panel.get<pn::SandboxList>();
+        REQUIRE(ed != nullptr);
+        CHECK(ed->pane.kind == pn::SandboxListPane::ListKind::Host);
+        CHECK(ed->pane.title == "Allowed hosts");
+        std::get<form::field::Text>(ed->pane.form.fields.back().value).value =
+            "https://GitHub.com/";
+    }
+    auto [m3, __] = app::update(std::move(m2), Msg{SandboxListClose{}});
+    const auto* o = m3.ui.panel.get<pn::Sandbox>();
+    REQUIRE(o != nullptr);
+    const std::vector<std::string> want{"github.com"};
+    CHECK(pn::read_sandbox_form(o->pane.form, o->pane.working).allow_hosts == want);
+    CHECK(m3.d.persisted.sandbox.allow_hosts == want);
+}
+
+TEST_CASE("sandbox hosts: settings that quietly mean something else are flagged") {
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    auto err_of = [&](const sandbox_cfg::Config& c) {
+        auto form = pn::build_sandbox_form(c, facts_for(c));
+        pn::annotate_sandbox_form(form, pn::preview_sandbox(c), c, pn::EngineStatus::InForce);
+        const int r = row_of(form, pn::kSbHosts);
+        return r < 0 ? std::string{"<no row>"} : form.fields[std::size_t(r)].error;
+    };
+    // only wildcards: the sites themselves are unreachable.
+    cfg.allow_hosts = {"*.github.com"};
+    CHECK(err_of(cfg).find("the sites themselves") != std::string::npos);
+    // a hand-edited junk entry is named, not silently ignored.
+    cfg.allow_hosts = {"github.com", "not a host"};
+    CHECK(err_of(cfg).find("`not a host`") != std::string::npos);
+    // a list under a mode that does not use it.
+    cfg.allow_hosts = {"github.com"};
+    cfg.net_mode = sandbox_cfg::NetMode::Ports;
+    CHECK(err_of(cfg).find("only enforced while Access is full") != std::string::npos);
+    // and the healthy case is quiet.
+    cfg.net_mode = sandbox_cfg::NetMode::Full;
+    cfg.allow_hosts = {"github.com", "*.github.com"};
+    CHECK(err_of(cfg).empty());
 }
 
 TEST_CASE("sandbox list: typing builds the entry in order") {
@@ -1279,7 +1382,7 @@ TEST_CASE("sandbox pane: adding a port switches Access to `ports`") {
     {
         auto* ed = m.ui.panel.get<pn::SandboxList>();
         REQUIRE(ed != nullptr);
-        REQUIRE(ed->pane.numeric);
+        REQUIRE(ed->pane.numeric());
         std::get<form::field::Text>(ed->pane.form.fields.back().value).value = "8080";
     }
     auto [m2, __] = app::update(std::move(m), Msg{SandboxListClose{}});
@@ -1778,6 +1881,68 @@ TEST_CASE("sandbox render: the pane paints its rows, values and footer") {
 
     // The list row renders its COUNT rather than a raw path list.
     CHECK(out.find("1 path") != std::string::npos);
+}
+
+// The hosts row and its editor, painted. SB_DUMP=1 prints both so a human
+// can look at them -- the assertions pin what a user must be able to read.
+TEST_CASE("sandbox render: Allowed hosts row and editor read correctly") {
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    install(cfg);
+    // the real labels, as a user sees them (without this the rows paint
+    // their i18n KEYS, which is what an uninitialised catalog falls back to).
+    REQUIRE(agentty::i18n::init("en", ""));
+    auto paint = [](const form::Form& f, int w) {
+        return maya::render_to_string(
+            maya::Panel{agentty::ui::form_config(f, maya::Color::blue(), nullptr, 0, w)}.build(), w);
+    };
+    auto widest = [](const std::string& out) {
+        std::size_t worst = 0, cols = 0;
+        for (char ch : out) {
+            if (ch == '\n') { worst = std::max(worst, cols); cols = 0; continue; }
+            if ((static_cast<unsigned char>(ch) & 0xC0) != 0x80) ++cols;
+        }
+        return std::max(worst, cols);
+    };
+    const bool dump = std::getenv("SB_DUMP") != nullptr;
+
+    // empty: the row must read as WIDE OPEN, not as "none".
+    {
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        pn::annotate_sandbox_form(form, pn::preview_sandbox(cfg), cfg, pn::EngineStatus::InForce);
+        const auto out = paint(form, 100);
+        if (dump) std::printf("\n=== pane, empty list ===\n%s\n", out.c_str());
+        CHECK(out.find("Allowed hosts") != std::string::npos);
+        CHECK(out.find("any public host") != std::string::npos);
+    }
+    // set: a count, and the "via proxy" origin.
+    cfg.allow_hosts = {"github.com", "*.github.com", "registry.npmjs.org"};
+    {
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        pn::annotate_sandbox_form(form, pn::preview_sandbox(cfg), cfg, pn::EngineStatus::InForce);
+        const auto out = paint(form, 100);
+        if (dump) std::printf("\n=== pane, 3 hosts ===\n%s\n", out.c_str());
+        CHECK(out.find("3 hosts") != std::string::npos);
+        CHECK(out.find("via proxy") != std::string::npos);
+    }
+    // the editor, mid-edit, with every kind of hint on screen at once.
+    {
+        auto ed = pn::build_sandbox_list(pn::kSbHosts, "Allowed hosts",
+            "commands may reach ONLY these names \xc2\xb7 empty = any public host",
+            {"github.com", "*.github.com", "https://registry.npmjs.org/pkg", "10.0.0.1"},
+            pn::SandboxListPane::ListKind::Host);
+        pn::renumber_sandbox_list(ed);
+        ed.form.cursor = 2;   // on the pasted URL: its "saved as" note is help
+        for (int w : {60, 100}) {
+            const auto out = paint(ed.form, w);
+            if (dump) std::printf("\n=== editor @%d ===\n%s\n", w, out.c_str());
+            CHECK(out.find("saved as registry.npmjs.org") != std::string::npos);
+            CHECK(out.find("dropped on close") != std::string::npos);
+            // nothing past the frame, at the narrowest width either.
+            CHECK(widest(out) <= static_cast<std::size_t>(w));
+        }
+    }
 }
 
 TEST_CASE("sandbox render: nothing paints past the frame at any width") {

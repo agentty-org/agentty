@@ -253,7 +253,19 @@ namespace {
 
     switch (cfg->net_mode) {
         case sandbox_cfg::NetMode::Full:
-            out += "    network:   allowed\n";
+            if (cfg->allow_hosts.empty()) {
+                out += "    network:   public internet via a sandbox proxy; private, "
+                       "loopback and cloud-metadata addresses are refused\n";
+            } else {
+                // List the names up front, so the model picks a mirror that
+                // is ALLOWED instead of discovering the list one 403 at a time.
+                out += "    network:   ONLY these hosts (via a sandbox proxy): ";
+                for (std::size_t i = 0; i < cfg->allow_hosts.size() && i < 24; ++i)
+                    out += (i ? ", " : "") + cfg->allow_hosts[i];
+                if (cfg->allow_hosts.size() > 24) out += ", \xe2\x80\xa6";
+                out += "\n               (*.x means subdomains of x, not x itself). "
+                       "Any other host or raw IP fails with a proxy/403 error.\n";
+            }
             break;
         case sandbox_cfg::NetMode::None:
             // Worth being blunt: this one breaks the commands an agent reaches
@@ -272,7 +284,8 @@ namespace {
     // sandboxed and still retries, because nothing told it that retrying is
     // the wrong move.
     out += "    If a command fails with a permission or network error, that is "
-           "the sandbox, not a broken tool or a proxy.\n"
+           "the sandbox, not a broken tool (a proxy/tunnel/403 error is the "
+           "sandbox's own proxy).\n"
            "    Do NOT retry it unchanged and do NOT tell the user to check "
            "their firewall. Work inside the workspace, or say plainly which "
            "wall you hit and what you would need.\n";

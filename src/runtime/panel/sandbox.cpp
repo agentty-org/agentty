@@ -10,6 +10,7 @@
 #include "agentty/runtime/panel/sandbox.hpp"
 #include "agentty/runtime/panel/mention.hpp"   // file_source/file_filter, shared with @
 #include "agentty/i18n/i18n.hpp"              // t() — row labels and help
+#include "agentty/tool/util/sandbox_netproxy.hpp"   // normalize_host_entry: one rule, pane and proxy
 
 #include <algorithm>
 #include <string>
@@ -395,6 +396,26 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
     else if (cfg.net_mode == sandbox_cfg::NetMode::None)
         form.fields.back().help = "only used when Access is `ports`";
 
+    // Allowed hosts: the name allowlist for Access = full, enforced by the
+    // sandbox proxy. Live in every mode for the same reason Ports is: a row
+    // you cannot open is a row nobody can fill in. The help line names what
+    // the list does IN THE CURRENT MODE, since that is what the user sees.
+    form.fields.push_back(
+        list_row(kSbHosts, std::string{i18n::t("sandbox.hosts")},
+                 std::string{i18n::t("sandbox.help.hosts")},
+                 cfg.allow_hosts.size(), "host"));
+    if (cfg.allow_hosts.empty())
+        form.fields.back().value = [] {
+            form::field::Pick p;
+            p.placeholder = "any public host \xc2\xb7 Enter to restrict";
+            return p;
+        }();
+    if (cfg.net_mode == sandbox_cfg::NetMode::None)
+        form.fields.back().help = "unused while Access is none \xc2\xb7 nothing is reachable";
+    else if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
+        form.fields.back().help = "unused while Access is ports \xc2\xb7 set Access to full "
+                                  "to filter by name";
+
     // ── Syscalls ─────────────────────────────────────────────────────────
     form.fields.push_back(header("Syscalls"));
     form.fields.push_back(choice(
@@ -587,6 +608,7 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
     cfg.write_paths = base.write_paths;
     cfg.deny_paths  = base.deny_paths;
     cfg.allow_ports = base.allow_ports;
+    cfg.allow_hosts = base.allow_hosts;
 
     cfg.net_mode = static_cast<sandbox_cfg::NetMode>(
         choice_of(kSbNetMode, static_cast<int>(base.net_mode)));
@@ -709,39 +731,69 @@ void renumber_sandbox_list(SandboxListPane& p) {
     for (std::size_t i = 0; i < p.form.fields.size(); ++i) {
         const bool is_add = (i + 1 == p.form.fields.size());
         auto& f = p.form.fields[i];
-        // A port that isn't one is dropped on close, so say so while typing.
-        std::string_view bad;
-        if (p.numeric) {
-            if (const auto* t = std::get_if<form::field::Text>(&f.value)) {
-                const auto& v = t->value;
+        // An entry that isn't one is dropped on close, so say so WHILE typing
+        // -- and for hosts, say what it will be saved AS when that differs
+        // from what was typed (a pasted URL), so the rewrite is never silent.
+        //
+        // Two channels, on purpose. A REJECTION goes in `error`, which the
+        // panel paints under the row whether or not it is focused: an entry
+        // that is about to vanish must look wrong from anywhere in the list.
+        // A NOTE ("saved as", the apex reminder) goes in `help`, which only
+        // the focused row shows -- useful where you are, noise everywhere else.
+        std::string hint, bad;
+        if (const auto* t = std::get_if<form::field::Text>(&f.value); t && !t->value.empty()) {
+            const auto& v = t->value;
+            if (p.kind == SandboxListPane::ListKind::Port) {
                 const bool digits = !v.empty() && v.size() <= 5
                     && v.find_first_not_of("0123456789") == std::string::npos;
-                if (!v.empty() && (!digits || std::stoul(v) == 0 || std::stoul(v) > 65535))
-                    bad = "not a port (1-65535) \xc2\xb7 dropped on close";
+                if (!digits || std::stoul(v) == 0 || std::stoul(v) > 65535)
+                    hint = "not a port (1-65535) \xc2\xb7 dropped on close";
+            } else if (p.kind == SandboxListPane::ListKind::Host) {
+                const auto ne = tools::util::sandbox::netproxy::normalize_host_entry(v);
+                if (ne.value.empty())
+                    bad = std::string{ne.why} + " \xc2\xb7 dropped on close";
+                else if (ne.value != v)
+                    hint = "saved as " + ne.value;
+                else if (ne.value.starts_with("*."))
+                    hint = "any subdomain \xc2\xb7 add " + ne.value.substr(2) + " too for the site itself";
             }
         }
+        if (f.error != bad) f.error = std::move(bad);
         if (is_add) {
             if (f.label != "+") f.label = "+";
-            const std::string_view want = !bad.empty() ? bad
-                : p.numeric ? "type a port" : "type a path";
-            if (f.help != want) f.help = want;
+            std::string want = !hint.empty() ? std::move(hint) : list_add_row({}, p.kind).help;
+            if (f.help != want) f.help = std::move(want);
         } else {
             auto want = std::to_string(i + 1) + ".";
             if (f.label != want) f.label = std::move(want);
-            if (f.help != bad) f.help = bad;
+            if (f.help != hint) f.help = std::move(hint);
         }
+    }
+}
+
+form::Field list_add_row(std::string_view id, SandboxListPane::ListKind kind) {
+    switch (kind) {
+        case SandboxListPane::ListKind::Port:
+            return list_entry_number(id, "+", "type a port");
+        case SandboxListPane::ListKind::Host:
+            // a prompt that teaches the two forms, since the apex rule is the
+            // one people get wrong.
+            return list_entry_text(id, "+", "type a host \xc2\xb7 github.com or *.github.com");
+        case SandboxListPane::ListKind::Path:
+        default:
+            return list_entry_text(id, "+", "type a path");
     }
 }
 
 SandboxListPane build_sandbox_list(std::string_view row_id, std::string title,
                                    std::string help,
                                    const std::vector<std::string>& values,
-                                   bool numeric) {
+                                   SandboxListPane::ListKind kind) {
     SandboxListPane p;
     p.row_id = std::string{row_id};
     p.title = std::move(title);
     p.help = std::move(help);
-    p.numeric = numeric;
+    p.kind = kind;
 
     // One row per entry. The id carries the index so the readback order is the
     // display order -- a list where saving reorders your paths would be its own
@@ -768,9 +820,7 @@ SandboxListPane build_sandbox_list(std::string_view row_id, std::string title,
     // -- so "type into the empty row" adds, and "clear a row" removes, with no
     // new gesture to learn and no way to end up with a stray empty entry.
     const auto add_id = "e" + std::to_string(values.size());
-    p.form.fields.push_back(
-        numeric ? list_entry_number(add_id, "+", "type a port")
-                : list_entry_text(add_id, "+", "type a path"));
+    p.form.fields.push_back(list_add_row(add_id, kind));
 
     p.form.title = p.title;
     return p;
@@ -788,7 +838,7 @@ std::vector<std::string> read_sandbox_list(const SandboxListPane& p) {
         while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
         if (v.empty()) continue;   // blank == absent, for both kinds
 
-        if (p.numeric) {
+        if (p.kind == SandboxListPane::ListKind::Port) {
             // Ports are typed into a Text row so they can show a caret, so the
             // digits-and-range rule is enforced HERE instead of by the widget.
             // Anything that is not a port in range is dropped rather than
@@ -799,6 +849,13 @@ std::vector<std::string> read_sandbox_list(const SandboxListPane& p) {
             try { n = std::stoul(v); } catch (...) { continue; }
             if (n == 0 || n > 65535) continue;
             out.push_back(std::to_string(n));   // normalised: drops "0443"
+        } else if (p.kind == SandboxListPane::ListKind::Host) {
+            // Canonical form, through the proxy's own normaliser: the saved
+            // list is byte-for-byte what will be enforced, and two spellings
+            // of one host ("GitHub.com", "https://github.com/") dedupe to
+            // one entry below.
+            auto ne = tools::util::sandbox::netproxy::normalize_host_entry(v);
+            if (!ne.value.empty()) out.push_back(std::move(ne.value));
         } else {
             out.push_back(std::move(v));
         }
@@ -844,7 +901,12 @@ Preview preview_sandbox(const sandbox_cfg::Config& cfg) {
 
     switch (cfg.net_mode) {
         case sandbox_cfg::NetMode::Full:
-            d = std::move(d).connect("", 0);
+            // the SAME shape the spawn path compiles: full network is the
+            // proxy, not the host's stack. Previewing bare connect("", 0) made
+            // the macOS row read "partial (endpoint allow-list)" about a
+            // wall that is in fact one loopback port. The port is a stand-in:
+            // which one does not move a guarantee.
+            d = std::move(d).connect("", 0).proxied_netns(3128);
             break;
         case sandbox_cfg::NetMode::None:
             break;  // no grant at all: an empty netns
@@ -1160,6 +1222,35 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     if (cfg.mask_scan_depth == 0) {
         if (auto* fld = row_of(kSbMaskDepth))
             fld->error = "root only \xc2\xb7 a nested services/*/.env stays readable";
+    }
+
+    // Allowed hosts: three settings that compile and quietly mean something
+    // else. Ordered most-surprising first; one message per row.
+    if (auto* fld = row_of(kSbHosts); fld && !cfg.allow_hosts.empty()) {
+        namespace np = tools::util::sandbox::netproxy;
+        std::size_t bad = 0;
+        std::string first_bad;
+        bool only_wild = true;
+        for (const auto& h : cfg.allow_hosts) {
+            const auto ne = np::normalize_host_entry(h);
+            if (ne.value.empty()) { if (!bad++) first_bad = h; continue; }
+            if (!ne.value.starts_with("*.")) only_wild = false;
+        }
+        // (1) a hand-edited settings.json entry the proxy will ignore.
+        if (bad)
+            fld->error = "`" + first_bad + "` is not a host name \xc2\xb7 ignored" +
+                         (bad > 1 ? " (and " + std::to_string(bad - 1) + " more)" : "");
+        // (2) every entry a wildcard: the sites THEMSELVES are unreachable,
+        // which is the apex rule biting someone who did not know it.
+        else if (only_wild)
+            fld->error = "only *.wildcards \xc2\xb7 the sites themselves (e.g. " +
+                         np::normalize_host_entry(cfg.allow_hosts.front()).value.substr(2) +
+                         ") are not included";
+        // (3) a list that does nothing in this mode.
+        else if (cfg.net_mode != sandbox_cfg::NetMode::Full)
+            fld->error = "saved, but only enforced while Access is full";
+        if (fld->origin.empty() && cfg.net_mode == sandbox_cfg::NetMode::Full)
+            fld->origin = "via proxy";
     }
 }
 

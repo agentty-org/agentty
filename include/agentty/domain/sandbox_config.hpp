@@ -376,6 +376,15 @@ struct Config {
     // 22 is git-over-ssh; 53 is DNS, which is easy to forget and breaks
     // everything when you do.
     std::vector<std::uint16_t> allow_ports{443, 80, 22, 53};
+    // Host names the Full-mode proxy may reach. EMPTY = any public host (the
+    // proxy still refuses loopback, RFC1918, link-local and metadata
+    // addresses whatever this says). Non-empty = only these names:
+    // `github.com` exact, `*.github.com` any subdomain but not the apex.
+    // IP literals are refused whenever this is set. Enforced on the name the
+    // command asked for, by the proxy, which then resolves that same name --
+    // so it cannot be steered with DNS. Proxy-aware clients only: a tool that
+    // ignores http_proxy gets no network at all, never an unfiltered one.
+    std::vector<std::string> allow_hosts;
 
     // ── Syscalls ─────────────────────────────────────────────────────────
     SyscallMode syscall_mode = SyscallMode::Compiler;

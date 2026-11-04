@@ -75,6 +75,7 @@ inline constexpr std::string_view kSbWritePaths  = "write_paths";
 inline constexpr std::string_view kSbDenyPaths   = "deny_paths";
 inline constexpr std::string_view kSbNetMode     = "net_mode";
 inline constexpr std::string_view kSbPorts       = "allow_ports";
+inline constexpr std::string_view kSbHosts       = "allow_hosts";
 inline constexpr std::string_view kSbSyscalls    = "syscall_mode";
 inline constexpr std::string_view kSbWxProtect   = "wx_protect";
 inline constexpr std::string_view kSbMemoryMb    = "memory_mb";
@@ -241,10 +242,16 @@ struct SandboxListPane {
     // is what makes Esc a true cancel.
     form::Form form;
 
-    // Ports are digits-only and bounded; paths are free text. The editor
-    // builds Number or Text rows accordingly, so a port list cannot be given
-    // a path and the clamp is the form layer's rather than a validator's.
-    bool numeric = false;
+    // What the entries ARE. Decides the add-row prompt, the live per-entry
+    // hint, readback normalisation, and whether path completion runs.
+    //   Path  free text, workspace-path completion
+    //   Port  digits 1-65535, typed into a Text row so it shows a caret
+    //   Host  a host name or *.wildcard, canonicalised by the SAME function
+    //         the proxy uses (netproxy::normalize_host_entry), so what the
+    //         editor accepts is exactly what is enforced
+    enum class ListKind : std::uint8_t { Path, Port, Host };
+    ListKind kind = ListKind::Path;
+    [[nodiscard]] bool numeric() const noexcept { return kind == ListKind::Port; }
 
     // ── Completion ──────────────────────────────────────────────
     //
@@ -290,7 +297,21 @@ inline auto visual_parts(const SandboxListPane& p) {
                                                 std::string title,
                                                 std::string help,
                                                 const std::vector<std::string>& values,
-                                                bool numeric);
+                                                SandboxListPane::ListKind kind);
+// Ports-or-paths shorthand, kept for the many callers that predate hosts.
+[[nodiscard]] inline SandboxListPane build_sandbox_list(std::string_view row_id,
+                                                       std::string title,
+                                                       std::string help,
+                                                       const std::vector<std::string>& values,
+                                                       bool numeric) {
+    return build_sandbox_list(row_id, std::move(title), std::move(help), values,
+                              numeric ? SandboxListPane::ListKind::Port
+                                      : SandboxListPane::ListKind::Path);
+}
+
+// The trailing "+" row for a list of `kind`. The ONE place the add prompt is
+// spelled, used by both build_sandbox_list and the reducer's grow path.
+[[nodiscard]] form::Field list_add_row(std::string_view id, SandboxListPane::ListKind kind);
 
 // One entry row. Shared with the reducer so GROWING the list and BUILDING it
 // cannot drift -- the grow path appends a row that has to look exactly like

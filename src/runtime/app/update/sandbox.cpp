@@ -378,6 +378,7 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
             const auto cfg = pn::read_sandbox_form(o->pane.form, o->pane.working);
 
             const bool ports = e.row_id == pn::kSbPorts;
+            const bool hosts = e.row_id == pn::kSbHosts;
             const std::vector<std::string>* src = nullptr;
             std::vector<std::string> port_strings;
             std::string title, help;
@@ -388,6 +389,18 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 title = "Allowed ports";
                 help  = "only these ports may be reached \xc2\xb7 53 is DNS, and "
                         "forgetting it breaks name lookup for everything";
+            } else if (hosts) {
+                src = &cfg.allow_hosts;
+                title = "Allowed hosts";
+                // What the list does, and the one rule people get wrong, in
+                // the order they need them. Mode-specific so it never claims
+                // to filter something it is not filtering.
+                help  = cfg.net_mode == sandbox_cfg::NetMode::Full
+                    ? "commands may reach ONLY these names \xc2\xb7 empty = any public "
+                      "host \xc2\xb7 *.x.com is subdomains, add x.com for the site "
+                      "itself \xc2\xb7 paste a URL and it is trimmed to its host"
+                    : "saved now, enforced once Access is full \xc2\xb7 *.x.com is "
+                      "subdomains, add x.com for the site itself";
             } else if (e.row_id == pn::kSbReadPaths) {
                 src = &cfg.read_paths;
                 title = "Also readable";
@@ -408,8 +421,9 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
             }
 
             pn::SandboxList ed;
-            ed.pane = pn::build_sandbox_list(e.row_id, std::move(title),
-                                             std::move(help), *src, ports);
+            using K = pn::SandboxListPane::ListKind;
+            ed.pane = pn::build_sandbox_list(e.row_id, std::move(title), std::move(help), *src,
+                                             ports ? K::Port : hosts ? K::Host : K::Path);
             // Remember the pane we came from so Esc returns to it rather than
             // closing the overlay stack -- the same WithFrom stash every other
             // nested pane uses.
@@ -428,7 +442,12 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
         },
         [&](SandboxListPaste& e) -> Cmd {
             if (auto* ed = m.ui.panel.get<pn::SandboxList>())
-                (void)form::paste_into_focused(ed->pane.form, e.text);
+                // A pasted URL is the most common way a host arrives; show
+                // "saved as github.com" under it straight away, not on the
+                // next keystroke.
+                if (form::paste_into_focused(ed->pane.form, e.text) &&
+                    ed->pane.kind != pn::SandboxListPane::ListKind::Path)
+                    pn::renumber_sandbox_list(ed->pane);
             return Cmd::none();
         },
         [&](SandboxListKey& e) -> Cmd {
@@ -651,13 +670,10 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
             }();
             if (last_row_used) {
                 const auto id = "e" + std::to_string(ed->pane.form.fields.size());
-                ed->pane.form.fields.push_back(
-                    ed->pane.numeric
-                        ? pn::list_entry_number(id, "+", "type a port")
-                        : pn::list_entry_text(id, "+", "type a path"));
+                ed->pane.form.fields.push_back(pn::list_add_row(id, ed->pane.kind));
                 pn::renumber_sandbox_list(ed->pane);
-            } else if (ed->pane.numeric) {
-                pn::renumber_sandbox_list(ed->pane);   // refresh bad-port hints
+            } else if (ed->pane.kind != pn::SandboxListPane::ListKind::Path) {
+                pn::renumber_sandbox_list(ed->pane);   // refresh live per-entry hints
             }
 
             // Keep the suggestion list in step with what is typed.
@@ -667,7 +683,7 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
             // than offering the whole workspace -- an empty row is how you add
             // a path you are about to type in full, and burying it under a
             // thousand candidates would make the common case the loud one.
-            if (!ed->pane.numeric) {
+            if (ed->pane.kind == pn::SandboxListPane::ListKind::Path) {
                 // By VIEW, not by copy. This runs on every keystroke including
                 // pure navigation, and allocating a fresh std::string per key
                 // just to compare it against one the picker already holds is
@@ -711,7 +727,7 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
 
             const auto row_id = ed->pane.row_id;
             const auto values = pn::read_sandbox_list(ed->pane);
-            const bool ports  = ed->pane.numeric;
+            const bool ports  = ed->pane.numeric();
 
             // ascend() restores the stashed parent, which is the sandbox pane
             // descend() put there. Not close(): that would leave None and drop
@@ -762,6 +778,8 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 cfg.write_paths = values;
             } else if (row_id == pn::kSbDenyPaths) {
                 cfg.deny_paths = values;
+            } else if (row_id == pn::kSbHosts) {
+                cfg.allow_hosts = values;   // already canonical + deduped
             }
 
             reproject(*o, cfg);

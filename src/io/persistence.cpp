@@ -3161,6 +3161,7 @@ store::Settings load_settings_from_disk() {
             strs("read_paths", c.read_paths);
             strs("write_paths", c.write_paths);
             strs("deny_paths", c.deny_paths);
+            strs("allow_hosts", c.allow_hosts);
             if (b.contains("allow_ports") && b["allow_ports"].is_array()) {
                 c.allow_ports.clear();
                 for (const auto& v : b["allow_ports"])
@@ -3548,6 +3549,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         if (!c.read_paths.empty())  sb["read_paths"]  = c.read_paths;
         if (!c.write_paths.empty()) sb["write_paths"] = c.write_paths;
         if (!c.deny_paths.empty())  sb["deny_paths"]  = c.deny_paths;
+        if (!c.allow_hosts.empty()) sb["allow_hosts"] = c.allow_hosts;
         // Always written: an absent key loads the default ports, so an empty
         // list the user chose would come back as 443/80/22/53.
         sb["allow_ports"] = c.allow_ports;
