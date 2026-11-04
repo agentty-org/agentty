@@ -526,6 +526,26 @@ struct ModelCapabilities {
         return false;
     }
 
+    // Sonnet 5.5 can't disable thinking either, but has a lowest setting,
+    // thinking:{type:"between_tools"}, which skips thinking on plain replies.
+    // The others 400 on it (checked live).
+    [[nodiscard]] constexpr bool supports_between_tools_thinking() const noexcept {
+        return family == Family::Sonnet && generation == 5 && revision == 5;
+    }
+
+    // These bind each thinking block to the exact prefix that produced it, so
+    // replaying one after the system prompt or tools changed 400s. Sending
+    // block_binding:{prefix_mismatch_behavior:"drop_block"} (beta
+    // thinking-binding-controls) drops stale blocks instead. Same list as Zed.
+    [[nodiscard]] constexpr bool binds_thinking_to_prefix() const noexcept {
+        if (generation != 5) return false;
+        if (family == Family::Opus || family == Family::Sonnet
+            || family == Family::Haiku)
+            return revision == 5;
+        if (family == Family::Fable) return revision == 1;
+        return false;
+    }
+
     // ── Context-window detection (the 1M-window question) ────────────────
     // Verified against the Claude Code binary's model catalog (each entry
     // carries `context: {window:200000, supports_1m_beta, supports_1m_suffix}`).

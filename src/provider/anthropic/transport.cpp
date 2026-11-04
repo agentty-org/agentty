@@ -95,6 +95,7 @@ namespace headers {
     // every turn, so a long TTL there buys nothing) and spend the 1-hour TTL
     // only where the content is stable across turns.
     inline constexpr const char* beta_extended_cache_ttl     = "extended-cache-ttl-2025-04-11";
+    inline constexpr const char* beta_thinking_binding       = "thinking-binding-controls-2026-08-01";
     // Per-tool `eager_input_streaming: true` is honored without a beta header
     // on Claude 4.6 (GA there). For older models (haiku-4-5, claude-3.x) the
     // edge requires this header — sending it on 4.6+ is a no-op so we always
@@ -180,6 +181,7 @@ std::string select_betas(std::string_view model, bool is_oauth,
     //     thinking beta → the dead-air-free default wire is unchanged.
     if (show_reasoning && !caps.uses_adaptive_thinking())
         b.emplace_back(headers::beta_interleaved_thinking);
+    if (caps.binds_thinking_to_prefix()) b.emplace_back(headers::beta_thinking_binding);
 
     std::string out;
     for (size_t i = 0; i < b.size(); ++i) {
@@ -420,6 +422,7 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     // dead-air-free wire. The assistant thinking blocks the model emits in
     // response are captured and replayed by messages_json_string (see below)
     // so tool_use turns don't 400 for a dropped thinking block.
+    const auto off_caps = ModelCapabilities::from_id(wire_model_id(req.model));
     if (!req.effort.empty()) {
         // Thinking MODE is revision-gated (Anthropic changed the interface at
         // the 4.6/4.7 boundary):
@@ -431,7 +434,7 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
         //   • 4.7 / 4.8 / Claude 5+: only type:"adaptive" + output_config.effort
         //     (budget_tokens removed; type:"enabled" 400s).
         // We decode the revision from the wire model id and pick accordingly.
-        const auto tcaps = ModelCapabilities::from_id(wire_model_id(req.model));
+        const auto& tcaps = off_caps;
         const bool legacy_enabled = !tcaps.uses_adaptive_thinking();
 
         if (legacy_enabled) {
@@ -476,16 +479,25 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             body["thinking"]      = std::move(thinking);
             body["output_config"] = json{{"effort", req.effort}};
         }
-    } else if (const auto off = ModelCapabilities::from_id(wire_model_id(req.model));
-               off.needs_explicit_thinking_off()) {
+    } else if (off_caps.needs_explicit_thinking_off()) {
         // Effort is off, but this model thinks unless told not to. Leaving
         // `thinking` out would bill reasoning the user turned off.
         body["thinking"] = json{{"type", "disabled"}};
-    } else if (off.thinking_always_on()) {
+    } else if (off_caps.supports_between_tools_thinking()) {
+        // Can't be disabled; this is its lowest setting.
+        body["thinking"] = json{{"type", "between_tools"}};
+    } else if (off_caps.thinking_always_on()) {
         // Can't be disabled, and left alone it thinks at its default effort,
         // which can spend all of max_tokens before any text.
+        body["thinking"]      = json{{"type", "adaptive"}};
         body["output_config"] = json{{"effort", "low"}};
     }
+    // Old thinking blocks go stale when the system prompt or tools change
+    // (memory, MCP, mode switches). Ask the API to drop them, not 400.
+    if (off_caps.binds_thinking_to_prefix() && body.contains("thinking")
+        && body["thinking"].value("type", "") == "adaptive")
+        body["thinking"]["block_binding"] =
+            json{{"prefix_mismatch_behavior", "drop_block"}};
     // Splice marker for the messages array. nlohmann gives the dumped
     // form `"messages":<unique-string>"`; we string-replace the
     // placeholder with messages_json_string. Picked a token that
