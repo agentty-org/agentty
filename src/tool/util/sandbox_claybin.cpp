@@ -79,6 +79,42 @@ namespace {
 using namespace ::clay;
 using namespace ::clay::literals;
 
+}  // namespace
+
+// What the guest inherits from agentty's own environment. A denylist, not an
+// allowlist: builds read arbitrary vars (CC, GOPATH, JAVA_HOME, npm_config_*)
+// and an allowlist breaks the next toolchain nobody listed. What goes is the
+// stuff that is either a door out of the box or a credential agentty itself
+// holds:
+//   - session and desktop sockets: dbus (systemd-run, secret service),
+//     wayland/X11 (keystrokes, screenshots), the ssh/gpg agents, tmux, kitty
+//     and hyprland control sockets. most also point at a path the box can't
+//     see, but the address alone leaks host layout, and an abstract socket
+//     needs no path at all.
+//   - provider keys agentty uses to talk to the model. a command the agent
+//     runs has no business with the key that pays for the agent.
+bool box_env_keeps(std::string_view key) noexcept {
+    static constexpr std::string_view kDrop[] = {
+        "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS",
+        "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY",
+        "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO",
+        "TMUX", "TMUX_PANE", "KITTY_LISTEN_ON", "KITTY_PUBLIC_KEY", "KITTY_WINDOW_ID",
+        "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "I3SOCK", "NIRI_SOCKET",
+        "XDG_SESSION_COOKIE", "GNOME_KEYRING_CONTROL", "KDE_SESSION_UID",
+        "AT_SPI_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE",
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY", "AGENTTY_API_KEY",
+    };
+    for (auto d : kDrop)
+        if (key == d) return false;
+    // Every *_API_KEY agentty's provider registry reads (GROQ_API_KEY,
+    // GEMINI_API_KEY, ...). Matched by suffix so a new provider is covered.
+    if (key.size() > 8 && key.ends_with("_API_KEY")) return false;
+    return true;
+}
+
+namespace {
+
 // Build the sealed policy that mirrors build_bwrap_argv()'s posture.
 //
 // Order matters exactly as it does for bwrap: the workspace bind goes LAST so
@@ -335,6 +371,11 @@ using namespace ::clay::literals;
     // namespace keeps the host's own name.
     d = std::move(d).hostname(p.fake_hostname ? "sandbox" : "");
 
+    // When the OOM killer has to pick, it should pick the sandboxed build,
+    // not the user's editor or agentty itself. Balanced has no memory cap, so
+    // this is the one thing standing between a runaway build and the desktop.
+    d = std::move(d).oom_score_adj(500);
+
     // claybin closes inherited fds unless told not to.
     if (!p.close_inherited_fds) d = std::move(d).unsafe_inherit_fds();
 
@@ -448,9 +489,20 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     // /bin/sh -c, matching the bwrap and Linux-claybin paths: pipes, redirects
     // and globs are part of what an approved bash call means.
     const char* argv[] = {"/bin/sh", "-c", shell_cmd.c_str(), nullptr};
+    // Same filtered environment as linux and windows (box_env_keeps).
+    std::vector<std::string> env_store;
+    for (char** e = ::environ; e && *e; ++e) {
+        const std::string_view kv{*e};
+        if (box_env_keeps(kv.substr(0, kv.find('=')))) env_store.emplace_back(kv);
+    }
+    std::vector<const char*> envp;
+    envp.reserve(env_store.size() + 1);
+    for (const auto& s : env_store) envp.push_back(s.c_str());
+    envp.push_back(nullptr);
     ::clay::macos::SpawnRequest req;
     req.program = "/bin/sh";
     req.argv = argv;
+    req.envp = envp.data();
     req.stdout_fd = stdout_fd;
     req.stderr_fd = stderr_fd;
     if (!p.cwd.empty())
@@ -582,12 +634,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     // but only when no slash is present; keep the caller's program as given.
     const std::string program = argv_in.front();
 
-    // The request's env, layered on ours. Empty env: inherit ours unchanged.
+    // The request's env, layered on a FILTERED copy of ours (box_env_keeps).
     // The windows loader wants a sorted double-NUL block; claybin builds that
     // (case-insensitive sort, "NAME=VALUE\0" pairs) from the char* list below.
     std::vector<std::string> env_store;
     std::vector<const char*> envp;
-    if (!env.empty()) {
+    {
         // ours first, so the caller's overrides land after and win the sort
         if (wchar_t* wbase = ::GetEnvironmentStringsW()) {
             for (const wchar_t* e = wbase; *e;) {
@@ -597,6 +649,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
                 const auto eq = wide.find(L'=');
                 if (eq == std::wstring::npos || eq == 0) continue;
                 const std::string name(wide.begin(), wide.begin() + eq);
+                {
+                    std::string upper = name;  // windows names are case-blind
+                    for (char& c : upper)
+                        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
+                    if (!box_env_keeps(upper)) continue;
+                }
                 // overridden names are supplied by the caller below; keep the
                 // name side ASCII-faithful (env var names are ASCII in
                 // practice) and convert the value losslessly via UTF-8
@@ -623,7 +681,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     ::clay::windows::SpawnRequest req;
     req.program = program.c_str();
     req.argv = argv.data();
-    req.envp = env.empty() ? nullptr : envp.data();
+    req.envp = envp.data();
     // The caller's pipe handles arrive through the FdMap (they are HANDLES on
     // windows, and the exec path maps them explicitly). The sentinel fields
     // below cover the spawn_shell path where no map was provided: inherit
@@ -797,14 +855,16 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     // claybin calls execve, which does no PATH lookup, so a bare "git" came
     // back as exit 127. Resolve it here, in the parent, the way execvp would.
     const std::string program = resolve_on_path(argv_in.front());
-    // The request's env, layered on ours, as a ready envp: the child can't
-    // build one (it may not allocate). Empty env: inherit ours unchanged.
+    // The request's env, layered on a FILTERED copy of ours, as a ready envp:
+    // the child can't build one (it may not allocate). Always built here --
+    // a null envp would hand the guest agentty's whole environ.
     std::vector<std::string> env_store;
     std::vector<const char*> envp;
-    if (!env.empty()) {
+    {
         for (char** e = ::environ; e && *e; ++e) {
             const std::string_view kv{*e};
             const auto key = kv.substr(0, kv.find('='));
+            if (!box_env_keeps(key)) continue;
             bool overridden = false;
             for (const auto& [k, v] : env) if (k == key) { overridden = true; break; }
             if (!overridden) env_store.emplace_back(kv);
@@ -814,7 +874,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         for (const auto& s : env_store) envp.push_back(s.c_str());
         envp.push_back(nullptr);
     }
-    Command cmd{program.c_str(), argv.data(), env.empty() ? nullptr : envp.data()};
+    Command cmd{program.c_str(), argv.data(), envp.data()};
     // stdin from /dev/null explicitly rather than inherited -- a guest that can
     // read the user's terminal can prompt them, and nothing a tool runs should.
     cmd.stdin_fd = Command::kDevNull;

@@ -26,6 +26,10 @@
 
 namespace agentty::tools::util::sandbox::claybin_backend {
 
+// Whether an env var from agentty's own environment reaches the sandboxed
+// child. Drops desktop/session sockets and provider API keys.
+[[nodiscard]] bool box_env_keeps(std::string_view key) noexcept;
+
 // What to build. Populated from the SHARED read-set constants in sandbox.cpp
 // rather than restated here -- see the note at the top of sandbox_claybin.cpp
 // about a backend that restated them and granted read on `/`.

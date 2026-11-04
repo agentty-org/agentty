@@ -837,6 +837,67 @@ int main() {
         std::filesystem::remove_all(fake_home, ec);
     }
 
+    // ── claybin-sandbox-audit.md #2-#7, observed from inside a real box ──
+    {
+        auto p = base_posture();
+        std::string out;
+        // #2: /dev/shm is its own tmpfs with a cap, /dev itself is tiny.
+        run(p, "df -B1 --output=size,target /dev/shm /dev 2>&1 | tail -n +2", out);
+        std::printf("  df: %s", out.c_str());
+        expect(out.find("67108864 /dev/shm") != std::string::npos,
+               "/dev/shm is capped at 64 MiB (#2)");
+        expect(out.find("1048576 /dev") != std::string::npos, "/dev is capped at 1 MiB (#2)");
+        out.clear();
+        // #3: the box is the OOM killer's first pick.
+        run(p, "cat /proc/self/oom_score_adj", out);
+        expect(out.find("500") != std::string::npos, "oom_score_adj is 500 (#3)");
+        out.clear();
+        // #5: xattr reads work, so ls stays quiet.
+        run(p, "ls -l /usr >/dev/null && echo ls-clean", out);
+        expect(out.find("ls-clean") != std::string::npos &&
+                   out.find("Operation not permitted") == std::string::npos,
+               "ls -l prints no xattr EPERM noise (#5)");
+        out.clear();
+        // #6: prctl PR_SET_NAME works; PR_SET_MM / PR_CAP_AMBIENT do not.
+        // python is the one interpreter that reaches prctl without a compiler.
+        run(p,
+            "python3 -c 'import ctypes;l=ctypes.CDLL(None);"
+            "print(\"name\",l.prctl(15,b\"box\",0,0,0));"
+            "print(\"mm\",l.prctl(35,0,0,0,0));"
+            "print(\"pers\",l.personality(0xffffffff)>=0, l.personality(0x0040000))' 2>&1",
+            out);
+        std::printf("  prctl: %s", out.c_str());
+        if (out.find("No such file") == std::string::npos) {
+            expect(out.find("name 0") != std::string::npos, "prctl(PR_SET_NAME) works (#6)");
+            expect(out.find("mm -1") != std::string::npos, "prctl(PR_SET_MM) refused (#6)");
+            expect(out.find("pers True -1") != std::string::npos,
+                   "personality query ok, ADDR_NO_RANDOMIZE refused (#6)");
+        }
+        out.clear();
+        // #7: own cgroup namespace, no core dumps.
+        run(p, "cat /proc/self/cgroup; ulimit -c", out);
+        std::printf("  cgroup/core: %s", out.c_str());
+        expect(out.find("0::/\n") != std::string::npos, "cgroup namespace hides the host path (#7)");
+        expect(out.find("\n0\n") != std::string::npos || out.ends_with("0\n"),
+               "RLIMIT_CORE is 0 (#7)");
+        out.clear();
+        // #4: session sockets and provider keys don't reach the guest.
+        ::setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus", 1);
+        ::setenv("WAYLAND_DISPLAY", "wayland-1", 1);
+        ::setenv("GROQ_API_KEY", "gsk_should_never", 1);
+        ::setenv("MY_BUILD_FLAG", "kept", 1);
+        run(p, "env", out);
+        expect(out.find("DBUS_SESSION_BUS_ADDRESS") == std::string::npos &&
+                   out.find("WAYLAND_DISPLAY") == std::string::npos,
+               "desktop/session sockets are not inherited (#4)");
+        expect(out.find("gsk_should_never") == std::string::npos,
+               "provider API keys are not inherited (#4)");
+        expect(out.find("MY_BUILD_FLAG=kept") != std::string::npos,
+               "ordinary env vars still are (#4)");
+        ::unsetenv("GROQ_API_KEY");
+        ::unsetenv("MY_BUILD_FLAG");
+    }
+
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");
     return failures ? 1 : 0;
 }
