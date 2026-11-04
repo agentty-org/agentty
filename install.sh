@@ -206,8 +206,15 @@ fi
 # are stable across releases; ours embed the version, so we query the API to get
 # the real browser_download_url. Falls back to a constructed URL if the API is
 # unavailable (e.g. rate-limited).
+#
+# "latest" means the newest release that SHIPS a binary for this platform, not
+# the newest release. Releases stream (#119): the release page goes up first and
+# each platform's binary lands over the next hour, so the newest release can
+# have no file for you yet. Reading the last few releases (newest first) and
+# taking the first with our asset installs the previous version in that window
+# instead of 404ing.
 if [ "$VERSION" = "latest" ]; then
-    api_url="https://api.github.com/repos/$REPO/releases/latest"
+    api_url="https://api.github.com/repos/$REPO/releases?per_page=5"
 else
     api_url="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
 fi
@@ -224,11 +231,24 @@ if [ -n "$api_json" ]; then
     urls=$(printf '%s\n' "$api_json" \
         | grep -o '"browser_download_url": *"[^"]*"' \
         | sed 's/.*": *"//; s/"$//')
-    sums_url=$(printf '%s\n' "$urls" | grep -E '/SHA256SUMS$' | head -n1)
     for sfx in $suffixes; do
         asset_url=$(printf '%s\n' "$urls" | grep -E "/agentty(-[0-9][^/]*)?-${sfx}$" | head -n1)
         [ -n "$asset_url" ] && break
     done
+    if [ -n "$asset_url" ]; then
+        # SHA256SUMS from the SAME release as the asset -- with several
+        # releases in the list, the first SHA256SUMS could be another one's.
+        rel_dir=${asset_url%/*}
+        sums_url=$(printf '%s\n' "$urls" | grep -F "$rel_dir/SHA256SUMS" | head -n1)
+        if [ "$VERSION" = "latest" ]; then
+            newest=$(printf '%s\n' "$api_json" | grep -o '"tag_name": *"[^"]*"' | head -n1 \
+                | sed 's/.*": *"//; s/"$//')
+            got=${rel_dir##*/}
+            if [ -n "$newest" ] && [ "$newest" != "$got" ]; then
+                info "$newest is still building for $os/$arch — installing $got (run again later for $newest)"
+            fi
+        fi
+    fi
 fi
 
 # Fallback: construct the legacy unversioned URL if the API gave us nothing.

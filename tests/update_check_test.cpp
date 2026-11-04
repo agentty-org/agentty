@@ -101,23 +101,40 @@ TEST_CASE("cached_check: fresh cache honoured, stale/foreign rejected") {
     // 1. Fresh cache written by THIS binary version → honoured.
     write("{\"checked_at\":" + std::to_string(now_s) +
           ",\"current\":\"" + current_version() + "\"," +
-          "\"latest\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
+          "\"latest\":\"99.0.0\",\"target\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
     auto c = agentty::update::cached_check();
     REQUIRE(c.has_value());
     CHECK(c->update_available);
     CHECK(c->latest == "99.0.0");
+    CHECK(c->target == "99.0.0");
+
+    // 1b. A cache from before `target` existed → rejected. Its
+    //     update_available meant "a newer tag exists", which is the claim
+    //     #119 showed is not "you can install it".
+    write("{\"checked_at\":" + std::to_string(now_s) +
+          ",\"current\":\"" + current_version() + "\"," +
+          "\"latest\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
+    CHECK(!agentty::update::cached_check().has_value());
+
+    // 1c. "still building" goes stale in minutes, not a day: the release is
+    //     about to become installable and must not stay hidden until tomorrow.
+    write("{\"checked_at\":" + std::to_string(now_s - 30 * 60) +
+          ",\"current\":\"" + current_version() + "\"," +
+          "\"latest\":\"99.0.0\",\"target\":\"\",\"pending\":true,\"url\":\"u\","
+          "\"update_available\":false}");
+    CHECK(!agentty::update::cached_check().has_value());
 
     // 2. Cache written by a DIFFERENT (older) binary → rejected: after an
     //    update the new binary must not re-announce the delta it just closed.
     write("{\"checked_at\":" + std::to_string(now_s) +
           ",\"current\":\"0.0.1\"," +
-          "\"latest\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
+          "\"latest\":\"99.0.0\",\"target\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
     CHECK(!agentty::update::cached_check().has_value());
 
     // 3. Expired cache (>24h) → rejected.
     write("{\"checked_at\":" + std::to_string(now_s - 90'000) +
           ",\"current\":\"" + current_version() + "\"," +
-          "\"latest\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
+          "\"latest\":\"99.0.0\",\"target\":\"99.0.0\",\"url\":\"u\",\"update_available\":true}");
     CHECK(!agentty::update::cached_check().has_value());
 
     // 4. Corrupt JSON → rejected, no throw.

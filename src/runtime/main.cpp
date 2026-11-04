@@ -1447,11 +1447,22 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             return 1;
         }
         if (!c.update_available) {
-            std::printf("✓ up to date (latest is v%s)\n", c.latest.c_str());
+            if (c.pending)
+                // #119: the newest release exists but this platform's binary
+                // is still building. Not "up to date", not an error -- wait.
+                std::printf("✓ up to date — v%s is out, but its %s binary is still "
+                            "building (usually under an hour). Run `agentty update` again "
+                            "later.\n  %s\n",
+                            c.latest.c_str(), update::platform_asset().c_str(), c.url.c_str());
+            else
+                std::printf("✓ up to date (latest is v%s)\n", c.latest.c_str());
             return 0;
         }
         std::printf("⬆ v%s available (you have v%s)\n  %s\n",
-                    c.latest.c_str(), c.current.c_str(), c.url.c_str());
+                    c.target.c_str(), c.current.c_str(), c.url.c_str());
+        if (c.pending)
+            std::printf("  (v%s is out too; its %s binary is still building)\n",
+                        c.latest.c_str(), update::platform_asset().c_str());
         if (check_only) return 0;
 
         std::string why;
@@ -1460,7 +1471,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             return 1;
         }
         std::printf("downloading %s…\n", update::platform_asset().c_str());
-        auto err = update::perform_update(c.latest,
+        auto err = update::perform_update(c.target,
             [](std::size_t got, std::size_t total) {
                 if (total > 0)
                     std::printf("\r  %zu / %zu KiB (%d%%)   ",
@@ -1469,14 +1480,14 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
                 else
                     std::printf("\r  %zu KiB   ", got / 1024);
                 std::fflush(stdout);
-            });
+            }, c.asset_sha256);
         std::printf("\n");
         if (!err.empty()) {
             std::fprintf(stderr, "update failed: %s\n", err.c_str());
             return 1;
         }
         std::printf("✓ updated to v%s — restart agentty to use it\n",
-                    c.latest.c_str());
+                    c.target.c_str());
         return 0;
     }
     if (args.subcommand == "login")  return auth::cmd_login(IoAccess::grant(), cap);

@@ -2459,8 +2459,11 @@ Cmd check_for_update() {
         // swallowed — an update NOTICE must never surface as a failure.
         try {
             auto c = update::check_latest(/*force=*/false);
+            // `update_available` now means INSTALLABLE on this platform
+            // (#119): a release whose binary is still building never lights
+            // the chip, so the TUI cannot advertise an update that 404s.
             if (c.error.empty() && c.update_available) {
-                out.send(Msg{UpdateCheckDone{true, std::move(c.latest),
+                out.send(Msg{UpdateCheckDone{true, std::move(c.target),
                                              std::move(c.url)}});
                 return;
             }
@@ -2485,6 +2488,13 @@ Cmd perform_self_update(std::string version) {
             // final call through (total reached) so the bar lands on 100%.
             auto last = std::chrono::steady_clock::now()
                       - std::chrono::seconds{1};
+            // The digest rides the check, not the message: re-read it (a
+            // cache hit, normally) so the bytes installed are the bytes
+            // GitHub recorded for exactly this version.
+            std::string sha;
+            if (const auto c = update::check_latest(/*force=*/false);
+                c.error.empty() && c.target == version)
+                sha = c.asset_sha256;
             auto err = update::perform_update(
                 version,
                 [&](std::size_t got, std::size_t total) {
@@ -2494,7 +2504,7 @@ Cmd perform_self_update(std::string version) {
                         return;
                     last = now;
                     out.send(Msg{msg::MetaMsg{UpdateProgress{got, total}}});
-                });
+                }, sha);
             if (err.empty())
                 out.send(Msg{UpdateApplied{true, version}});
             else

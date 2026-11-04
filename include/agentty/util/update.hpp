@@ -25,11 +25,25 @@
 namespace agentty::update {
 
 // Result of a version check.
+//
+// TWO versions, on purpose. `latest` is the newest release GitHub calls
+// latest; `latest` may not be INSTALLABLE yet, because the release workflow
+// streams: the release page and source tarball go up first, then each
+// platform's binary lands over the next ~35-80 minutes (#119). During that
+// window "v0.9.46 is out" is true and "you can update to v0.9.46" is not.
+//
+// So `update_available` and `target` describe what THIS platform can actually
+// install -- the newest release, among the last few, that ships our asset --
+// and `pending` says the newest one exists but its binary is still building.
+// A client never offers an update it cannot perform.
 struct CheckResult {
-    bool        update_available = false;
+    bool        update_available = false;  // `target` is newer than `current` AND installable
     std::string current;        // e.g. "0.3.0"
-    std::string latest;         // e.g. "0.3.1" (empty on error)
-    std::string url;            // browser URL of the release page
+    std::string latest;         // newest release, installable or not (empty on error)
+    std::string target;         // newest INSTALLABLE release; empty when none is newer
+    std::string url;            // browser URL of the `target` release page (or latest's)
+    std::string asset_sha256;   // GitHub's digest for target's asset, hex; may be empty
+    bool        pending = false;  // `latest` is newer but its binary for us isn't up yet
     std::string error;          // non-empty ⇒ the check itself failed
 };
 
@@ -59,10 +73,20 @@ struct CheckResult {
 
 // Perform the update: download the platform asset for `tag` and atomically
 // replace the running binary. `progress` (optional) is called with
-// (downloaded_bytes, total_bytes) — total 0 when unknown.
+// (downloaded_bytes, total_bytes) — total 0 when unknown. When
+// `expected_sha256` is non-empty the download must match it, or nothing is
+// installed.
 // Returns an empty string on success, otherwise a human error message.
 [[nodiscard]] std::string perform_update(
     const std::string& tag,
-    const std::function<void(std::size_t, std::size_t)>& progress = {});
+    const std::function<void(std::size_t, std::size_t)>& progress = {},
+    const std::string& expected_sha256 = {});
+
+// Pure, for tests: given the GitHub `/releases` JSON (newest first), the
+// running version and this platform's asset name, decide what to offer.
+// No network, no cache.
+[[nodiscard]] CheckResult choose_release(const std::string& releases_json,
+                                         const std::string& current,
+                                         const std::string& asset);
 
 } // namespace agentty::update

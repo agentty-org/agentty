@@ -4,6 +4,21 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `agentty update` no longer offers a release whose binary for your
+  platform is still building, then fails with a bare `HTTP 404`
+  ([#119](https://github.com/agentty-org/agentty/issues/119)). Releases
+  publish each platform's binary over about an hour; until yours lands,
+  agentty offers the newest version that *is* ready (or says "up to date
+  — v0.9.46 is out, its binary is still building") and checks again
+  within 20 minutes instead of a day. The update chip in the TUI only
+  appears when the update can actually be installed.
+- Updates are checked against GitHub's sha256 for the file before
+  anything is replaced; a truncated or mismatched download installs
+  nothing.
+- `install.sh` installs the newest release that has a binary for your
+  platform, instead of failing during the same window.
+
 ## [0.9.46] - 2026-11-04
 
 ### Added

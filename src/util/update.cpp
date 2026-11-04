@@ -12,6 +12,7 @@
 #include "agentty/io/http.hpp"
 #include "agentty/io/shared_file.hpp"
 #include "agentty/util/dbglog.hpp"
+#include "agentty/auth/auth.hpp"     // sha256_hex: verify the asset digest
 
 #include <nlohmann/json.hpp>
 
@@ -38,6 +39,8 @@ namespace {
 
 constexpr const char* kRepo = "agentty-org/agentty";
 constexpr auto kCacheTtl = std::chrono::hours{24};
+// While a release is still building its binaries, look again this soon.
+constexpr auto kPendingTtl = std::chrono::minutes{20};
 
 fs::path cache_path() { return util::user_cache_dir() / "update_check.json"; }
 
@@ -99,7 +102,10 @@ void write_cache(const CheckResult& c) {
                            .count()},
         {"current", c.current},
         {"latest", c.latest},
+        {"target", c.target},
         {"url", c.url},
+        {"asset_sha256", c.asset_sha256},
+        {"pending", c.pending},
         {"update_available", c.update_available},
     };
     // Was a truncating write: two instances checking at once could leave a
@@ -172,15 +178,83 @@ std::optional<CheckResult> cached_check() {
         CheckResult c;
         c.current          = j.value("current", std::string{});
         c.latest           = j.value("latest", std::string{});
+        c.target           = j.value("target", std::string{});
         c.url              = j.value("url", std::string{});
+        c.asset_sha256     = j.value("asset_sha256", std::string{});
+        c.pending          = j.value("pending", false);
         c.update_available = j.value("update_available", false);
         // A cache written by an OLDER binary is stale the moment the binary
         // changed (post-update relaunch must not re-announce the old delta).
         if (c.current != current_version()) return std::nullopt;
+        // Written before `target` existed: its update_available meant "a
+        // newer tag exists", which is exactly the claim #119 broke. Re-check.
+        if (!j.contains("target")) return std::nullopt;
+        // A pending release is about to become installable; a 24h-old
+        // "still building" would hide the update for a day. Re-check sooner.
+        if (c.pending && age > kPendingTtl) return std::nullopt;
         return c;
     } catch (...) {
         return std::nullopt;
     }
+}
+
+CheckResult choose_release(const std::string& releases_json, const std::string& current,
+                           const std::string& asset) {
+    CheckResult c;
+    c.current = current;
+    json arr;
+    try {
+        arr = json::parse(releases_json);
+    } catch (const std::exception& e) {
+        c.error = std::string{"release JSON parse failed: "} + e.what();
+        return c;
+    }
+    if (!arr.is_array()) { c.error = "release JSON: expected a list"; return c; }
+
+    auto strip_v = [](std::string t) { return (!t.empty() && t.front() == 'v') ? t.substr(1) : t; };
+    // An asset counts only once GitHub has the whole file: `state` is
+    // "uploaded" (a half-sent --clobber is "starter"), and it is big enough
+    // to be a binary, not a placeholder.
+    auto ships = [&](const json& rel, std::string& sha) {
+        if (asset.empty() || !rel.contains("assets") || !rel["assets"].is_array()) return false;
+        for (const auto& a : rel["assets"]) {
+            if (a.value("name", std::string{}) != asset) continue;
+            if (a.value("state", std::string{"uploaded"}) != "uploaded") return false;
+            if (a.value("size", std::int64_t{0}) < 1024 * 1024) return false;
+            const std::string d = a.value("digest", std::string{});
+            sha = d.starts_with("sha256:") ? d.substr(7) : std::string{};
+            return true;
+        }
+        return false;
+    };
+
+    for (const auto& rel : arr) {
+        if (!rel.is_object()) continue;
+        if (rel.value("draft", false) || rel.value("prerelease", false)) continue;
+        const std::string ver = strip_v(rel.value("tag_name", std::string{}));
+        if (ver.empty()) continue;
+        if (c.latest.empty() || version_less(c.latest, ver)) {
+            c.latest = ver;
+            if (c.url.empty()) c.url = rel.value("html_url", std::string{});
+        }
+        // Not newer than us: nothing older can be an update either, but keep
+        // scanning only for `latest` -- the list is newest-first in practice
+        // and not guaranteed, so do not break on order.
+        if (!version_less(current, ver)) continue;
+        std::string sha;
+        if (!ships(rel, sha)) continue;
+        if (c.target.empty() || version_less(c.target, ver)) {
+            c.target = ver;
+            c.asset_sha256 = std::move(sha);
+            c.url = rel.value("html_url", c.url);
+        }
+    }
+    if (c.url.empty()) c.url = std::string{"https://github.com/"} + kRepo + "/releases";
+    c.update_available = !c.target.empty();
+    // The newest release is ahead of us but not installable here yet -- the
+    // streaming window. Said distinctly so the UI can wait instead of failing.
+    c.pending = !c.latest.empty() && version_less(current, c.latest) && c.target != c.latest;
+    return c;
 }
 
 CheckResult check_latest(bool force) {
@@ -190,26 +264,19 @@ CheckResult check_latest(bool force) {
     CheckResult c;
     c.current = current_version();
 
+    // The last few releases, not /releases/latest: "latest" can be a release
+    // whose binary for this platform is still building (#119), and the one
+    // before it is then the newest thing that can actually be installed.
     auto r = https_get("api.github.com",
-                       std::string{"/repos/"} + kRepo + "/releases/latest",
-                       1 * 1024 * 1024);
+                       std::string{"/repos/"} + kRepo + "/releases?per_page=5",
+                       4 * 1024 * 1024);
     if (!r.err.empty()) { c.error = r.err; return c; }
     if (r.status != 200) {
         c.error = "GitHub API HTTP " + std::to_string(r.status);
         return c;
     }
-    try {
-        json j = json::parse(r.body);
-        std::string tag = j.value("tag_name", std::string{});
-        c.latest = tag;
-        if (!tag.empty() && tag.front() == 'v') c.latest = tag.substr(1);
-        c.url = j.value("html_url",
-                        std::string{"https://github.com/"} + kRepo + "/releases");
-        c.update_available = version_less(c.current, c.latest);
-        write_cache(c);
-    } catch (const std::exception& e) {
-        c.error = std::string{"release JSON parse failed: "} + e.what();
-    }
+    c = choose_release(r.body, c.current, platform_asset());
+    if (c.error.empty()) write_cache(c);
     return c;
 }
 
@@ -268,7 +335,8 @@ bool self_update_possible(std::string& reason) {
 
 std::string perform_update(
     const std::string& tag,
-    const std::function<void(std::size_t, std::size_t)>& progress) {
+    const std::function<void(std::size_t, std::size_t)>& progress,
+    const std::string& expected_sha256) {
     std::string reason;
     if (!self_update_possible(reason)) return reason;
 
@@ -295,6 +363,13 @@ std::string perform_update(
         }
         break;
     }
+    // A 404 here is almost always the streaming window (#119): the release
+    // exists, this platform's binary is still building. Say THAT, not a bare
+    // status code -- the user's next move is "wait", not "file a bug".
+    if (r.status == 404)
+        return "the " + vtag + " binary for this platform (" + asset +
+               ") isn't published yet \xe2\x80\x94 release builds take up to an hour. "
+               "Try again later; `agentty update` will pick it up.";
     if (r.status != 200)
         return "download failed: HTTP " + std::to_string(r.status) +
                " for " + asset + " (release " + vtag + ")";
@@ -314,6 +389,16 @@ std::string perform_update(
     if (!looks_binary)
         return "downloaded file is not an executable — aborting";
 #endif
+    // GitHub records a sha256 for every release asset. When the check gave
+    // us one, the bytes must match it before anything is installed: a
+    // truncated CDN response or a swapped asset would otherwise become the
+    // next launch's binary.
+    if (!expected_sha256.empty()) {
+        const std::string got = auth::sha256_hex(r.body);
+        if (got != expected_sha256)
+            return "downloaded " + asset + " failed its checksum (got " + got.substr(0, 12) +
+                   "\xe2\x80\xa6, expected " + expected_sha256.substr(0, 12) + "\xe2\x80\xa6) \xe2\x80\x94 nothing installed";
+    }
 
     // Atomic swap over the live binary: the running process keeps executing
     // its old (unlinked) image, the next launch gets the new one. Born 0755,
