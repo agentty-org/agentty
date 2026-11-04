@@ -3117,8 +3117,23 @@ store::Settings load_settings_from_disk() {
                     return it->is_boolean() ? it->template get<bool>() : def;
                 } else {
                     if (!it->is_number_integer()) return def;
+                    // Compare in the field's OWN domain. The old check cast
+                    // numeric_limits<T>::max() to long long, and for a 64-bit
+                    // unsigned field that is -1: every positive memory_mb and
+                    // tmp_mb read as "out of range" and reset to the default.
+                    // That is the "I chose Airgapped and restarted and it says
+                    // Custom" bug -- Hardened and Airgapped set memory_mb, and
+                    // it came back 0, so neither preset survived a restart.
+                    if (it->is_number_unsigned()) {
+                        const auto u = it->template get<std::uint64_t>();
+                        if (u > static_cast<std::uint64_t>(std::numeric_limits<T>::max()))
+                            return def;
+                        return static_cast<T>(u);
+                    }
                     const auto v = it->template get<long long>();
-                    if (v < 0 || v > static_cast<long long>(std::numeric_limits<T>::max()))
+                    if (v < 0) return def;
+                    if (static_cast<unsigned long long>(v) >
+                        static_cast<unsigned long long>(std::numeric_limits<T>::max()))
                         return def;
                     return static_cast<T>(v);
                 }

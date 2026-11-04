@@ -22,6 +22,7 @@
 
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/io/persistence.hpp"
+#include "agtest_cap.hpp"   // agtest::cap() for save_settings
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/panel/sandbox.hpp"
@@ -731,6 +732,80 @@ TEST_CASE("sandbox pane: the posture row writes every other row") {
     // other row (see "sandbox pane: a save persists but does NOT touch the
     // live boundary").
     CHECK(sb::config().syscall_mode != sandbox_cfg::SyscallMode::Strict);
+}
+
+TEST_CASE("sandbox pane: a preset picked in the pane is still picked after a restart") {
+    // The whole path, for EVERY preset: drive the Preset row in the real
+    // reducer, take what it persisted, write it through the real settings
+    // file, load it back as a fresh launch would, and open the pane on it.
+    // The row must show the preset that was picked.
+    //
+    // The earlier test stopped at m.d.persisted -- in memory -- which is why
+    // it could not see the second half of the bug: the loader's range check
+    // turned every positive 64-bit field (memory_mb) into its default, so
+    // Hardened and Airgapped reloaded with memory_mb 0 and read as Custom.
+    namespace fs = std::filesystem;
+    char tmpl[] = "/tmp/agentty_pane_preset_XXXXXX";
+    const fs::path dir = ::mkdtemp(tmpl);
+    const char* oh = ::getenv("HOME");
+    const char* oa = ::getenv("AGENTTY_HOME");
+    const std::string old_home = oh ? oh : "", old_ah = oa ? oa : "";
+    ::setenv("HOME", dir.c_str(), 1);
+    ::setenv("AGENTTY_HOME", dir.c_str(), 1);
+
+    for (auto want_p : {sandbox_cfg::Posture::Permissive, sandbox_cfg::Posture::Balanced,
+                        sandbox_cfg::Posture::Hardened, sandbox_cfg::Posture::Airgapped}) {
+        CAPTURE(static_cast<int>(want_p));
+        sandbox_cfg::Config cfg;
+        cfg.configured = true;
+        install(cfg);
+        Model m = opened();
+        const int p = row_of(pane(m).pane.form, pn::kSbPosture);
+        REQUIRE(p >= 0);
+        m.ui.panel.get<pn::Sandbox>()->pane.form.cursor = p;
+        const auto start = std::get<form::field::Choice>(
+            pane(m).pane.form.fields[static_cast<std::size_t>(p)].value).index;
+        const int want = static_cast<int>(want_p);
+        for (int i = start; i < want; ++i) {
+            auto [next, _] = app::update(std::move(m), key(form::keys::Intent::AdjustUp));
+            m = std::move(next);
+        }
+        for (int i = start; i > want; --i) {
+            auto [next, _] = app::update(std::move(m), key(form::keys::Intent::AdjustDown));
+            m = std::move(next);
+        }
+        {
+            // Picked in the pane == what the preset produces, before any restart.
+            // A locked row (Scope IPC under seatbelt) displayed the ENGINE's
+            // fact and readback wrote it into the config, so Permissive came
+            // out with scope_ipc=true and read as Custom straight away.
+            const auto& got = m.d.persisted.sandbox;
+            const auto ref = sandbox_cfg::apply_posture(got, want_p);
+            INFO("scope_ipc " << got.scope_ipc << "/" << ref.scope_ipc
+                 << " wx " << got.wx_protect << "/" << ref.wx_protect
+                 << " close_fds " << got.close_inherited_fds << "/" << ref.close_inherited_fds
+                 << " host " << got.fake_hostname << "/" << ref.fake_hostname);
+            REQUIRE(sandbox_cfg::detect_posture(got) == want_p);
+        }
+
+        // "restart": through the file, and back.
+        auto s = persistence::load_settings(::agentty::IoAccess::grant());
+        s.sandbox = m.d.persisted.sandbox;
+        persistence::save_settings(::agentty::IoAccess::grant(), agtest::cap(), s);
+        const auto loaded = persistence::load_settings(::agentty::IoAccess::grant()).sandbox;
+        CHECK(loaded == m.d.persisted.sandbox);
+
+        // and the pane, opened on what loaded, shows the preset by name.
+        const auto form = pn::build_sandbox_form(loaded, facts_for(loaded));
+        const int r = row_of(form, pn::kSbPosture);
+        REQUIRE(r >= 0);
+        CHECK(std::get<form::field::Choice>(form.fields[static_cast<std::size_t>(r)].value).index
+              == want);
+    }
+
+    if (oh) ::setenv("HOME", old_home.c_str(), 1); else ::unsetenv("HOME");
+    if (oa) ::setenv("AGENTTY_HOME", old_ah.c_str(), 1); else ::unsetenv("AGENTTY_HOME");
+    fs::remove_all(dir);
 }
 
 TEST_CASE("sandbox pane: a preset does not re-stamp a row edited after it") {

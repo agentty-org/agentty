@@ -576,17 +576,25 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
     cfg.configured = true;
 
     auto choice_of = [&](std::string_view id, int fallback) {
-        if (const auto* fld = f.find(id))
+        if (const auto* fld = f.find(id); fld && !fld->locked)
             if (const auto* c = std::get_if<form::field::Choice>(&fld->value)) return c->index;
         return fallback;
     };
+    // A LOCKED row is a report, not an input. Several rows display what the
+    // ENGINE will do rather than what the config says (Scope IPC reads "on"
+    // under seatbelt whatever the config holds; W^X reads "on" whenever the
+    // syscall filter is on). Reading those displays back wrote the engine's
+    // fact INTO the config: picking Permissive (scope_ipc=false) came back
+    // scope_ipc=true, Balanced (wx_protect=false) came back true, and both
+    // presets read as Custom. A locked row therefore keeps base's value --
+    // the user could not have changed it, so nothing changed.
     auto toggle_of = [&](std::string_view id, bool fallback) {
-        if (const auto* fld = f.find(id))
+        if (const auto* fld = f.find(id); fld && !fld->locked)
             if (const auto* t = std::get_if<form::field::Toggle>(&fld->value)) return t->on;
         return fallback;
     };
     auto num_of = [&](std::string_view id, std::int64_t fallback) -> std::int64_t {
-        if (const auto* fld = f.find(id))
+        if (const auto* fld = f.find(id); fld && !fld->locked)
             if (const auto* n = std::get_if<form::field::Number>(&fld->value)) return form::number_value(*n);
         return fallback;
     };
