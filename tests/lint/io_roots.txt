@@ -12,6 +12,9 @@ src/runtime/app/init.cpp
 # Process entry points: `agentty run`, the CLI verbs.
 src/runtime/main.cpp
 src/tool/skills_cli.cpp
+# `agentty run`'s body: after the one-shot finishes it persists the fields a
+# host rejected, from the top of the verb -- no reducer, no Io to inherit.
+src/runtime/run_cli.cpp
 
 # The ACP server: its handlers run on the RPC reader, not in a reducer.
 src/acp/server.cpp

@@ -360,8 +360,13 @@ void prewarm_active_provider(Io io) {
                                    t.override_port);
 }
 
-std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap, const Selection& sel,
-                                       const auth::AuthHeader& auth) {
+namespace {
+// One body for both overloads. `error` receives the OpenAI-compat fetch's
+// reason when it failed; the other backends either throw or have no failure
+// mode worth naming, so for them it stays empty.
+std::vector<ModelInfo> list_models_impl(Io io, const maya::unlocked& cap, const Selection& sel,
+                                        const auth::AuthHeader& auth, std::string& error) {
+    error.clear();
     // Dispatch on the CARRIED provider id, not on a re-derived label. The
     // three OAuth-native backends fetch their own catalogs because their
     // endpoints expose metadata the generic parser discards (Copilot's
@@ -377,23 +382,24 @@ std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap, const S
     if (sel.is_chatgpt()) return chatgpt::list_models(io, cap);
     if (sel.kind == Kind::Anthropic) return anthropic::list_models(io, auth);
 
-    auto models = openai::list_models(io, auth, sel.openai_endpoint);
+    auto models = openai::list_models(io, auth, sel.openai_endpoint, false, error);
     // Hosted providers return nothing before a key is set (or when the fetch
     // fails). Seed from the bundled catalog so the picker is never stranded
     // empty; custom hosts have no seed and legitimately stay empty.
     if (models.empty()) return bundled_models_for(sel.openai_endpoint.label);
     return models;
 }
+}  // namespace
+
+std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap, const Selection& sel,
+                                       const auth::AuthHeader& auth) {
+    std::string ignored;
+    return list_models_impl(io, cap, sel, auth, ignored);
+}
 
 std::vector<ModelInfo> list_models_for(Io io, const maya::unlocked& cap,
     const Selection& sel, const auth::AuthHeader& auth, std::string& error) {
-    auto models = list_models_for(io, cap, sel, auth);
-    // Only the OpenAI-compat path records a reason; the others either throw
-    // or have no failure mode worth naming.
-    error = (sel.kind == Kind::OpenAI && !sel.is_copilot() && !sel.is_kimi()
-             && !sel.is_chatgpt())
-        ? openai::last_list_models_error() : std::string{};
-    return models;
+    return list_models_impl(io, cap, sel, auth, error);
 }
 
 std::vector<int> filter_provider_indices(std::string_view query) {

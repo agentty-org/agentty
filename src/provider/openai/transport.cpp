@@ -3899,15 +3899,16 @@ int probe_loaded_window(Io /*io*/, const AuthHeader& auth, const Endpoint& endpo
     return probe.per_model.empty() ? probe.server_wide : 0;
 }
 
-namespace {
-thread_local std::string t_list_models_error;
-}
-std::string last_list_models_error() { return t_list_models_error; }
-
 std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint& endpoint,
                                    bool force_probe) {
+    std::string ignored;
+    return list_models(io, auth, endpoint, force_probe, ignored);
+}
+
+std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint& endpoint,
+                                   bool force_probe, std::string& error) {
     std::vector<ModelInfo> result;
-    t_list_models_error.clear();
+    error.clear();
     // A known hosted provider with no key would only 401. A custom host may
     // need no key at all, so ask it.
     if (endpoint.use_tls && is_empty(auth)
@@ -3964,7 +3965,7 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint
         }
     }
     if (!resp) {
-        t_list_models_error = "can't reach " + endpoint.host + ": " + resp.error().render();
+        error = "can't reach " + endpoint.host + ": " + resp.error().render();
         return result;
     }
     if (resp->status != 200) {
@@ -3974,7 +3975,7 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth, const Endpoint
         if (resp->status == 401 || resp->status == 403)
             msg += is_empty(auth) ? " \xe2\x80\x94 this host needs an API key"
                                   : " \xe2\x80\x94 the API key was rejected";
-        t_list_models_error = std::move(msg);
+        error = std::move(msg);
         return result;
     }
     // Capability facts for the whole list go in one batch and are published

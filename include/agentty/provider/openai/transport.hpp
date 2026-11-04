@@ -138,11 +138,17 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink,
                                                  const Endpoint& endpoint,
                                                  bool force_probe = false);
 
-// Why this thread's last list_models() call came back empty, as one sentence
-// ("HTTP 401: Invalid API key"), or empty when it succeeded or the host
-// answered with an empty list. Lets callers say why instead of showing
-// an empty picker.
-[[nodiscard]] std::string last_list_models_error();
+// The same, and why it came back empty: `error` is set to one sentence
+// ("HTTP 401: Invalid API key") when the fetch failed, and cleared when it
+// succeeded or the host answered with an empty list. Lets callers say why
+// instead of showing an empty picker.
+//
+// An out-parameter rather than the thread_local this used to be: the reason
+// belongs to THIS call, and a thread-scoped side channel is both banned
+// (jaal's concurrency lint) and wrong the moment two fetches share a worker.
+[[nodiscard]] std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth,
+                                                 const Endpoint& endpoint,
+                                                 bool force_probe, std::string& error);
 
 // The context window a /v1/models row DECLARES, or 0 when it declares none.
 //

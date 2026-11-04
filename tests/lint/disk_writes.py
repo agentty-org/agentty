@@ -52,6 +52,10 @@ RULES = {
             "src/io/shared_file.cpp",
             "src/tool/util/disk_files.cpp",
             "src/util/logx.cpp",                # the log: one process, O_APPEND
+            # AGENTTY_STARTUP_TRACE=<path>: a dev-only timing log the user
+            # names on the command line, appended by one process. Not a
+            # shared file; nothing else reads or writes it.
+            "include/agentty/util/startup_trace.hpp",
         },
     ),
     "setvbuf": (
