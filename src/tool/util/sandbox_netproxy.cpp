@@ -110,8 +110,205 @@ bool is_blocked_address(std::string_view addr) noexcept {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#if !defined(__linux__)
+// ── the parsers ─────────────────────────────────────────────────────────
+//
+// Outside the platform #if: these touch no descriptors and no platform
+// headers, so they build (and are fuzzed) everywhere. Every length is checked
+// against the buffer before it is used -- the guest chooses these bytes.
+namespace agentty::tools::util::sandbox::netproxy {
 
+namespace parse_detail {
+
+// A hostname's hard limit (RFC 1035: 255 octets including the length bytes).
+// Enforced in the parsers rather than left to the resolver: a 4 KB "host"
+// is not a destination, and refusing it here keeps a silly string out of
+// getaddrinfo and out of the log line that reports the refusal.
+inline constexpr std::size_t kMaxHostLen = 255;
+
+// A 16-bit big-endian read. The caller has already bounds-checked `at`.
+[[nodiscard]] inline std::uint16_t be16(std::string_view s, std::size_t at) noexcept {
+    return static_cast<std::uint16_t>(
+        (static_cast<unsigned char>(s[at]) << 8) | static_cast<unsigned char>(s[at + 1]));
+}
+
+// An address literal from its wire bytes, in presentation form. Hand-rolled
+// rather than inet_ntop so the parsers stay free of platform headers.
+[[nodiscard]] inline std::string v4_text(std::string_view b, std::size_t at) {
+    std::string out;
+    for (int i = 0; i < 4; ++i) {
+        if (i) out += '.';
+        out += std::to_string(static_cast<unsigned char>(b[at + std::size_t(i)]));
+    }
+    return out;
+}
+
+[[nodiscard]] inline std::string v6_text(std::string_view b, std::size_t at) {
+    // The full, uncompressed form. getaddrinfo accepts it, and "correct but
+    // verbose" beats a hand-written :: compressor with an off-by-one in it.
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    for (int g = 0; g < 8; ++g) {
+        if (g) out += ':';
+        const auto hi = static_cast<unsigned char>(b[at + std::size_t(g) * 2]);
+        const auto lo = static_cast<unsigned char>(b[at + std::size_t(g) * 2 + 1]);
+        out += kHex[hi >> 4];
+        out += kHex[hi & 0xf];
+        out += kHex[lo >> 4];
+        out += kHex[lo & 0xf];
+    }
+    return out;
+}
+
+// A port from decimal digits, refusing anything that is not exactly a port.
+// strtoul would take "80abc", "+80", " 80", and wrap on overflow.
+[[nodiscard]] inline bool parse_port(std::string_view s, std::uint16_t& out) noexcept {
+    if (s.empty() || s.size() > 5) return false;
+    std::uint32_t v = 0;
+    for (char ch : s) {
+        if (ch < '0' || ch > '9') return false;
+        v = v * 10 + static_cast<std::uint32_t>(ch - '0');
+        if (v > 65535) return false;
+    }
+    if (v == 0) return false;   // port 0 is not a destination
+    out = static_cast<std::uint16_t>(v);
+    return true;
+}
+
+}  // namespace parse_detail
+
+Socks5Greeting parse_socks5_greeting(std::string_view in) noexcept {
+    Socks5Greeting g;
+    if (in.size() < 2) { g.need_more = true; return g; }
+    if (static_cast<unsigned char>(in[0]) != 0x05) return g;   // not SOCKS5
+    const std::size_t n = static_cast<unsigned char>(in[1]);
+    if (in.size() < 2 + n) { g.need_more = true; return g; }
+    for (std::size_t i = 0; i < n; ++i)
+        if (static_cast<unsigned char>(in[2 + i]) == 0x00) g.no_auth = true;
+    g.consumed = 2 + n;
+    g.ok = true;
+    return g;
+}
+
+Socks5Request parse_socks5_request(std::string_view in) {
+    using namespace parse_detail;
+    Socks5Request r;
+    // 05 CMD 00 ATYP + at least one address byte + 2 port bytes
+    if (in.size() < 7) { r.target.need_more = true; return r; }
+    if (static_cast<unsigned char>(in[0]) != 0x05) return r;
+    r.cmd  = static_cast<std::uint8_t>(in[1]);
+    r.atyp = static_cast<std::uint8_t>(in[3]);
+
+    std::size_t port_at = 0;
+    if (r.atyp == 0x01) {            // IPv4: 4 bytes
+        if (in.size() < 4 + 4 + 2) { r.target.need_more = true; return r; }
+        r.target.host = v4_text(in, 4);
+        port_at = 8;
+    } else if (r.atyp == 0x03) {     // name: a length byte, then that many
+        const std::size_t len = static_cast<unsigned char>(in[4]);
+        if (in.size() < 5 + len + 2) { r.target.need_more = true; return r; }
+        if (len == 0) return r;      // an empty host is not a destination
+        r.target.host.assign(in.substr(5, len));
+        // A "name" with a NUL or a slash in it is not a name. Refuse rather
+        // than hand it to the resolver.
+        if (r.target.host.find('\0') != std::string::npos
+            || r.target.host.find('/') != std::string::npos)
+            return r;
+        // SOCKS5 caps a name at 255 by its length byte, so this is belt and
+        // braces -- but the HTTP side has no such cap, and both go to the
+        // same resolver.
+        if (r.target.host.size() > kMaxHostLen) return r;
+        port_at = 5 + len;
+    } else if (r.atyp == 0x04) {     // IPv6: 16 bytes
+        if (in.size() < 4 + 16 + 2) { r.target.need_more = true; return r; }
+        r.target.host = v6_text(in, 4);
+        port_at = 20;
+    } else {
+        return r;                    // unknown address type
+    }
+
+    r.target.port = be16(in, port_at);
+    if (r.target.port == 0) return r;
+    r.target.ok = true;
+    return r;
+}
+
+HttpRequest parse_http_request(std::string_view head) {
+    using namespace parse_detail;
+    HttpRequest h;
+    // "METHOD SP TARGET SP VERSION"; only the first two fields matter here.
+    const auto sp1 = head.find(' ');
+    if (sp1 == std::string_view::npos) {
+        h.target.need_more = head.size() < 8192;
+        return h;
+    }
+    const std::string_view method = head.substr(0, sp1);
+    const auto sp2 = head.find(' ', sp1 + 1);
+    if (sp2 == std::string_view::npos) {
+        h.target.need_more = head.size() < 8192;
+        return h;
+    }
+    const std::string_view target = head.substr(sp1 + 1, sp2 - sp1 - 1);
+    if (method.empty() || target.empty()) return h;
+
+    std::string_view authority;
+    if (method == "CONNECT") {
+        h.connect = true;
+        authority = target;          // authority-form: host:port, port required
+    } else {
+        // absolute-form: scheme://host[:port]/path
+        const auto scheme = target.find("://");
+        if (scheme == std::string_view::npos) return h;
+        const auto start = scheme + 3;
+        if (start >= target.size()) return h;
+        const auto slash = target.find('/', start);
+        authority = target.substr(start, slash == std::string_view::npos
+                                             ? std::string_view::npos
+                                             : slash - start);
+        // userinfo@host is legal; the host is the part that matters.
+        if (const auto at = authority.rfind('@'); at != std::string_view::npos)
+            authority = authority.substr(at + 1);
+    }
+    if (authority.empty()) return h;
+
+    if (authority.front() == '[') {
+        // a bracketed IPv6 literal, with any port outside the brackets
+        const auto close = authority.find(']');
+        if (close == std::string_view::npos) return h;
+        h.target.host.assign(authority.substr(1, close - 1));
+        const auto rest = authority.substr(close + 1);
+        if (rest.empty()) {
+            if (h.connect) return h;   // CONNECT needs an explicit port
+            h.target.port = 80;
+        } else if (rest.front() == ':') {
+            if (!parse_port(rest.substr(1), h.target.port)) return h;
+        } else {
+            return h;
+        }
+    } else {
+        const auto colon = authority.rfind(':');
+        if (colon == std::string_view::npos) {
+            if (h.connect) return h;
+            h.target.host.assign(authority);
+            h.target.port = 80;
+        } else {
+            h.target.host.assign(authority.substr(0, colon));
+            if (!parse_port(authority.substr(colon + 1), h.target.port)) return h;
+        }
+    }
+    if (h.target.host.empty() || h.target.host.find('\0') != std::string::npos)
+        return h;
+    if (h.target.host.size() > parse_detail::kMaxHostLen) return h;
+    h.target.ok = true;
+    return h;
+}
+
+}  // namespace agentty::tools::util::sandbox::netproxy
+
+#if !defined(__linux__) || defined(AGENTTY_NETPROXY_PARSERS_ONLY)
+
+// The parsers above are the whole file when AGENTTY_NETPROXY_PARSERS_ONLY is
+// set (the fuzz harness) or when this is not Linux. A Proxy still has to
+// LINK, so it exists and refuses to start.
 namespace agentty::tools::util::sandbox::netproxy {
 Proxy::~Proxy() = default;
 bool Proxy::start(int) { return false; }
@@ -236,20 +433,19 @@ void write_all(int fd, std::string_view s) {
 }
 
 // SOCKS5 (RFC 1928), the no-auth subset every client uses.
-// Returns the upstream fd, or -1 after answering the client with a failure.
+//
+// The byte parsing lives in parse_socks5_* above, which is where the fuzzer
+// reaches it; this is the socket half: read until the parser says it has
+// enough, then answer.
 int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& refused_count,
                  const std::stop_token& stop) {
-    // greeting: 05 NMETHODS METHODS...
     std::string in = first;
-    if (in.size() < 2) return -1;
-    const std::size_t nmethods = static_cast<unsigned char>(in[1]);
-    while (in.size() < 2 + nmethods) {
-        if (!read_some(c, in, 2 + nmethods, stop)) return -1;
+    Socks5Greeting g = parse_socks5_greeting(in);
+    while (g.need_more) {
+        if (!read_some(c, in, 512, stop)) return -1;
+        g = parse_socks5_greeting(in);
     }
-    bool no_auth = false;
-    for (std::size_t i = 0; i < nmethods && 2 + i < in.size(); ++i)
-        if (static_cast<unsigned char>(in[2 + i]) == 0x00) no_auth = true;
-    if (!no_auth) {
+    if (!g.ok || !g.no_auth) {
         const char none[2] = {'\x05', '\xff'};   // no acceptable method
         write_all(c, std::string_view{none, sizeof none});
         return -1;
@@ -259,48 +455,31 @@ int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& re
         write_all(c, std::string_view{ok, sizeof ok});
     }
 
-    // request: 05 CMD 00 ATYP ADDR PORT
-    std::string req;
-    if (!read_some(c, req, 512, stop) || req.size() < 7) return -1;
-    const unsigned char cmd = static_cast<unsigned char>(req[1]);
-    const unsigned char atyp = static_cast<unsigned char>(req[3]);
-    std::string host;
-    std::size_t pos = 4;
-    if (atyp == 0x01) {   // IPv4
-        if (req.size() < 10) return -1;
-        char txt[INET_ADDRSTRLEN]{};
-        ::inet_ntop(AF_INET, req.data() + 4, txt, sizeof txt);
-        host = txt;
-        pos = 8;
-    } else if (atyp == 0x03) {   // name
-        const std::size_t len = static_cast<unsigned char>(req[4]);
-        if (req.size() < 5 + len + 2) return -1;
-        host.assign(req, 5, len);
-        pos = 5 + len;
-    } else if (atyp == 0x04) {   // IPv6
-        if (req.size() < 22) return -1;
-        char txt[INET6_ADDRSTRLEN]{};
-        ::inet_ntop(AF_INET6, req.data() + 4, txt, sizeof txt);
-        host = txt;
-        pos = 20;
-    } else {
+    // The request may already be in the buffer behind the greeting (clients
+    // pipeline it), so start from what is left rather than reading blind.
+    std::string req = in.substr(g.consumed);
+    Socks5Request r = parse_socks5_request(req);
+    while (r.target.need_more) {
+        if (!read_some(c, req, 512, stop)) return -1;
+        r = parse_socks5_request(req);
+    }
+    if (!r.target.ok) {
+        // 0x08 = address type not supported, which covers the malformed cases
+        // closely enough for a client to report something useful.
         const char nosup[10] = {'\x05', '\x08', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
         write_all(c, std::string_view{nosup, sizeof nosup});
         return -1;
     }
-    const std::uint16_t port = static_cast<std::uint16_t>(
-        (static_cast<unsigned char>(req[pos]) << 8) | static_cast<unsigned char>(req[pos + 1]));
-
-    // CONNECT only. BIND and UDP ASSOCIATE would both be inbound paths, and
+    // CONNECT only. BIND and UDP ASSOCIATE are both inbound paths, and
     // nothing a build does needs them.
-    if (cmd != 0x01) {
+    if (r.cmd != 0x01) {
         const char nocmd[10] = {'\x05', '\x07', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
         write_all(c, std::string_view{nocmd, sizeof nocmd});
         return -1;
     }
 
     bool refused = false;
-    const int up = dial_filtered(host, port, refused);
+    const int up = dial_filtered(r.target.host, r.target.port, refused);
     if (up < 0) {
         if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
         // 0x02 = "connection not allowed by ruleset" for a refusal, which is
@@ -308,7 +487,7 @@ int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& re
         //
         // Built as an explicit 10-byte array, NOT a string literal: a SOCKS
         // reply is mostly NUL bytes, so a std::string built from one stops at
-        // the first and the client sees a truncated reply (curl reports
+        // the first and the client sees a truncated reply (curl reported
         // "proxy closed connection" rather than the refusal it was sent).
         const char reply[10] = {'\x05', refused ? '\x02' : '\x05', '\x00', '\x01',
                                 0, 0, 0, 0, 0, 0};
@@ -322,52 +501,19 @@ int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& re
     return up;
 }
 
-// HTTP CONNECT, plus a plain absolute-form request for http:// URLs.
+// HTTP CONNECT, plus absolute-form requests for plain http:// URLs.
 int serve_http(int c, const std::string& head, std::atomic<std::uint64_t>& refused_count,
                bool& forward_head, std::string& rest) {
-    forward_head = false;
-    const auto sp1 = head.find(' ');
-    if (sp1 == std::string::npos) return -1;
-    const std::string method = head.substr(0, sp1);
-    const auto sp2 = head.find(' ', sp1 + 1);
-    if (sp2 == std::string::npos) return -1;
-    std::string target = head.substr(sp1 + 1, sp2 - sp1 - 1);
-
-    std::string host;
-    std::uint16_t port = 0;
-    if (method == "CONNECT") {
-        // authority-form: host:port
-        const auto colon = target.rfind(':');
-        if (colon == std::string::npos) return -1;
-        host = target.substr(0, colon);
-        port = static_cast<std::uint16_t>(std::atoi(target.c_str() + colon + 1));
-    } else {
-        // absolute-form: http://host[:port]/path
-        const auto scheme = target.find("://");
-        if (scheme == std::string::npos) return -1;
-        const auto start = scheme + 3;
-        const auto slash = target.find('/', start);
-        std::string authority = target.substr(start, slash == std::string::npos
-                                                         ? std::string::npos
-                                                         : slash - start);
-        const auto colon = authority.rfind(':');
-        if (colon != std::string::npos) {
-            host = authority.substr(0, colon);
-            port = static_cast<std::uint16_t>(std::atoi(authority.c_str() + colon + 1));
-        } else {
-            host = authority;
-            port = 80;
-        }
-        forward_head = true;
-        rest = head;
+    const HttpRequest h = parse_http_request(head);
+    forward_head = h.target.ok && !h.connect;
+    if (forward_head) rest = head;
+    if (!h.target.ok) {
+        write_all(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        return -1;
     }
-    if (host.empty() || port == 0) return -1;
-    // Strip [] from an IPv6 literal.
-    if (host.size() >= 2 && host.front() == '[' && host.back() == ']')
-        host = host.substr(1, host.size() - 2);
 
     bool refused = false;
-    const int up = dial_filtered(host, port, refused);
+    const int up = dial_filtered(h.target.host, h.target.port, refused);
     if (up < 0) {
         if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
         write_all(c, refused ? "HTTP/1.1 403 Forbidden\r\n"
@@ -376,7 +522,7 @@ int serve_http(int c, const std::string& head, std::atomic<std::uint64_t>& refus
                              : "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
         return -1;
     }
-    if (method == "CONNECT") write_all(c, "HTTP/1.1 200 Connection established\r\n\r\n");
+    if (h.connect) write_all(c, "HTTP/1.1 200 Connection established\r\n\r\n");
     return up;
 }
 
@@ -498,4 +644,4 @@ std::uint64_t Proxy::served() const noexcept {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#endif  // __linux__
+#endif  // __linux__ && !AGENTTY_NETPROXY_PARSERS_ONLY

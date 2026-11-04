@@ -54,6 +54,48 @@ namespace agentty::tools::util::sandbox::netproxy {
 // Pure and exported for the test: every entry in the list above is pinned.
 [[nodiscard]] bool is_blocked_address(std::string_view addr) noexcept;
 
+// ── the parsers, as pure functions ──────────────────────────────────────
+//
+// Split out from the socket code because they read bytes the GUEST chose:
+// they are the one attacker-controlled parser in the sandbox's host side, so
+// they are fuzzed (tests/fuzz/fuzz_netproxy.cpp) rather than trusted. No
+// descriptors, no allocation beyond the output strings, no I/O.
+
+struct Target {
+    std::string host;        // a name or a literal, exactly as asked for
+    std::uint16_t port{0};
+    bool ok{false};          // false = malformed, and `need_more` says which
+    bool need_more{false};   // the request is a valid PREFIX; read and retry
+};
+
+// SOCKS5 greeting (RFC 1928 §3): 05 NMETHODS METHODS...
+// `ok` means a complete greeting that offers no-auth.
+struct Socks5Greeting {
+    bool ok{false};
+    bool need_more{false};
+    bool no_auth{false};
+    std::size_t consumed{0};
+};
+[[nodiscard]] Socks5Greeting parse_socks5_greeting(std::string_view in) noexcept;
+
+// SOCKS5 request (§4): 05 CMD 00 ATYP ADDR PORT. `cmd` is reported so the
+// caller can refuse anything but CONNECT with the right reply code.
+struct Socks5Request {
+    Target target;
+    std::uint8_t cmd{0};
+    std::uint8_t atyp{0};
+};
+[[nodiscard]] Socks5Request parse_socks5_request(std::string_view in);
+
+// An HTTP request line: CONNECT host:port, or an absolute-form GET/POST/...
+// `connect` distinguishes the two, because one gets a 200 and a tunnel and
+// the other gets its head forwarded upstream.
+struct HttpRequest {
+    Target target;
+    bool connect{false};
+};
+[[nodiscard]] HttpRequest parse_http_request(std::string_view head);
+
 // A running proxy: owns the accept loop and its worker, joins on destruction.
 //
 // Construct it with the listener claybin handed back (it takes ownership) and

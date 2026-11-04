@@ -44,12 +44,24 @@ clang++ -std=c++23 -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,unde
     -fno-sanitize-recover=undefined -I$RP/include tests/fuzz/fuzz_richpaste.cpp $RP_SRC \
     -lpthread -ldl -o "$OUT/fuzz_richpaste"
 
+# the sandbox proxy's parsers. these read bytes the GUEST wrote, which is the
+# only attacker-controlled parser on the host side of the sandbox, so it gets
+# the same treatment as the clipboard formats.
+#
+# AGENTTY_NETPROXY_PARSERS_ONLY compiles just the pure half of the file: no
+# sockets, no namespaces, no logging or thread pool to link against. The
+# parsers are the part that reads hostile input, and keeping the harness to
+# them is what makes it a two-file link instead of half the binary.
+clang++ $FLAGS $INC -DAGENTTY_NETPROXY_PARSERS_ONLY=1 tests/fuzz/fuzz_netproxy.cpp \
+    src/tool/util/sandbox_netproxy.cpp \
+    -o "$OUT/fuzz_netproxy"
+
 # Seed the corpora with well-formed examples of each format.
 clang++ -std=c++23 -O1 -I$RP/include tests/fuzz/seeds.cpp $RP_SRC -lpthread -ldl -o "$OUT/seeds"
 "$OUT/seeds" "$OUT/corpus/fuzz_richpaste" "$OUT/corpus/fuzz_text"
 
 fails=0
-for h in fuzz_text fuzz_richpaste; do
+for h in fuzz_text fuzz_richpaste fuzz_netproxy; do
     mkdir -p "$OUT/corpus/$h" "$OUT/crashes/$h"
     echo "== $h ($SECS s)"
     if ! "$OUT/$h" -max_total_time="$SECS" -max_len=4096 -timeout=10 \
