@@ -206,12 +206,17 @@ std::pair<Model, Cmd> init() {
             bool present = false;
             for (const auto& mi : m.d.available_models)
                 if (mi.id == m.d.model_id) { present = true; break; }
-            if (!present)
-                m.d.available_models.insert(
-                    m.d.available_models.begin(),
-                    ModelInfo{m.d.model_id, m.d.model_id.value,
-                              detail::active_provider_id(m),
-                              anthropic_active ? 200000 : 0, false});
+            if (!present) {
+                // Same ladder as every other row. A flat 200000 here gave a
+                // saved `[1m]` model a 200k window, and its output cap (a
+                // quarter of the window) became 50k.
+                ModelInfo row{m.d.model_id, m.d.model_id.value,
+                              detail::active_provider_id(m), 0, false};
+                ui::bake_context_window(row, detail::active_provider_id(m),
+                                        settings, m.env.max_context_tokens);
+                m.d.available_models.insert(m.d.available_models.begin(),
+                                            std::move(row));
+            }
         } else if (!anthropic_active) {
             m.d.model_id = m.d.available_models.empty()
                 ? ModelId{} : m.d.available_models.front().id;
@@ -433,9 +438,11 @@ std::pair<Model, Cmd> init() {
     // on the very first prompt. Fetch /v1/models eagerly at startup so
     // the ModelsLoaded reducer can swap to a real, served model id
     // BEFORE the user sends anything — the same validation the model
-    // picker does, just not gated on the user opening it. Anthropic has
-    // a trustworthy built-in seed list, so it skips this round trip.
-    if (m.d.selection.kind == provider::Kind::OpenAI) {
+    // picker does, just not gated on the user opening it. Anthropic fetches
+    // too: its live list carries each model's real output cap and window,
+    // which the bundled seed can't know for models newer than this build.
+    if (m.d.selection.kind == provider::Kind::OpenAI
+        || m.d.selection.kind == provider::Kind::Anthropic) {
         m.s.models_loading = true;
         cmds.push_back(cmd::fetch_models(m));
     }

@@ -24,6 +24,25 @@ using namespace agentty;
 
 static bool weak(std::string_view id) { return is_weak_model(id); }
 
+TEST_CASE("max output: a declared cap beats the family table") {
+    // Table says Haiku is 8192; the provider says 128000. The provider wins.
+    CatalogBatch b;
+    b.set_max_output("maxoutprov/claude-haiku-9-9", 128000);
+    b.merge_max_output("maxout-bare-model", 32768);
+    b.commit();
+    set_caps_provider_scope("maxoutprov");
+    CHECK(max_output_tokens_for("claude-haiku-9-9") == 128000);
+    // The [1m] variant is the same model.
+    CHECK(max_output_tokens_for("claude-haiku-9-9[1m]") == 128000);
+    CHECK(max_output_tokens_for("maxout-bare-model") == 32768);
+    // Huge declarations are capped so a turn isn't billed 384k by default.
+    set_catalog_max_output("maxoutprov/huge-out-model", 384000);
+    CHECK(max_output_tokens_for("huge-out-model") == 128000);
+    // Nothing declared: the table still answers.
+    CHECK(max_output_tokens_for("claude-haiku-4-5") == 8192);
+    set_caps_provider_scope("");
+}
+
 TEST_CASE("catalog batch: same facts as the per-fact setters, published once") {
     // Unique ids so this test can't collide with others in the process.
     CatalogBatch b;

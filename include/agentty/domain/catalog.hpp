@@ -1404,6 +1404,25 @@ inline void merge_catalog_context_window(const std::string& raw_id, int tokens) 
     catalog_context_detail::reg().merge(std::move(key), tokens);
 }
 
+// The model's real output ceiling, as the provider or models.dev declares it.
+// Same scoping as the context window: scoped record wins, bare tail is
+// merge-or-poison.
+namespace catalog_max_output_detail {
+inline Registry<int>& reg() { static Registry<int> r; return r; }
+} // namespace catalog_max_output_detail
+
+inline void set_catalog_max_output(std::string model_id, int tokens) {
+    if (tokens <= 0) return;
+    bump_caps_epoch();
+    catalog_max_output_detail::reg().set(norm_caps_key(model_id), tokens);
+}
+inline void merge_catalog_max_output(const std::string& raw_id, int tokens) {
+    if (tokens <= 0) return;
+    std::string key{capkey::norm_tail(raw_id)};
+    if (key.empty()) return;
+    catalog_max_output_detail::reg().merge(std::move(key), tokens);
+}
+
 // ── Endpoint-keyed declarations (custom-host / localhost seam) ──────────
 // The provider-scoped map above is keyed by agentty's PROVIDER id — which
 // for a custom host is the endpoint spec the user typed ("localhost:11434",
@@ -1523,6 +1542,7 @@ struct CatalogBatch {
     Registry<std::uint8_t>::Batch effort;
     Registry<std::uint8_t>::Batch reasoning_off;
     Registry<int>::Batch          context;
+    Registry<int>::Batch          max_output;
     std::vector<std::tuple<std::string, std::string, catalog_endpoint_detail::Entry>> endpoints;
 
     void set_reasoning(std::string id, bool r) {
@@ -1554,6 +1574,14 @@ struct CatalogBatch {
         std::string key{capkey::norm_tail(raw_id)};
         if (!key.empty()) context.merges.emplace_back(std::move(key), tokens);
     }
+    void set_max_output(std::string id, int tokens) {
+        if (tokens > 0) max_output.sets.emplace_back(norm_caps_key(id), tokens);
+    }
+    void merge_max_output(const std::string& raw_id, int tokens) {
+        if (tokens <= 0) return;
+        std::string key{capkey::norm_tail(raw_id)};
+        if (!key.empty()) max_output.merges.emplace_back(std::move(key), tokens);
+    }
     void merge_endpoint_context_window(std::string_view api_url,
                                        const std::string& raw_id, int tokens) {
         if (tokens <= 0) return;
@@ -1578,9 +1606,11 @@ struct CatalogBatch {
     void commit() {
         const bool any = !reasoning.empty() || !effort.empty()
                       || !reasoning_off.empty()
-                      || !context.empty() || !endpoints.empty();
+                      || !context.empty() || !max_output.empty()
+                      || !endpoints.empty();
         if (!any) return;
         catalog_context_detail::reg().commit(std::move(context));
+        catalog_max_output_detail::reg().commit(std::move(max_output));
         catalog_effort_detail::reg().commit(std::move(effort));
         catalog_reasoning_off_detail::reg().commit(std::move(reasoning_off));
         if (!endpoints.empty())
@@ -1641,6 +1671,17 @@ struct CatalogBatch {
     auto scoped = scope.empty() ? scoped_caps_key(model_id)
                                 : scoped_caps_key(model_id, scope);
     return catalog_context_detail::reg()
+        .find(scoped, capkey::norm_tail(model_id))
+        .value_or(0);
+}
+
+// 0 = no declaration. Scoped-first, bare fallback.
+[[nodiscard]] inline int catalog_max_output_for(std::string_view model_id,
+                                                std::string_view scope = {}) {
+    if (!catalog_max_output_detail::reg().any()) return 0;
+    auto scoped = scope.empty() ? scoped_caps_key(model_id)
+                                : scoped_caps_key(model_id, scope);
+    return catalog_max_output_detail::reg()
         .find(scoped, capkey::norm_tail(model_id))
         .value_or(0);
 }
@@ -2515,9 +2556,14 @@ inline void set_max_output_override(int v) noexcept {
     for (const char* p = e; *p >= '0' && *p <= '9'; ++p) v = ::agentty::util::push_digit(v, *p);
     return v;
 }
-[[nodiscard]] inline int max_output_tokens_for(std::string_view model_id) noexcept {
+[[nodiscard]] inline int max_output_tokens_for(std::string_view model_id) {
     if (const int v = max_output_detail::cell().load(std::memory_order_relaxed); v > 0)
         return v;
+    // The provider's own figure (/v1/models, models.dev) beats the table.
+    // Capped so one turn can't be billed a 384k ceiling by default.
+    if (const int declared = catalog_max_output_for(wire_model_id(model_id));
+        declared > 0)
+        return std::min(declared, 128000);
 
     const auto caps = ModelCapabilities::from_id(model_id);
     if (caps.is_known_family()) {

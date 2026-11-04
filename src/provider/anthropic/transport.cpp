@@ -733,6 +733,10 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth) {
             auto id = m.value("id", "");
             auto name = m.value("display_name", id);
             if (id.empty()) continue;
+            // The live figure for this account; outranks models.dev.
+            if (const auto mt = m.find("max_tokens");
+                mt != m.end() && mt->is_number_integer())
+                set_catalog_max_output("anthropic/" + id, mt->get<int>());
             result.push_back(ModelInfo{
                 .id = ModelId{id},
                 .display_name = name,

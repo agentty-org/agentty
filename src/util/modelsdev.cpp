@@ -152,10 +152,16 @@ void register_model(CatalogBatch& out,
         if (v > 0 && v <= std::numeric_limits<int>::max())
             dev_ctx = static_cast<int>(v);
     }
+    int dev_out = 0;
+    if (std::int64_t v = 0; !m["limit"]["output"].get_int64().get(v)) {
+        if (v > 0 && v <= std::numeric_limits<int>::max())
+            dev_out = static_cast<int>(v);
+    }
 
     out.set_reasoning(scope + "/" + mid, reasons);
     out.set_reasoning_off(scope + "/" + mid, off);
     if (dev_ctx > 0) out.set_context_window(scope + "/" + mid, dev_ctx);
+    if (dev_out > 0) out.set_max_output(scope + "/" + mid, dev_out);
     if (set >= 0)
         out.set_effort_set(scope + "/" + mid, static_cast<std::uint8_t>(set));
     // CUSTOM-HOST seam: index the declaration under the entry's api ORIGIN
@@ -170,6 +176,7 @@ void register_model(CatalogBatch& out,
         out.set_reasoning(scope + "/" + tail, reasons);
         out.set_reasoning_off(scope + "/" + tail, off);
         if (dev_ctx > 0) out.set_context_window(scope + "/" + tail, dev_ctx);
+        if (dev_out > 0) out.set_max_output(scope + "/" + tail, dev_out);
         if (set >= 0)
             out.set_effort_set(scope + "/" + tail, static_cast<std::uint8_t>(set));
     }
@@ -180,6 +187,7 @@ void register_model(CatalogBatch& out,
         out.merge_reasoning(tail, reasons);
         out.merge_reasoning_off(tail, off);
         if (dev_ctx > 0) out.merge_context_window(tail, dev_ctx);
+        if (dev_out > 0) out.merge_max_output(tail, dev_out);
         if (set >= 0)
             out.merge_effort_set(tail, static_cast<std::uint8_t>(set));
     }
