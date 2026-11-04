@@ -43,7 +43,7 @@ if [ ! -d "$BUILD_DIR" ]; then
   exit 1
 fi
 
-echo ">> syncing submodules (third_party/{maya,mcp-cpp,acp-cpp,rag-cpp}) …"
+echo ">> syncing submodules (third_party/{maya,mcp-cpp,acp-cpp,rag-cpp,claybin,richpaste}) …"
 cmake --build "$BUILD_DIR" --target submodules_sync
 
 echo ">> incremental rebuild (-j$JOBS) …"
