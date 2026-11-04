@@ -277,7 +277,7 @@ writes every other row:
 | posture | what it is | what it costs |
 |---|---|---|
 | `permissive` | mount walls only | no syscall filter, no memory/cpu/time caps |
-| `balanced` | the default, byte for byte | network is open, so read access is also exfiltration |
+| `balanced` | the default, byte for byte | network is filtered, not open: the box has its own namespace and reaches the internet through a proxy agentty serves (no host loopback, no LAN, no cloud metadata, no tailnet) |
 | `hardened` | every wall claybin can build | a build needing an unusual syscall may fail |
 | `airgapped` | hardened + no network at all | `git push`, `npm install`, `curl` all stop working |
 | `custom` | not selectable | what the pane *reports* when the rows match no preset |
@@ -340,7 +340,7 @@ On Linux with claybin, every wall exists:
   filesystem.read        strong  mount-ns
   filesystem.write       strong  mount-ns
   filesystem.exec        strong  landlock
-  network.isolation      strong  netns
+  network.isolation      strong  netns+loopback
   process.isolation      strong  userns+pidns
   syscall.filter         strong  seccomp-bpf
   resource.memory        strong  cgroup2 memory.max
@@ -580,14 +580,23 @@ what the rows describe:
 **Stops:** an approved command reading `~/.ssh/id_rsa`, `~/.aws/credentials` or a
 workspace `.env`; writing outside the workspace; forking a bomb; exhausting host
 memory; ptracing another process; mapping W+X pages; reaching the network when
-you said not to; the agent authoring a file your host later executes.
+you said not to; reaching the HOST's own loopback services, the LAN, cloud
+metadata (169.254.169.254) or a tailnet even when the network is on; the agent
+authoring a file your host later executes.
 
 **Does not stop:**
 
-- **Exfiltration over an allowed network.** With network on, a command that can
-  read can also send. This is a deliberate trade — sandboxing egress would break
-  `git push`, `npm install` and `curl` — and it is exactly why the default read
-  set is narrow rather than convenient, and why `airgapped` exists.
+- **Exfiltration to the open internet.** With network on, a command that can
+  read can also send — to a public address. The proxy refuses private ranges,
+  so the blast radius no longer includes your own machines, but it is not an
+  egress allow-list: sandboxing egress by destination would break `git push`,
+  `npm install` and `curl`. This is why the default read set is narrow rather
+  than convenient, and why `airgapped` exists.
+- **A proxy bug.** The private-range refusal is policy code in agentty, not a
+  kernel rule, so its strength is that code being right. What the KERNEL
+  guarantees is the part underneath: without a descriptor from the supervisor
+  the box has no route off its own loopback, so a bug there fails closed
+  (connection refused) rather than open.
 - **Secrets deeper than `mask_scan_depth`,** or inside a skipped directory. The
   bound is a setting, so the trade is yours.
 - **Credential names we do not know about.** A secret in `config.local.yaml` is
