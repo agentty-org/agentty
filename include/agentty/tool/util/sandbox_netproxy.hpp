@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <maya/runtime.hpp>   // maya::unlocked
 
@@ -53,6 +54,41 @@ namespace agentty::tools::util::sandbox::netproxy {
 //
 // Pure and exported for the test: every entry in the list above is pinned.
 [[nodiscard]] bool is_blocked_address(std::string_view addr) noexcept;
+
+// Is `host` (as the guest asked for it, before resolution) on the user's
+// allowlist? An EMPTY list allows every name -- the address filter above
+// still applies -- so this only ever narrows.
+//
+// Entries: `example.com` matches exactly that name; `*.example.com` matches
+// any name strictly under it, but NOT the apex (say both if you mean both:
+// the common slip is allowing `*.github.com` and wondering why github.com
+// itself fails, and the opposite slip silently grants every subdomain).
+// Case-insensitive, a trailing dot is ignored. An IP-literal host is refused
+// whenever a list is set: an allowlist of names cannot vouch for an address,
+// and allowing literals would make every name rule bypassable.
+//
+// Checked on the NAME, not the address: the guest cannot steer it with DNS,
+// because the proxy resolves the very name it checked.
+[[nodiscard]] bool host_allowed(std::string_view host,
+                                const std::vector<std::string>& allow) noexcept;
+
+// Canonicalise one allowlist entry as a user typed it, or say why it is not
+// one. The settings editor and the proxy both go through this, so a list the
+// pane accepted is exactly the list that is enforced.
+//
+// Forgiving where intent is unambiguous -- people paste URLs:
+//   "https://GitHub.com/foo"  -> "github.com"      (scheme, path, case)
+//   "github.com:443"          -> "github.com"      (port: the list is names)
+//   ".github.com"             -> "*.github.com"    (curl/no_proxy spelling)
+//   "github.com."             -> "github.com"
+// Strict where it is not: an IP literal, a bare "*", a wildcard anywhere but
+// the leftmost label, "*.com" (a whole TLD), or a character no host name can
+// contain are REJECTED with a reason, never guessed at.
+struct HostEntry {
+    std::string value;    // canonical form; empty when rejected
+    std::string_view why; // rejection reason (static text), empty when accepted
+};
+[[nodiscard]] HostEntry normalize_host_entry(std::string_view raw);
 
 // ── the parsers, as pure functions ──────────────────────────────────────
 //
@@ -113,8 +149,9 @@ class Proxy {
     Proxy& operator=(const Proxy&) = delete;
 
     // Takes ownership of `listen_fd`. Returns false (and closes it) when the
-    // worker could not start.
-    bool start(int listen_fd);
+    // worker could not start. `allow_hosts` is the name allowlist, fixed for
+    // the proxy's lifetime (see host_allowed); empty = any public host.
+    bool start(int listen_fd, std::vector<std::string> allow_hosts = {});
 
     // Stop accepting and join. Idempotent.
     //

@@ -209,6 +209,22 @@ std::atomic<bool> g_cfg_sealed{false};
 // see kEtcReadable.
 constexpr const char* kSystemReadRoots[] = {
     "/usr", "/bin", "/lib", "/lib64", "/sbin", "/opt",
+#if defined(__APPLE__)
+    // darwin's toolchain is NOT under /usr: /usr/bin/git, cc, python3, make
+    // are xcrun shims that dlopen libxcrun from the active developer dir
+    // and re-exec the real tool there. Without these every one of them died
+    // with "xcrun: error: unable to load libxcrun" -- under the default
+    // posture, since the sandbox was first turned on for macOS. The
+    // developer dir is resolved at posture time (xcode-select can point it
+    // anywhere); these are the two fixed places it lives.
+    "/System", "/Library/Developer/CommandLineTools",
+    // the whole bundle, not just Contents/Developer: xcrun loads
+    // SharedFrameworks and SystemFrameworks next to it.
+    "/Applications/Xcode.app/Contents",
+    "/private/var/select",
+    // localtime(3): every `date`, git log and python datetime.
+    "/private/var/db/timezone",
+#endif
 };
 
 // /etc: the specific files a shell + toolchain + name resolution need, NOT the
@@ -252,6 +268,13 @@ constexpr const char* kHomeToolSubdirs[] = {
     "/.pyenv", "/.rbenv", "/.asdf", // version managers
     "/.bun/bin", "/.deno/bin",   // Bun / Deno
     "/.dotnet", "/.sdkman/candidates", // .NET / JVM
+    // git's user config: identity, aliases, default branch. git treats an
+    // UNREADABLE ~/.gitconfig as fatal ("unable to access"), not as absent,
+    // so without it every git command inside the sandbox died -- status and
+    // log included. Read-only, and the credential store (.git-credentials,
+    // gh's hosts.yml) stays masked: a helper NAMED here still has nothing to
+    // read.
+    "/.gitconfig", "/.config/git",
 };
 #endif  // __linux__ || __APPLE__
 
@@ -414,6 +437,24 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
                 p.write_paths.push_back(std::move(a));
     }
 
+#if defined(__APPLE__)
+    // darwin's per-user temp and cache dirs (/var/folders/xx/yyy/{T,C}).
+    // This is where $TMPDIR points, NOT /tmp: mktemp, python's tempfile,
+    // xcrun's tool cache, clang's module cache, swift and every Cocoa tool
+    // write there, and without it /usr/bin/git and cc failed with "couldn't
+    // create cache file". The tmp-equivalent of the Linux tmpfs: private to
+    // this uid, and holding nothing a command could not have written itself.
+    for (int which : {_CS_DARWIN_USER_TEMP_DIR, _CS_DARWIN_USER_CACHE_DIR}) {
+        char buf[1024];
+        const std::size_t n = ::confstr(which, buf, sizeof buf);
+        if (n > 1 && n <= sizeof buf) {
+            std::string d{buf};
+            while (d.size() > 1 && d.back() == '/') d.pop_back();
+            p.write_paths.push_back(std::move(d));
+        }
+    }
+#endif
+
     p.workspace = workspace_root().string();
     p.cwd = p.workspace;
 
@@ -539,6 +580,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     // ── network ──────────────────────────────────────────────────────────
     p.net_mode = static_cast<int>(cfg.net_mode);
     p.allow_ports = cfg.allow_ports;
+    p.allow_hosts = cfg.allow_hosts;
 
     // ── syscalls and caps ────────────────────────────────────────────────
     p.syscall_mode = static_cast<int>(cfg.syscall_mode);
@@ -758,7 +800,29 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     // Network: open. Restricting would break git push / curl / npm.
     p += "(allow network*)\n";
     p += "(allow system-socket)\n";
-    p += "(allow mach-lookup)\n";
+    // Mach services BY NAME. A bare (allow mach-lookup) lets a guest read the
+    // pasteboard and enumerate keychains through launchd daemons that run
+    // outside the sandbox. Same allowlist claybin's macOS backend emits:
+    // directory lookups, logging, prefs, plus DNS/TLS since network is open.
+    p += "(allow mach-lookup\n"
+         "  (global-name \"com.apple.system.opendirectoryd.libinfo\")\n"
+         "  (global-name \"com.apple.system.logger\")\n"
+         "  (global-name \"com.apple.logd\")\n"
+         "  (global-name \"com.apple.diagnosticd\")\n"
+         "  (global-name \"com.apple.PowerManagement.control\")\n"
+         "  (global-name \"com.apple.cfprefsd.daemon\")\n"
+         "  (global-name \"com.apple.cfprefsd.agent\")\n"
+         "  (global-name \"com.apple.dnssd.service\")\n"
+         "  (global-name \"com.apple.mDNSResponder\")\n"
+         "  (global-name \"com.apple.SystemConfiguration.DNSConfiguration\")\n"
+         "  (global-name \"com.apple.SystemConfiguration.configd\")\n"
+         "  (global-name \"com.apple.networkd\")\n"
+         "  (global-name \"com.apple.trustd\")\n"
+         "  (global-name \"com.apple.trustd.agent\")\n"
+         "  (global-name \"com.apple.ocspd\"))\n";
+    p += "(allow pseudo-tty)\n";
+    p += "(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n";
+    p += "(allow ipc-posix-sem)\n";
     p += "(allow iokit-open)\n";
     p += "(allow sysctl-read)\n";
     // Credential paths, the same list claybin masks. Last, because a later
@@ -1156,6 +1220,14 @@ std::string describe_state() {
         "Temporary failure in name resolution",
         "Connection refused",
         "Bad system call",            // a seccomp kill, as the shell reports it
+        // The sandbox proxy refusing a host or address. Every client says it
+        // differently, and none of them says "sandbox": curl, git and pip
+        // report a failed CONNECT tunnel, python a tunnel error, and both
+        // show the 403 the proxy sent.
+        "CONNECT tunnel failed",
+        "Tunnel connection failed",
+        "refused by the sandbox proxy",
+        "Received HTTP code 403 from proxy",
     };
     for (auto s : kSigns)
         if (out.find(s) != std::string_view::npos) return true;
@@ -1172,11 +1244,22 @@ std::string describe_state() {
     std::string n =
         "\n\n[sandbox] This command ran inside an OS-level sandbox, so a "
         "permission or network error above is most likely the sandbox "
-        "refusing it \xe2\x80\x94 not a broken tool, a proxy, or the user's firewall.";
+        "refusing it \xe2\x80\x94 not a broken tool or the user's firewall. A "
+        "proxy/tunnel/403 error is the sandbox's own network proxy.";
     if (cfg->net_mode == sandbox_cfg::NetMode::None)
         n += " Network access is BLOCKED in this session.";
     else if (cfg->net_mode == sandbox_cfg::NetMode::Ports)
         n += " Only specific ports are reachable in this session.";
+    else if (!cfg->allow_hosts.empty()) {
+        // Name the list: "a host was refused" sends the model hunting for a
+        // mirror; the list tells it which hosts it CAN use, or what to ask for.
+        n += " Only these hosts are reachable: ";
+        for (std::size_t i = 0; i < cfg->allow_hosts.size() && i < 12; ++i)
+            n += (i ? ", " : "") + cfg->allow_hosts[i];
+        if (cfg->allow_hosts.size() > 12) n += ", \xe2\x80\xa6";
+        n += ". Any other host, and every IP address, is refused.";
+    } else
+        n += " Private, loopback and cloud-metadata addresses are refused.";
     n += " The workspace is writable; most paths outside it are not. "
          "Do not retry the same command unchanged \xe2\x80\x94 work inside the "
          "workspace, or tell the user which wall you hit and what access you "
@@ -1243,6 +1326,7 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
                    const std::vector<std::string>& extra_roots) {
     if (argv.empty()) return std::unexpected(std::string{"empty argv"});
     std::string profile;
+    std::vector<std::string> proxy_env;
     if (detected_backend() == Backend::Claybin) {
         auto posture = build_claybin_posture();
         relax_wx_for_jit(posture, join_argv(argv));
@@ -1252,6 +1336,7 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
         std::string err;
         profile = claybin_backend::compile_profile(posture, err);
         if (profile.empty()) return std::unexpected(std::move(err));
+        proxy_env = claybin_backend::proxy_env(posture);
     } else {
         profile = build_profile(workspace_root().string());
         // The fixed profile has no notion of extra roots; append them the
@@ -1261,6 +1346,13 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
                 profile += "(allow file-write* (subpath \"" + e + "\"))\n";
     }
     std::vector<std::string> out{"/usr/bin/sandbox-exec", "-p", std::move(profile)};
+    // The guest's only route out is the proxy port, so it has to be TOLD the
+    // address: env(1) inside the sandbox, so it applies to exactly this
+    // command and every tool it runs, and nothing in agentty's own env.
+    if (!proxy_env.empty()) {
+        out.emplace_back("/usr/bin/env");
+        for (auto& kv : proxy_env) out.push_back(std::move(kv));
+    }
     out.insert(out.end(), argv.begin(), argv.end());
     return out;
 }

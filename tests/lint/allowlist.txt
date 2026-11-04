@@ -42,6 +42,12 @@ mcp/connection.cpp: atomic cap_mint
 # and the scan Splitter mcp-cpp / rag-cpp call.
 tool/util/exec.cpp: cap_mint atomic
 tool/mcp_tools_bridge.cpp: cap_mint
+# sandbox_netproxy.cpp's atomics: ProxyState, shared by the proxy's ONE poll
+# job and its owner (stop/refused/served from the UI thread). It is co_owned,
+# so it must be Sync: the listener fd is exchanged to -1 by stop() to wake
+# the poll, and the counters are read without a lock. No lock exists to
+# order them against -- every other field is const or job-local.
+tool/util/sandbox_netproxy.cpp: atomic
 # exec.cpp's atomic: JaalSession::Core::stop, the one flag a session's stop()
 # sets without taking a lock, so stop and the destructor never block. Core
 # is co_owned, so it must be Sync; an atomic<bool> is.

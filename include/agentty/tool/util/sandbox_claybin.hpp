@@ -71,6 +71,8 @@ struct Posture {
     //   0 = Full (share the host netns), 1 = None, 2 = Ports
     int net_mode{0};
     std::vector<std::uint16_t> allow_ports;
+    // Full-mode proxy's host-name allowlist (sandbox_cfg::Config::allow_hosts).
+    std::vector<std::string> allow_hosts;
 
     // ── syscalls ─────────────────────────────────────────────────────────
     // sandbox_cfg::SyscallMode as an int: 0 = Off, 1 = Compiler, 2 = Strict.
@@ -227,6 +229,14 @@ namespace agentty::tools::util::sandbox::claybin_backend {
 // profile through /usr/bin/sandbox-exec instead. Empty + `error` on failure:
 // callers must fail closed, never fall back to running unconfined.
 [[nodiscard]] std::string compile_profile(const Posture& p, std::string& error);
+
+// The darwin network gateway: agentty's filtering proxy on a kernel-chosen
+// 127.0.0.1 port, started on first use and shared by every guest. 0 if it
+// could not start, in which case Full network compiles to NO network.
+[[nodiscard]] std::uint16_t macos_proxy_port(const std::vector<std::string>& allow_hosts);
+// The http_proxy/https_proxy/ALL_PROXY assignments a guest under `p` needs
+// ("K=V"), empty unless the posture is Full network and the proxy is up.
+[[nodiscard]] std::vector<std::string> proxy_env(const Posture& p);
 #endif
 
 }  // namespace agentty::tools::util::sandbox::claybin_backend

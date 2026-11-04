@@ -4,7 +4,7 @@
 #include "agentty/util/background.hpp"
 #include "agentty/util/logx.hpp"
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -14,6 +14,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <vector>
@@ -89,7 +90,7 @@ bool v6_blocked(const unsigned char b[16]) noexcept {
 }  // namespace
 
 bool is_blocked_address(std::string_view addr) noexcept {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     // A string_view is not nul-terminated; inet_pton needs a C string.
     char buf[64];
     if (addr.empty() || addr.size() >= sizeof buf) return true;
@@ -107,6 +108,100 @@ bool is_blocked_address(std::string_view addr) noexcept {
     (void)addr;
     return true;
 #endif
+}
+
+namespace hostmatch {
+
+bool ascii_ieq(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        auto lo = [](char c) { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; };
+        if (lo(a[i]) != lo(b[i])) return false;
+    }
+    return true;
+}
+
+// "1.2.3.4" or anything with a ':' (IPv6, possibly bracketed). A name has a
+// letter in its last label; an IPv4 literal is digits and dots only.
+bool looks_like_ip_literal(std::string_view h) noexcept {
+    if (h.find(':') != std::string_view::npos) return true;
+    if (h.empty()) return false;
+    for (char c : h)
+        if (!((c >= '0' && c <= '9') || c == '.')) return false;
+    return true;
+}
+
+}  // namespace hostmatch
+
+HostEntry normalize_host_entry(std::string_view raw) {
+    auto trim = [](std::string_view s) {
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+        return s;
+    };
+    std::string_view s = trim(raw);
+    if (s.empty()) return {{}, "empty"};
+    // A pasted URL: keep the authority, drop scheme, userinfo, path, query.
+    if (auto at = s.find("://"); at != std::string_view::npos) s.remove_prefix(at + 3);
+    if (auto at = s.find_first_of("/?#"); at != std::string_view::npos) s = s.substr(0, at);
+    if (auto at = s.rfind('@'); at != std::string_view::npos) s.remove_prefix(at + 1);
+    if (s.empty()) return {{}, "no host name in that"};
+    // IPv6 literal (bracketed, or bare with colons) -- before the port strip,
+    // which would otherwise chop it at its first colon.
+    if (s.front() == '[' || std::count(s.begin(), s.end(), ':') > 1)
+        return {{}, "an IP address \xc2\xb7 names only"};
+    if (auto at = s.rfind(':'); at != std::string_view::npos) {
+        const auto port = s.substr(at + 1);
+        if (port.empty() || port.find_first_not_of("0123456789") != std::string_view::npos)
+            return {{}, "not a host name"};
+        s = s.substr(0, at);   // the list is names; ports are Access's job
+    }
+    if (!s.empty() && s.back() == '.') s.remove_suffix(1);
+    std::string v;
+    v.reserve(s.size() + 1);
+    if (!s.empty() && s.front() == '.') v = "*";   // ".github.com" == "*.github.com"
+    for (char c : s) v.push_back((c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c);
+
+    if (v == "*" || v == "*.") return {{}, "allows everything \xc2\xb7 leave the list empty"};
+    const bool wild = v.starts_with("*.");
+    const std::string_view name = wild ? std::string_view{v}.substr(2) : std::string_view{v};
+    if (name.empty()) return {{}, "not a host name"};
+    if (name.find('*') != std::string_view::npos)
+        return {{}, "wildcard must lead, as in *.example.com"};
+    for (char c : name)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.'))
+            return {{}, "not a host name"};
+    if (name.size() > 253 || name.front() == '.' || name.back() == '.' ||
+        name.find("..") != std::string_view::npos)
+        return {{}, "not a host name"};
+    if (hostmatch::looks_like_ip_literal(name))
+        return {{}, "an IP address \xc2\xb7 names only"};
+    // "*.com": one label after the wildcard is a whole TLD.
+    if (wild && name.find('.') == std::string_view::npos)
+        return {{}, "a whole top-level domain \xc2\xb7 too broad"};
+    return {std::move(v), {}};
+}
+
+bool host_allowed(std::string_view host, const std::vector<std::string>& allow) noexcept {
+    if (allow.empty()) return true;
+    if (!host.empty() && host.back() == '.') host.remove_suffix(1);
+    if (host.empty() || hostmatch::looks_like_ip_literal(host)) return false;
+    for (std::string_view e : allow) {
+        // entries arrive canonical (Proxy::start normalises the list once),
+        // but the trailing dot is cheap to be lenient about for direct callers.
+        if (!e.empty() && e.back() == '.') e.remove_suffix(1);
+        if (e.starts_with("*.")) {
+            const std::string_view suffix = e.substr(1);   // ".example.com"
+            // strictly UNDER: a.example.com yes, example.com no, and
+            // badexample.com no (the leading dot is what makes it a label).
+            if (host.size() > suffix.size() &&
+                hostmatch::ascii_ieq(host.substr(host.size() - suffix.size()), suffix))
+                return true;
+        } else if (hostmatch::ascii_ieq(host, e)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace agentty::tools::util::sandbox::netproxy
@@ -306,14 +401,14 @@ HttpRequest parse_http_request(std::string_view head) {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#if !defined(__linux__) || defined(AGENTTY_NETPROXY_PARSERS_ONLY)
+#if !(defined(__linux__) || defined(__APPLE__)) || defined(AGENTTY_NETPROXY_PARSERS_ONLY)
 
 // The parsers above are the whole file when AGENTTY_NETPROXY_PARSERS_ONLY is
 // set (the fuzz harness) or when this is not Linux. A Proxy still has to
 // LINK, so it exists and refuses to start.
 namespace agentty::tools::util::sandbox::netproxy {
 Proxy::~Proxy() = default;
-bool Proxy::start(int) { return false; }
+bool Proxy::start(int, std::vector<std::string>) { return false; }
 void Proxy::stop(const maya::unlocked&) noexcept {}
 bool Proxy::running() const noexcept { return false; }
 std::uint64_t Proxy::refused() const noexcept { return 0; }
@@ -325,6 +420,31 @@ std::uint64_t Proxy::served() const noexcept { return 0; }
 namespace agentty::tools::util::sandbox::netproxy {
 
 namespace {
+
+// darwin has neither accept4 nor SOCK_CLOEXEC, and its sockets raise SIGPIPE
+// on a write to a closed peer instead of honouring MSG_NOSIGNAL. agentty
+// ignores SIGPIPE process-wide, but a library must not lean on that, so each
+// socket opts out itself (SO_NOSIGPIPE). The flags are applied right after
+// creation; the fork-without-exec window that leaves is closed by claybin's
+// close_inherited_fds in every guest anyway.
+void sock_prep(int fd) {
+#if defined(__APPLE__)
+    ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    int one = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#else
+    (void)fd;
+#endif
+}
+int sock_stream(int family) {
+#if defined(__APPLE__)
+    const int s = ::socket(family, SOCK_STREAM, 0);
+    if (s >= 0) sock_prep(s);
+    return s;
+#else
+    return ::socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+#endif
+}
 
 // Resolve `host` and return the first address that passes the filter, as a
 // connected socket. -1 on refusal or failure; `refused` says which.
@@ -359,7 +479,7 @@ int dial_filtered(const std::string& host, std::uint16_t port, bool& refused) {
                     host, txt, port);
             continue;
         }
-        const int s = ::socket(a->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        const int s = sock_stream(a->ai_family);
         if (s < 0) continue;
         if (::connect(s, a->ai_addr, a->ai_addrlen) == 0) { fd = s; break; }
         ::close(s);
@@ -373,10 +493,16 @@ int dial_filtered(const std::string& host, std::uint16_t port, bool& refused) {
 // co_owned<T> requires Sync, which is the type system asking "is this safe
 // from all of them at once" rather than taking a promise.
 struct ProxyState {
+    // FIRST, so aggregate init `ProxyState{hosts}` sets it: a constructor
+    // would make this a non-aggregate jaal can no longer see inside.
+    const std::vector<std::string> allow_hosts;
     std::atomic<int> listen_fd{-1};
     std::atomic<bool> live{false};
     std::atomic<std::uint64_t> refused{0};
     std::atomic<std::uint64_t> served{0};
+    // allow_hosts is CONST, fixed at construction: the worker reads it on
+    // every CONNECT with no lock, which is only sound because nothing can
+    // write it. (jaal's Sync check is what said so -- a plain field failed.)
 };
 
 // ── one connection, as a state machine ──────────────────────────────────
@@ -457,7 +583,8 @@ void set_nonblocking(int fd) {
 }
 
 // Advance one connection as far as the bytes it has allow.
-void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count) {
+void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count,
+               const std::vector<std::string>& allow_hosts) {
     if (c.phase == Conn::Phase::done) return;
 
     if (!c.decided) {
@@ -529,7 +656,17 @@ void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count) {
         }
 
         bool refused = false;
-        c.up = dial_filtered(host, port, refused);
+        // The NAME allowlist first, on the name the guest asked for: the
+        // address filter inside dial_filtered still runs after it, so an
+        // allowed name that resolves to 10.0.0.1 is refused all the same.
+        if (!host_allowed(host, allow_hosts)) {
+            refused = true;
+            c.up = -1;
+            AGT_LOG(Tool, Warn, "sandbox.proxy.refused", "host={} port={} reason=not-allowlisted",
+                    host, port);
+        } else {
+            c.up = dial_filtered(host, port, refused);
+        }
         if (c.up < 0) {
             if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
             std::string reply;
@@ -542,7 +679,7 @@ void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count) {
             } else {
                 reply = refused
                     ? "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
-                      "X-Agentty-Sandbox: address refused by the sandbox proxy\r\n\r\n"
+                      "X-Agentty-Sandbox: host or address refused by the sandbox proxy\r\n\r\n"
                     : "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
             }
             bool open = true;
@@ -573,7 +710,9 @@ void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count) {
 }  // namespace
 
 struct Proxy::Impl {
-    ::maya::co_owned<ProxyState> st = ::maya::co_owned<ProxyState>::make();
+    explicit Impl(std::vector<std::string> hosts)
+        : st(::maya::co_owned<ProxyState>::make(std::move(hosts))) {}
+    ::maya::co_owned<ProxyState> st;
     ::agentty::util::WorkerGroup group{"sandbox.netproxy"};
 };
 
@@ -592,10 +731,24 @@ Proxy::~Proxy() {
     impl_ = nullptr;
 }
 
-bool Proxy::start(int listen_fd) {
+bool Proxy::start(int listen_fd, std::vector<std::string> allow_hosts) {
     if (listen_fd < 0) return false;
     if (impl_) { ::close(listen_fd); return false; }
-    impl_ = new Impl{};
+    // Canonicalise ONCE, through the same normaliser the settings pane uses:
+    // a hand-edited settings.json entry ("https://GitHub.com/", ".npmjs.org")
+    // means what it would have meant typed into the pane.
+    //
+    // FAIL CLOSED on a list that normalises to nothing: the user asked for a
+    // restriction, and every entry being invalid must not silently widen it
+    // to "any host". A placeholder no name can match keeps the list non-empty.
+    std::vector<std::string> canon;
+    for (const auto& raw : allow_hosts) {
+        auto ne = normalize_host_entry(raw);
+        if (!ne.value.empty()) canon.push_back(std::move(ne.value));
+        else AGT_LOG(Tool, Warn, "sandbox.proxy.bad_host_entry", "entry={} why={}", raw, ne.why);
+    }
+    if (!allow_hosts.empty() && canon.empty()) canon.emplace_back("invalid.");
+    impl_ = new Impl{std::move(canon)};
     // The listener arrives BLOCKING: claybin's setup creates it without
     // SOCK_NONBLOCK, and the accept loop below drains it until EAGAIN. On a
     // blocking listener that second accept4 never returns, so the proxy
@@ -644,8 +797,17 @@ bool Proxy::start(int listen_fd) {
                 if (fds[0].revents & (POLLERR | POLLNVAL)) break;
                 if (fds[0].revents & POLLIN) {
                     for (;;) {
+#if defined(__APPLE__)
+                        const int c = ::accept(lfd, nullptr, nullptr);
+                        if (c >= 0) {
+                            sock_prep(c);
+                            const int fl = ::fcntl(c, F_GETFL, 0);
+                            if (fl >= 0) ::fcntl(c, F_SETFL, fl | O_NONBLOCK);
+                        }
+#else
                         const int c = ::accept4(lfd, nullptr, nullptr,
                                                 SOCK_CLOEXEC | SOCK_NONBLOCK);
+#endif
                         if (c < 0) break;   // EAGAIN: drained
                         st->served.fetch_add(1, std::memory_order_relaxed);
                         if (conns.size() >= 256) {   // a cap, not a policy
@@ -675,7 +837,7 @@ bool Proxy::start(int listen_fd) {
                         if (!conn_fill(c)) c.client_open = false;
                     }
                     if (c.phase != Conn::Phase::relay) {
-                        conn_step(c, st->refused);
+                        conn_step(c, st->refused, st->allow_hosts);
                         if (c.phase == Conn::Phase::done) continue;
                         // A client that hung up before finishing its request
                         // has nothing more to say.
@@ -769,4 +931,4 @@ std::uint64_t Proxy::served() const noexcept {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#endif  // __linux__ && !AGENTTY_NETPROXY_PARSERS_ONLY
+#endif  // (__linux__ || __APPLE__) && !AGENTTY_NETPROXY_PARSERS_ONLY

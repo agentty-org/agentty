@@ -51,6 +51,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <map>
+// Darwin's <unistd.h> doesn't declare environ (glibc does under _GNU_SOURCE).
+extern "C" char** environ;
+#endif
 
 #include "claybin/plan/compile.hpp"
 #include "claybin/policy/policy.hpp"
@@ -155,6 +164,100 @@ bool box_env_keeps(std::string_view key) noexcept {
     if (key.size() > 8 && key.ends_with("_API_KEY")) return false;
     return true;
 }
+
+#if defined(__APPLE__)
+
+// The darwin proxy. ONE per agentty process, not one per command as on Linux:
+// macOS guests run through sandbox-exec in the argv (no adopt, see
+// run_shell_command), so there is no per-spawn lifetime to hang a proxy on.
+// It listens on a KERNEL-chosen loopback port, unlike Linux's fixed 3128:
+// here the guest shares the host's loopback, where a fixed port could already
+// belong to someone else -- and whoever owned it would be the guest's
+// gateway. Leaked on purpose: tearing down a WorkerGroup during static
+// destruction would race the logger it reports to.
+//
+// KEYED BY ALLOWLIST: the list is fixed per proxy (read lock-free by its
+// worker), and the user can edit it in settings mid-session. Each distinct
+// list gets its own proxy, so a command always runs against the list in
+// force when it STARTED -- in practice one or two lists per process.
+//
+// The registry is a maya::snapshot, not a mutex (the concurrency banlist
+// keeps raw locks out of agentty): read lock-free, published with update().
+// Two commands racing on a NEW list may each start a proxy; update() keeps
+// the first one published, and the loser's is an idle listener for the
+// rest of the process -- one socket, once, in a race that needs the list to
+// change between two concurrent spawns. Cheaper than a lock on every spawn.
+using ProxyPorts = std::map<std::vector<std::string>, std::uint16_t>;
+maya::snapshot<ProxyPorts>& proxy_ports() {
+    static maya::snapshot<ProxyPorts> s;
+    return s;
+}
+
+std::uint16_t macos_proxy_port(const std::vector<std::string>& allow_hosts) {
+    {
+        const auto cur = proxy_ports().load();
+        if (auto it = cur->find(allow_hosts); it != cur->end()) return it->second;
+    }
+    const std::uint16_t port = [&] () -> std::uint16_t {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return 0;
+        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = 0;
+        socklen_t len = sizeof a;
+        if (::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0 ||
+            ::listen(fd, 128) != 0 ||
+            ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len) != 0) {
+            ::close(fd);
+            return 0;
+        }
+        const std::uint16_t p = ntohs(a.sin_port);
+        auto* proxy = new netproxy::Proxy{};   // leaked, see above
+        if (!proxy->start(fd, allow_hosts)) {
+            AGT_LOG(Tool, Warn, "sandbox.proxy.start_failed", "darwin port={}", p);
+            return 0;
+        }
+        AGT_LOG(Tool, Debug, "sandbox.proxy.up", "darwin port={} hosts={}", p,
+                allow_hosts.size());
+        return p;
+    }();
+    // a failure is NOT cached: the next command retries rather than every
+    // command for the rest of the session running with no network.
+    if (port == 0) return 0;
+    const auto published = proxy_ports().update(
+        [](const ProxyPorts& old, const std::vector<std::string>& key, std::uint16_t p) {
+            ProxyPorts next = old;
+            next.emplace(key, p);   // emplace keeps an existing entry: first publish wins
+            return next;
+        },
+        allow_hosts, port);
+    const auto it = published->find(allow_hosts);
+    return it != published->end() ? it->second : port;
+}
+
+std::vector<std::string> proxy_env(const Posture& p) {
+    std::vector<std::string> out;
+    if (p.net_mode != 0 /* Full */) return out;
+    const auto port = macos_proxy_port(p.allow_hosts);
+    if (port == 0) return out;
+    const std::string addr = "http://127.0.0.1:" + std::to_string(port);
+    for (const char* k : {"http_proxy", "https_proxy", "HTTP_PROXY",
+                          "HTTPS_PROXY", "ALL_PROXY", "all_proxy"})
+        out.push_back(std::string{k} + "=" + addr);
+    // node's built-in fetch/undici ignores *_proxy unless told (node >= 24);
+    // without this every `fetch` in a script dies with ENOTFOUND, since the
+    // guest has no DNS. npm itself reads the vars and needs nothing.
+    out.emplace_back("NODE_USE_ENV_PROXY=1");
+    // an inherited no_proxy=* or =github.com would send those hosts DIRECT,
+    // which the seatbelt rule refuses: a confusing failure, never a bypass.
+    out.emplace_back("no_proxy=");
+    out.emplace_back("NO_PROXY=");
+    return out;
+}
+
+#endif
 
 namespace {
 
@@ -296,7 +399,17 @@ namespace {
             for (auto port : p.allow_ports) d = std::move(d).connect("", port);
             break;
         default:
+#if defined(__APPLE__)
+            // No private netns on darwin: the guest is pinned by seatbelt to
+            // ONE loopback port, which agentty's own proxy serves. If that
+            // proxy could not start, fail CLOSED (no network) -- compiling
+            // the bare connect("", 0) would be (allow network*), i.e. the
+            // exact hole the proxy exists to close.
+            if (const auto port = macos_proxy_port(p.allow_hosts); port != 0)
+                d = std::move(d).connect("", 0).proxied_netns(port);
+#else
             d = std::move(d).connect("", 0).proxied_netns(kProxyPort);
+#endif
             break;  // Full
     }
 
@@ -1017,7 +1130,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     // runner having to know it exists.
     if (spawned->proxy_listen_fd >= 0) {
         auto proxy = std::make_shared<netproxy::Proxy>();
-        if (proxy->start(spawned->proxy_listen_fd)) {
+        if (proxy->start(spawned->proxy_listen_fd, p.allow_hosts)) {
             AGT_LOG(Tool, Debug, "sandbox.proxy.up", "port={} pid={} netns={}",
                     spawned->proxy_port, spawned->pid, spawned->proxy_netns_ino);
             out.net_proxy = std::move(proxy);
