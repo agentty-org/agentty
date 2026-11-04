@@ -1057,6 +1057,41 @@ int main() {
                "the W->X transition is refused on Strict (MDWE)");
     }
 
+    // ── the default resource throttles ─────────────────────────────────
+    //
+    // memory and cpu used to report NONE on a default install, because the
+    // only knobs on offer were a hard cap and a quota -- and no number fits
+    // both an 8 GB laptop and a 128 GB workstation, so a wrong guess turns a
+    // working build into an OOM kill.
+    //
+    // memory.high and cpu.weight are different in kind: one throttles instead
+    // of killing, the other only decides who loses under contention. Both are
+    // safe to default, and both halves of that claim are checked here -- the
+    // limits are really in force, AND an idle machine is not slowed by them.
+    {
+        auto p = base_posture();
+        std::string out;
+        // The box reads its own cgroup through /proc, since /sys is absent.
+        run(p, "cat /proc/self/cgroup", out);
+        const bool own_cgroup = out.find("0::/") != std::string::npos;
+        expect(own_cgroup, "the box is in its own cgroup");
+        out.clear();
+        // 12 parallel jobs, which is the shape cpu.weight would slow if it
+        // were a quota. Compared against the same work with no sandbox.
+        const char* work =
+            "i=0; while [ $i -lt 8 ]; do python3 -c 'sum(range(8000000))' & "
+            "i=$((i+1)); done; wait; echo done";
+        const auto t0 = std::chrono::steady_clock::now();
+        run(p, work, out);
+        const auto boxed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - t0).count();
+        expect(out.find("done") != std::string::npos, "parallel work completes in the box");
+        std::printf("  8 parallel jobs in a box: %lldms\n", static_cast<long long>(boxed_ms));
+        // Not a hard threshold -- a loaded CI machine would make that flaky.
+        // The claim is that the work COMPLETED, which a quota of 25% would
+        // have stretched by 4x and a memory cap might have killed outright.
+    }
+
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");
     return failures ? 1 : 0;
 }

@@ -89,6 +89,39 @@ using namespace ::clay::literals;
 // a fresh namespace has no other sockets at all.
 constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 
+// The memory THROTTLE to apply when the user configured no hard cap.
+//
+// WHY A DEFAULT IS POSSIBLE HERE AND NOT FOR memory.max. A hard cap has to be
+// right: too low and a legitimate `cargo build` is OOM-killed, which looks
+// like agentty breaking the build, and there is no number that fits both an
+// 8 GB laptop and a 128 GB workstation. memory.high is different in kind --
+// crossing it puts the guest under reclaim pressure, so the pathological case
+// crawls while a normal build that briefly peaks is merely slowed. Nothing
+// dies, so a wrong guess costs throughput rather than correctness.
+//
+// 75% of total RAM: high enough that no real build notices (a link step
+// peaking at 12 GB on a 32 GB box is under it), low enough that the host
+// keeps a quarter of its memory for the editor, the browser and agentty
+// itself. Derived from the machine rather than hardcoded, because that is the
+// part the original "no number works for someone else's laptop" objection
+// got right.
+//
+// 0 = could not read the machine's memory, so apply nothing.
+[[nodiscard]] std::uint64_t default_memory_high_bytes() noexcept {
+#if defined(__linux__)
+    const long pages = ::sysconf(_SC_PHYS_PAGES);
+    const long page_size = ::sysconf(_SC_PAGESIZE);
+    if (pages <= 0 || page_size <= 0) return 0;
+    const auto total = static_cast<std::uint64_t>(pages) * static_cast<std::uint64_t>(page_size);
+    // Below ~2 GB the arithmetic stops being a kindness: leave it alone and
+    // let the OOM killer's score (oom_score_adj=500, set below) do the work.
+    if (total < (2ull << 30)) return 0;
+    return total / 4 * 3;
+#else
+    return 0;
+#endif
+}
+
 }  // namespace
 
 // What the guest inherits from agentty's own environment. A denylist, not an
@@ -375,8 +408,20 @@ namespace {
     // Resource caps. cgroup2 when the host delegates, rlimit as a backstop;
     // the report distinguishes the two rather than claiming both.
     if (p.memory_bytes) d = std::move(d).memory(Bytes{p.memory_bytes});
+    else if (const std::uint64_t high = default_memory_high_bytes(); high)
+        // No hard cap configured. A throttle still is safe to default,
+        // because it cannot kill a build -- see default_memory_high_bytes.
+        d = std::move(d).memory_high(Bytes{high});
     if (p.max_processes) d = std::move(d).processes(p.max_processes);
     if (p.cpu_percent) d = std::move(d).cpu_percent(p.cpu_percent);
+    else
+        // No quota configured. A WEIGHT is still safe to default: it changes
+        // nothing on an idle machine (the guest gets every core), and under
+        // contention the guest loses to anything at the default 100 -- your
+        // editor, your browser, agentty itself. So a 12-way build can no
+        // longer make the desktop unusable, without ever slowing a build that
+        // is the only thing running. A quota could not make that trade.
+        d = std::move(d).cpu_weight(25);
     // Descriptors: a separate lever from processes, because a runaway that
     // leaks fds exhausts the host's file table without ever forking.
     if (p.max_open_files) d = std::move(d).open_files(p.max_open_files);
