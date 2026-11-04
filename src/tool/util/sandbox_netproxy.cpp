@@ -6,6 +6,7 @@
 
 #if defined(__linux__)
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -228,6 +229,7 @@ Socks5Request parse_socks5_request(std::string_view in) {
 
     r.target.port = be16(in, port_at);
     if (r.target.port == 0) return r;
+    r.consumed = port_at + 2;
     r.target.ok = true;
     return r;
 }
@@ -367,174 +369,206 @@ int dial_filtered(const std::string& host, std::uint16_t port, bool& refused) {
     return fd;
 }
 
-// Copy bytes both ways until either side closes. One poll loop, no threads:
-// a connection is two descriptors and some buffering, not a subsystem.
-void pump(int a, int b, const std::stop_token& stop) {
-    char buf[32 * 1024];
-    bool a_open = true, b_open = true;
-    while ((a_open || b_open) && !stop.stop_requested()) {
-        pollfd fds[2]{{a, POLLIN, 0}, {b, POLLIN, 0}};
-        const int n = ::poll(fds, 2, 500);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (n == 0) continue;
-        auto move = [&](int from, int to, bool& open) {
-            const ssize_t got = ::read(from, buf, sizeof buf);
-            if (got <= 0) {
-                open = false;
-                ::shutdown(to, SHUT_WR);
-                return;
-            }
-            ssize_t sent = 0;
-            while (sent < got) {
-                const ssize_t w = ::write(to, buf + sent, static_cast<std::size_t>(got - sent));
-                if (w <= 0) {
-                    if (w < 0 && errno == EINTR) continue;
-                    open = false;
-                    return;
-                }
-                sent += w;
-            }
-        };
-        if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) move(a, b, a_open);
-        if (b_open && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) move(b, a, b_open);
-    }
-}
-
-bool read_some(int fd, std::string& into, std::size_t cap, const std::stop_token& stop) {
-    char buf[1024];
-    while (into.size() < cap && !stop.stop_requested()) {
-        pollfd p{fd, POLLIN, 0};
-        const int r = ::poll(&p, 1, 5000);
-        if (r <= 0) return false;
-        const ssize_t n = ::read(fd, buf, sizeof buf);
-        if (n <= 0) return false;
-        into.append(buf, static_cast<std::size_t>(n));
-        // HTTP: a blank line ends the request. SOCKS: the caller checks its
-        // own length, so returning early with "enough" is fine.
-        if (into.find("\r\n\r\n") != std::string::npos) return true;
-        if (into.size() >= 2 && static_cast<unsigned char>(into[0]) == 0x05) return true;
-    }
-    return !into.empty();
-}
-
-void write_all(int fd, std::string_view s) {
-    std::size_t off = 0;
-    while (off < s.size()) {
-        const ssize_t w = ::write(fd, s.data() + off, s.size() - off);
-        if (w <= 0) {
-            if (w < 0 && errno == EINTR) continue;
-            return;
-        }
-        off += static_cast<std::size_t>(w);
-    }
-}
-
-// SOCKS5 (RFC 1928), the no-auth subset every client uses.
-//
-// The byte parsing lives in parse_socks5_* above, which is where the fuzzer
-// reaches it; this is the socket half: read until the parser says it has
-// enough, then answer.
-int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& refused_count,
-                 const std::stop_token& stop) {
-    std::string in = first;
-    Socks5Greeting g = parse_socks5_greeting(in);
-    while (g.need_more) {
-        if (!read_some(c, in, 512, stop)) return -1;
-        g = parse_socks5_greeting(in);
-    }
-    if (!g.ok || !g.no_auth) {
-        const char none[2] = {'\x05', '\xff'};   // no acceptable method
-        write_all(c, std::string_view{none, sizeof none});
-        return -1;
-    }
-    {
-        const char ok[2] = {'\x05', '\x00'};
-        write_all(c, std::string_view{ok, sizeof ok});
-    }
-
-    // The request may already be in the buffer behind the greeting (clients
-    // pipeline it), so start from what is left rather than reading blind.
-    std::string req = in.substr(g.consumed);
-    Socks5Request r = parse_socks5_request(req);
-    while (r.target.need_more) {
-        if (!read_some(c, req, 512, stop)) return -1;
-        r = parse_socks5_request(req);
-    }
-    if (!r.target.ok) {
-        // 0x08 = address type not supported, which covers the malformed cases
-        // closely enough for a client to report something useful.
-        const char nosup[10] = {'\x05', '\x08', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
-        write_all(c, std::string_view{nosup, sizeof nosup});
-        return -1;
-    }
-    // CONNECT only. BIND and UDP ASSOCIATE are both inbound paths, and
-    // nothing a build does needs them.
-    if (r.cmd != 0x01) {
-        const char nocmd[10] = {'\x05', '\x07', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
-        write_all(c, std::string_view{nocmd, sizeof nocmd});
-        return -1;
-    }
-
-    bool refused = false;
-    const int up = dial_filtered(r.target.host, r.target.port, refused);
-    if (up < 0) {
-        if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
-        // 0x02 = "connection not allowed by ruleset" for a refusal, which is
-        // the honest code; 0x05 = connection refused otherwise.
-        //
-        // Built as an explicit 10-byte array, NOT a string literal: a SOCKS
-        // reply is mostly NUL bytes, so a std::string built from one stops at
-        // the first and the client sees a truncated reply (curl reported
-        // "proxy closed connection" rather than the refusal it was sent).
-        const char reply[10] = {'\x05', refused ? '\x02' : '\x05', '\x00', '\x01',
-                                0, 0, 0, 0, 0, 0};
-        write_all(c, std::string_view{reply, sizeof reply});
-        return -1;
-    }
-    {
-        const char ok[10] = {'\x05', '\x00', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
-        write_all(c, std::string_view{ok, sizeof ok});
-    }
-    return up;
-}
-
-// HTTP CONNECT, plus absolute-form requests for plain http:// URLs.
-int serve_http(int c, const std::string& head, std::atomic<std::uint64_t>& refused_count,
-               bool& forward_head, std::string& rest) {
-    const HttpRequest h = parse_http_request(head);
-    forward_head = h.target.ok && !h.connect;
-    if (forward_head) rest = head;
-    if (!h.target.ok) {
-        write_all(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
-        return -1;
-    }
-
-    bool refused = false;
-    const int up = dial_filtered(h.target.host, h.target.port, refused);
-    if (up < 0) {
-        if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
-        write_all(c, refused ? "HTTP/1.1 403 Forbidden\r\n"
-                               "Content-Length: 0\r\n"
-                               "X-Agentty-Sandbox: address refused by the sandbox proxy\r\n\r\n"
-                             : "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
-        return -1;
-    }
-    if (h.connect) write_all(c, "HTTP/1.1 200 Connection established\r\n\r\n");
-    return up;
-}
-
-// Shared between the accept loop, the per-connection jobs and the owner, so
-// every field is atomic: co_owned<T> requires Sync, which is the type system
-// asking "is this safe from all of them at once" rather than taking a promise.
+// Shared between the accept loop and the owner, so every field is atomic:
+// co_owned<T> requires Sync, which is the type system asking "is this safe
+// from all of them at once" rather than taking a promise.
 struct ProxyState {
     std::atomic<int> listen_fd{-1};
     std::atomic<bool> live{false};
     std::atomic<std::uint64_t> refused{0};
     std::atomic<std::uint64_t> served{0};
 };
+
+// ── one connection, as a state machine ──────────────────────────────────
+//
+// WHY NOT A THREAD EACH, or a blocking handler per connection. The first
+// version read, dialled and pumped inline, which meant the accept loop was
+// busy for the whole life of one connection: `npm install` opens a dozen
+// sockets at once and they queued behind each other. A thread each would fix
+// that and cost a thread per fetch, plus a stop/join path for every one.
+//
+// So each connection is a small state machine, and ONE poll drives all of
+// them plus the listener. The only blocking call left in the proxy is that
+// poll. `dial_filtered` is the exception and it is deliberate: it resolves a
+// name, which means it blocks, and a non-blocking resolver is a much bigger
+// thing than this file should contain. One connection's DNS lookup can stall
+// the others; its data never does.
+struct Conn {
+    enum class Phase : std::uint8_t {
+        greet,      // SOCKS5: reading the method list
+        request,    // reading the SOCKS5 request / the HTTP head
+        relay,      // both sides open, moving bytes
+        done,
+    };
+
+    int client{-1};
+    int up{-1};
+    Phase phase{Phase::greet};
+    bool socks{false};        // decided by the first byte
+    bool decided{false};      // have we seen that byte yet
+    bool http_connect{false}; // CONNECT (a tunnel) vs absolute-form (forwarded)
+    std::string in;           // what the client has sent and we have not parsed
+    std::string to_up;        // bytes queued for the upstream (the HTTP head)
+    bool client_open{true};
+    bool up_open{true};
+
+    void close_all() {
+        if (up >= 0) { ::close(up); up = -1; }
+        if (client >= 0) { ::close(client); client = -1; }
+        phase = Phase::done;
+    }
+};
+
+// Read whatever is available, without blocking. false = the client is gone.
+bool conn_fill(Conn& c) {
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = ::read(c.client, buf, sizeof buf);
+        if (n > 0) {
+            if (c.in.size() + static_cast<std::size_t>(n) > 64 * 1024) return false;
+            c.in.append(buf, static_cast<std::size_t>(n));
+            continue;
+        }
+        if (n == 0) return false;                     // orderly close
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
+        return false;
+    }
+}
+
+// Non-blocking write of everything we can; what is left stays queued.
+void conn_flush(int fd, std::string& out, bool& open) {
+    while (!out.empty()) {
+        const ssize_t w = ::write(fd, out.data(), out.size());
+        if (w > 0) {
+            out.erase(0, static_cast<std::size_t>(w));
+            continue;
+        }
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        open = false;
+        return;
+    }
+}
+
+void set_nonblocking(int fd) {
+    const int fl = ::fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) ::fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+// Advance one connection as far as the bytes it has allow.
+void conn_step(Conn& c, std::atomic<std::uint64_t>& refused_count) {
+    if (c.phase == Conn::Phase::done) return;
+
+    if (!c.decided) {
+        if (c.in.empty()) return;
+        c.socks = static_cast<unsigned char>(c.in[0]) == 0x05;
+        c.decided = true;
+        if (!c.socks) c.phase = Conn::Phase::request;   // HTTP has no greeting
+    }
+
+    if (c.phase == Conn::Phase::greet) {
+        const auto g = parse_socks5_greeting(c.in);
+        if (g.need_more) return;
+        if (!g.ok || !g.no_auth) {
+            const char none[2] = {'\x05', '\xff'};   // no acceptable method
+            std::string reply{none, sizeof none};
+            bool open = true;
+            conn_flush(c.client, reply, open);
+            c.close_all();
+            return;
+        }
+        {
+            const char ok[2] = {'\x05', '\x00'};
+            std::string reply{ok, sizeof ok};
+            bool open = true;
+            conn_flush(c.client, reply, open);
+        }
+        c.in.erase(0, g.consumed);
+        c.phase = Conn::Phase::request;
+    }
+
+    if (c.phase == Conn::Phase::request) {
+        std::string host;
+        std::uint16_t port = 0;
+        if (c.socks) {
+            const auto r = parse_socks5_request(c.in);
+            if (r.target.need_more) return;
+            auto fail = [&](char code) {
+                const char rep[10] = {'\x05', code, '\x00', '\x01', 0, 0, 0, 0, 0, 0};
+                std::string reply{rep, sizeof rep};
+                bool open = true;
+                conn_flush(c.client, reply, open);
+                c.close_all();
+            };
+            if (!r.target.ok) { fail('\x08'); return; }   // address type / malformed
+            if (r.cmd != 0x01) { fail('\x07'); return; }  // CONNECT only
+            host = r.target.host;
+            port = r.target.port;
+            // Drop the request itself: everything after it is the client's
+            // own payload, and relaying the request bytes upstream corrupts
+            // the stream (TLS fails with a version error).
+            c.in.erase(0, r.consumed);
+        } else {
+            const auto h = parse_http_request(c.in);
+            if (h.target.need_more) return;
+            if (!h.target.ok) {
+                std::string reply = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+                bool open = true;
+                conn_flush(c.client, reply, open);
+                c.close_all();
+                return;
+            }
+            host = h.target.host;
+            port = h.target.port;
+            c.http_connect = h.connect;
+            // An absolute-form request is forwarded head and all; CONNECT is
+            // a tunnel, so the head stops here.
+            if (!h.connect) c.to_up = c.in;
+            c.in.clear();
+        }
+
+        bool refused = false;
+        c.up = dial_filtered(host, port, refused);
+        if (c.up < 0) {
+            if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
+            std::string reply;
+            if (c.socks) {
+                // 0x02 = not allowed by ruleset, which is the honest code for
+                // a refusal; 0x05 = connection refused otherwise.
+                const char rep[10] = {'\x05', refused ? '\x02' : '\x05', '\x00', '\x01',
+                                      0, 0, 0, 0, 0, 0};
+                reply.assign(rep, sizeof rep);
+            } else {
+                reply = refused
+                    ? "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
+                      "X-Agentty-Sandbox: address refused by the sandbox proxy\r\n\r\n"
+                    : "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
+            }
+            bool open = true;
+            conn_flush(c.client, reply, open);
+            c.close_all();
+            return;
+        }
+        set_nonblocking(c.up);
+
+        std::string ack;
+        if (c.socks) {
+            const char ok[10] = {'\x05', '\x00', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
+            ack.assign(ok, sizeof ok);
+        } else if (c.http_connect) {
+            ack = "HTTP/1.1 200 Connection established\r\n\r\n";
+        }
+        if (!ack.empty()) {
+            bool open = true;
+            conn_flush(c.client, ack, open);
+        }
+        // Anything the client pipelined behind the request belongs upstream.
+        c.to_up += c.in;
+        c.in.clear();
+        c.phase = Conn::Phase::relay;
+    }
+}
 
 }  // namespace
 
@@ -562,57 +596,148 @@ bool Proxy::start(int listen_fd) {
     if (listen_fd < 0) return false;
     if (impl_) { ::close(listen_fd); return false; }
     impl_ = new Impl{};
+    // The listener arrives BLOCKING: claybin's setup creates it without
+    // SOCK_NONBLOCK, and the accept loop below drains it until EAGAIN. On a
+    // blocking listener that second accept4 never returns, so the proxy
+    // stalls after its first connection and every later request times out.
+    // (Found exactly that way.)
+    set_nonblocking(listen_fd);
     impl_->st->listen_fd.store(listen_fd, std::memory_order_relaxed);
     impl_->st->live.store(true, std::memory_order_relaxed);
 
-    // ONE job: accept, then serve. Serving inline keeps the whole proxy to a
-    // single background job, and a sandboxed build's traffic is a handful of
-    // connections, not a web server's. The cost is that a slow upstream
-    // delays the NEXT accept, which is a queue rather than a failure.
+    // ONE job, and ONE poll inside it, covering the listener and every live
+    // connection. See the Conn comment: a blocking handler per connection
+    // made `npm install` serialise its fetches behind each other.
     impl_->group.post(
         [](const maya::unlocked&, std::stop_token stop, ::maya::co_owned<ProxyState> st) {
+            std::vector<Conn> conns;
+            std::vector<pollfd> fds;
             while (!stop.stop_requested()) {
                 const int lfd = st->listen_fd.load(std::memory_order_relaxed);
                 if (lfd < 0) break;
-                pollfd p{lfd, POLLIN, 0};
-                const int r = ::poll(&p, 1, 300);
+
+                fds.clear();
+                fds.push_back(pollfd{lfd, POLLIN, 0});
+                for (auto& c : conns) {
+                    if (c.phase == Conn::Phase::done) continue;
+                    short cev = 0;
+                    // Read from the client while we still want its bytes and
+                    // are not sitting on a backlog for the upstream.
+                    if (c.client_open && c.to_up.size() < 256 * 1024) cev |= POLLIN;
+                    fds.push_back(pollfd{c.client, cev, 0});
+                    if (c.up >= 0) {
+                        short uev = 0;
+                        if (c.up_open) uev |= POLLIN;
+                        if (!c.to_up.empty()) uev |= POLLOUT;
+                        fds.push_back(pollfd{c.up, uev, 0});
+                    }
+                }
+
+                const int r = ::poll(fds.data(), fds.size(), 300);
                 if (r < 0) {
                     if (errno == EINTR) continue;
                     break;
                 }
-                if (r == 0) continue;
-                if (!(p.revents & POLLIN)) {
-                    if (p.revents & (POLLERR | POLLNVAL)) break;
-                    continue;
+
+                // The listener first, so a new connection does not wait a
+                // tick behind the existing ones.
+                if (fds[0].revents & (POLLERR | POLLNVAL)) break;
+                if (fds[0].revents & POLLIN) {
+                    for (;;) {
+                        const int c = ::accept4(lfd, nullptr, nullptr,
+                                                SOCK_CLOEXEC | SOCK_NONBLOCK);
+                        if (c < 0) break;   // EAGAIN: drained
+                        st->served.fetch_add(1, std::memory_order_relaxed);
+                        if (conns.size() >= 256) {   // a cap, not a policy
+                            ::close(c);
+                            continue;
+                        }
+                        Conn nc;
+                        nc.client = c;
+                        conns.push_back(std::move(nc));
+                    }
                 }
-                const int c = ::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC);
-                if (c < 0) {
-                    if (errno == EINTR || errno == EAGAIN) continue;
-                    break;
+
+                // Then every connection. The fd->revents mapping is rebuilt
+                // each tick, so look each one up rather than remembering an
+                // index across a vector that just grew.
+                auto revents_of = [&](int fd) -> short {
+                    for (const auto& p : fds)
+                        if (p.fd == fd) return p.revents;
+                    return 0;
+                };
+                for (auto& c : conns) {
+                    if (c.phase == Conn::Phase::done) continue;
+                    const short cr = revents_of(c.client);
+                    const short ur = c.up >= 0 ? revents_of(c.up) : short{0};
+
+                    if (cr & POLLIN) {
+                        if (!conn_fill(c)) c.client_open = false;
+                    }
+                    if (c.phase != Conn::Phase::relay) {
+                        conn_step(c, st->refused);
+                        if (c.phase == Conn::Phase::done) continue;
+                        // A client that hung up before finishing its request
+                        // has nothing more to say.
+                        if (!c.client_open && c.phase != Conn::Phase::relay) {
+                            c.close_all();
+                            continue;
+                        }
+                    }
+                    if (c.phase != Conn::Phase::relay) continue;
+
+                    // Relay. `in` holds client->upstream bytes, `to_up` is
+                    // what has not been written yet; the reverse direction
+                    // writes straight through because the client is the one
+                    // that asked for the data.
+                    if (!c.in.empty()) { c.to_up += c.in; c.in.clear(); }
+                    if (ur & POLLOUT) conn_flush(c.up, c.to_up, c.up_open);
+                    if (ur & POLLIN) {
+                        char buf[16 * 1024];
+                        for (;;) {
+                            const ssize_t n = ::read(c.up, buf, sizeof buf);
+                            if (n > 0) {
+                                std::string out{buf, static_cast<std::size_t>(n)};
+                                conn_flush(c.client, out, c.client_open);
+                                if (!out.empty()) {
+                                    // The client is slower than the upstream.
+                                    // Blocking here is the honest thing: the
+                                    // alternative is an unbounded buffer, and
+                                    // this only stalls THIS connection.
+                                    pollfd w{c.client, POLLOUT, 0};
+                                    if (::poll(&w, 1, 2000) == 1)
+                                        conn_flush(c.client, out, c.client_open);
+                                    else
+                                        c.client_open = false;
+                                }
+                                continue;
+                            }
+                            if (n == 0) { c.up_open = false; break; }
+                            if (errno == EINTR) continue;
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                            c.up_open = false;
+                            break;
+                        }
+                    }
+                    if ((cr | ur) & (POLLERR | POLLNVAL)) {
+                        c.close_all();
+                        continue;
+                    }
+                    // Hangup on either side with nothing left to move ends it.
+                    const bool client_gone = !c.client_open || (cr & POLLHUP);
+                    const bool up_gone = !c.up_open || (ur & POLLHUP);
+                    if ((client_gone && c.to_up.empty()) || (up_gone && !c.client_open)
+                        || (up_gone && client_gone))
+                        c.close_all();
+                    else if (client_gone && c.to_up.empty() && c.up >= 0)
+                        ::shutdown(c.up, SHUT_WR);
                 }
-                st->served.fetch_add(1, std::memory_order_relaxed);
-                std::string first;
-                if (!read_some(c, first, 8192, stop) || first.empty()) {
-                    ::close(c);
-                    continue;
-                }
-                int up = -1;
-                std::string replay;
-                if (static_cast<unsigned char>(first[0]) == 0x05) {
-                    up = serve_socks5(c, first, st->refused, stop);
-                } else {
-                    bool forward_head = false;
-                    up = serve_http(c, first, st->refused, forward_head, replay);
-                    if (up >= 0 && forward_head) write_all(up, replay);
-                }
-                if (up < 0) {
-                    ::close(c);
-                    continue;
-                }
-                pump(c, up, stop);
-                ::close(up);
-                ::close(c);
+
+                std::erase_if(conns, [](const Conn& c) {
+                    return c.phase == Conn::Phase::done;
+                });
             }
+            for (auto& c : conns) c.close_all();
             st->live.store(false, std::memory_order_relaxed);
         },
         impl_->st);

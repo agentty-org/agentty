@@ -80,10 +80,14 @@ struct Socks5Greeting {
 
 // SOCKS5 request (§4): 05 CMD 00 ATYP ADDR PORT. `cmd` is reported so the
 // caller can refuse anything but CONNECT with the right reply code.
+// `consumed` is how many bytes the request occupied: what follows is the
+// client's own data, and forwarding the request bytes with it corrupts the
+// stream (curl reported a TLS version error).
 struct Socks5Request {
     Target target;
     std::uint8_t cmd{0};
     std::uint8_t atyp{0};
+    std::size_t consumed{0};
 };
 [[nodiscard]] Socks5Request parse_socks5_request(std::string_view in);
 
