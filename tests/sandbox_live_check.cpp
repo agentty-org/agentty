@@ -1092,6 +1092,58 @@ int main() {
         // have stretched by 4x and a memory cap might have killed outright.
     }
 
+    // ── the JIT memory path (why node died) ───────────────────────────
+    //
+    // `node -e` died in a box with V8's `Check failed: 12 == errno` on every
+    // claybin revision, including before any of this week's work. --jitless
+    // runs fine, which puts the failure on the code-memory path. This walks
+    // that path call by call so the answer is a line of output rather than a
+    // guess.
+    {
+        auto p = base_posture();
+        std::string out;
+        run(p,
+            "python3 -c \"import ctypes, errno\n"
+            "l = ctypes.CDLL(None, use_errno=True)\n"
+            "l.mmap.restype = ctypes.c_void_p\n"
+            "l.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,"
+            "ctypes.c_int, ctypes.c_int, ctypes.c_long]\n"
+            "l.mprotect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]\n"
+            "F = ctypes.c_void_p(-1).value\n"
+            "def nm(e): return errno.errorcode.get(e, str(e))\n"
+            "def step(label, fn):\n"
+            "    ctypes.set_errno(0)\n"
+            "    rc = fn(); e = ctypes.get_errno()\n"
+            "    bad = rc == F or (isinstance(rc, int) and rc < 0)\n"
+            "    print(label, 'FAILED', nm(e)) if bad else print(label, 'ok')\n"
+            "    return rc\n"
+            "c = step('cage', lambda: l.mmap(None, 128<<20, 0, 2|0x20|0x4000, -1, 0))\n"
+            "if c != F:\n"
+            "    step('rw', lambda: l.mprotect(ctypes.c_void_p(c), 4096, 3))\n"
+            "    step('rx', lambda: l.mprotect(ctypes.c_void_p(c), 4096, 5))\n"
+            "    step('none', lambda: l.mprotect(ctypes.c_void_p(c), 4096, 0))\n"
+            "    step('fixed', lambda: l.mmap(ctypes.c_void_p(c), 4096, 3, 2|0x20|0x10, -1, 0))\n"
+            "f = step('memfd', lambda: l.syscall(319, b'p', 0))\n"
+            "if isinstance(f, int) and f >= 0:\n"
+            "    step('ftruncate', lambda: l.syscall(77, f, 4096))\n"
+            "    step('memfd_rx', lambda: l.mmap(None, 4096, 5, 2, f, 0))\" 2>&1",
+            out);
+        std::printf("  JIT memory path in a box:\n");
+        for (std::size_t at = 0; at < out.size();) {
+            const auto nl = out.find('\n', at);
+            const auto line = out.substr(at, nl == std::string::npos ? nl : nl - at);
+            if (!line.empty()) std::printf("    %s\n", line.c_str());
+            if (nl == std::string::npos) break;
+            at = nl + 1;
+        }
+        // The cage and the RW/RX cycle are what a JIT needs; a failure in any
+        // of them is the node bug, and naming WHICH one is the point.
+        expect(out.find("cage ok") != std::string::npos,
+               "a JIT can reserve its code cage");
+        expect(out.find("rx ok") != std::string::npos,
+               "a JIT can flip a page to executable (W->X is allowed by default)");
+    }
+
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");
     return failures ? 1 : 0;
 }
