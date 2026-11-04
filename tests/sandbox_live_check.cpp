@@ -973,6 +973,49 @@ int main() {
         if (hostsrv >= 0) ::close(hostsrv);
     }
 
+    // ── W^X: the arg rule vs the real wall ─────────────────────────────
+    //
+    // The seccomp rule denies mmap/mprotect with PROT_WRITE|PROT_EXEC in ONE
+    // call. It cannot see the sequence real shellcode uses -- map it writable,
+    // write to it, mprotect it executable -- because each of those calls is
+    // innocent on its own. PR_SET_MDWE is a process property, so it does.
+    //
+    // That wall breaks every JIT (node/V8 does not start under it), so it is
+    // on for Strict only. Both halves of that trade are asserted here: a
+    // default box can still make the transition, a Strict box cannot.
+    {
+        const char* probe =
+            "python3 -c \"import ctypes\n"
+            "l=ctypes.CDLL(None, use_errno=True)\n"
+            "l.mmap.restype=ctypes.c_void_p\n"
+            "l.mmap.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int,ctypes.c_int,"
+            "ctypes.c_int,ctypes.c_long]\n"
+            "l.mprotect.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int]\n"
+            "F=ctypes.c_void_p(-1).value\n"
+            "p=l.mmap(None,4096,1|2|4,2|32,-1,0)\n"
+            "print('oneshot', 'REFUSED' if p==F else 'ALLOWED')\n"
+            "q=l.mmap(None,4096,1|2,2|32,-1,0)\n"
+            "print('upgrade', 'nomap' if q==F else "
+            "('REFUSED' if l.mprotect(ctypes.c_void_p(q),4096,1|4)!=0 else 'ALLOWED'))\" 2>&1";
+        std::string out;
+        auto p = base_posture();
+        run(p, probe, out);
+        std::printf("  default: %s", out.c_str());
+        expect(out.find("oneshot REFUSED") != std::string::npos,
+               "W+X in one mmap is refused by default");
+        expect(out.find("upgrade ALLOWED") != std::string::npos,
+               "the W->X transition is ALLOWED by default, so JITs run");
+        out.clear();
+        auto strict = base_posture();
+        strict.syscall_mode = 2;   // Strict: Hardened / Airgapped
+        run(strict, probe, out);
+        std::printf("  strict:  %s", out.c_str());
+        expect(out.find("oneshot REFUSED") != std::string::npos,
+               "W+X in one mmap is refused on Strict");
+        expect(out.find("upgrade REFUSED") != std::string::npos,
+               "the W->X transition is refused on Strict (MDWE)");
+    }
+
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");
     return failures ? 1 : 0;
 }

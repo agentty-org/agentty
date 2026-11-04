@@ -301,6 +301,16 @@ namespace {
 
     // The profiles always deny RWX mappings. With the filter off, add that
     // one rule when W^X is on.
+    //
+    // And on STRICT only, make it real: PR_SET_MDWE denies the
+    // mmap(W)->mprotect(X) transition, which the argument rule cannot see
+    // (measured: that sequence succeeded with the arg rule alone). It is
+    // gated on Strict because it breaks every JIT -- node/V8 will not start
+    // under it -- and Balanced has to run a normal toolchain. Hardened and
+    // Airgapped already accept a build failing over an unusual syscall, so
+    // this is the same trade they were chosen for.
+    if (p.wx_protect && p.syscall_mode == 2 /* Strict */)
+        d = std::move(d).deny_write_execute();
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     if (p.syscall_mode == 0 && p.wx_protect) {
 #if defined(__x86_64__)
