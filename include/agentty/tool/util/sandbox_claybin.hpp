@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "agentty/tool/util/sandbox_netproxy.hpp"
+
 namespace agentty::tools::util::sandbox::claybin_backend {
 
 // Whether an env var from agentty's own environment reaches the sandboxed
@@ -151,6 +153,14 @@ struct SpawnResult {
     // includes a claybin header: the decision policy, the TOCTOU recheck and
     // the audit record all live behind this one call.
     std::function<bool()> service_broker;
+
+    // The guest's filtered outbound network, when the posture gave it one.
+    //
+    // Held by shared_ptr because SpawnResult is copied around and a running
+    // proxy is not copyable. Keeping it here is what ties the proxy's life to
+    // the command's: the last copy of this result going away stops it. The
+    // runner never touches it.
+    std::shared_ptr<netproxy::Proxy> net_proxy;
 
     // SIGKILL the guest and every descendant, atomically, when the posture got
     // a cgroup. Empty when it did not (no cgroup2, no delegation, or a kernel

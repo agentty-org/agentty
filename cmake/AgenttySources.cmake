@@ -182,6 +182,7 @@ set(AGENTTY_TOOL_SOURCES
     src/tool/util/subprocess.cpp
     src/tool/util/sandbox.cpp
     src/tool/util/sandbox_claybin.cpp
+    src/tool/util/sandbox_netproxy.cpp
     src/tool/util/sandbox_broker.cpp
     src/tool/util/handoff_gate.cpp
     src/tool/util/arg_reader.cpp

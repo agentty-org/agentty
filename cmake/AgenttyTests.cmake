@@ -201,6 +201,7 @@ add_executable(sandbox_live_check EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
+    ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
     # The gate owns the ONE table of host-trusted paths, and sandbox.cpp now
     # reads it to build the read-only binds (the prevention half). Linked here
@@ -241,6 +242,7 @@ add_executable(ws_bind_probe EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
+    ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
     # The gate owns the ONE table of host-trusted paths, and sandbox.cpp now
     # reads it to build the read-only binds (the prevention half). Linked here
@@ -276,6 +278,7 @@ add_executable(exec_exit_probe EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
+    ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/handoff_gate.cpp
     ${CMAKE_SOURCE_DIR}/src/domain/sandbox_provenance.cpp
@@ -318,6 +321,7 @@ add_executable(sandbox_audit EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
+    ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
     # The gate owns the ONE table of host-trusted paths, and sandbox.cpp now
     # reads it to build the read-only binds (the prevention half). Linked here
@@ -706,6 +710,7 @@ add_executable(sandbox_config_race_test EXCLUDE_FROM_ALL
     src/tool/util/sandbox.cpp src/tool/util/subprocess.cpp
     src/tool/util/exec.cpp   # run_child: subprocess.cpp spawns through it
     src/tool/util/sandbox_claybin.cpp
+    src/tool/util/sandbox_netproxy.cpp
     src/tool/util/sandbox_broker.cpp src/tool/util/handoff_gate.cpp
     src/domain/sandbox_provenance.cpp
     src/tool/util/utf8.cpp
@@ -758,6 +763,7 @@ if(TARGET mcp::tools)
             tests/exec_session_race_test.cpp tests/sandbox_config_race_stubs.cpp
             src/tool/util/exec.cpp src/tool/util/sandbox.cpp
             src/tool/util/subprocess.cpp src/tool/util/sandbox_claybin.cpp
+            src/tool/util/sandbox_netproxy.cpp
             src/tool/util/sandbox_broker.cpp src/tool/util/handoff_gate.cpp
             src/domain/sandbox_provenance.cpp src/tool/util/utf8.cpp
             src/util/logx.cpp src/util/dbglog.cpp src/util/home_dir.cpp

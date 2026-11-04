@@ -151,6 +151,19 @@ struct SubprocessOptions {
         int supervisor_fd{-1};
         std::function<bool()> service;
 
+        // Anything the spawner must keep alive for as long as the child runs.
+        //
+        // The claybin backend's filtered network proxy is the case: it owns
+        // the listening socket in the guest's network namespace, and if the
+        // last reference dies the socket closes and the guest's connections
+        // start failing -- which is exactly what happened when the spawner
+        // lambda returned and dropped it on the floor.
+        //
+        // Deliberately opaque (shared_ptr<void>): the runner's job is to hold
+        // it, not to know what it is. Released when the child is reaped, with
+        // everything else.
+        std::shared_ptr<void> keepalive;
+
         // Stop the whole process tree, if the spawner has a better way than
         // signalling the process group.
         //

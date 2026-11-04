@@ -67,6 +67,7 @@ SubprocessResult run_via_child(std::vector<std::string> argv, const SubprocessOp
             if (c.pid < 0) a.error = c.error.empty() ? "sandbox spawner failed" : c.error;
             a.supervisor_fd  = c.supervisor_fd;
             a.service_broker = std::move(c.service);
+            a.keepalive      = std::move(c.keepalive);
             a.kill_tree      = std::move(c.kill_tree);
             return a;
         };

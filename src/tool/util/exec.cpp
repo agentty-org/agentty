@@ -108,6 +108,7 @@ sandbox_spawner(const std::vector<std::string>& argv, const std::string& cwd,
             c.pidfd          = r.pidfd;
             c.supervisor_fd  = r.supervisor_fd;
             c.service_broker = std::move(r.service_broker);
+            c.keepalive      = std::move(r.net_proxy);
             c.kill_tree      = std::move(r.kill_tree);
             return c;
         };
@@ -121,6 +122,9 @@ struct started {
     int                  supervisor_fd = -1;
     std::function<bool()> service_broker;
     std::function<bool()> kill_tree;
+    // Whatever the sandbox needs kept alive while the child runs (the
+    // filtered network proxy owns the guest's listening socket).
+    std::shared_ptr<void> keepalive;
 };
 
 /// Spawn, or let the sandbox spawn and adopt. stdout and stderr share one
@@ -158,7 +162,8 @@ start_child(const ChildRun& run) {
         auto adopted = pf::posix_process::adopt(c);
         if (!adopted) return std::unexpected(std::string{adopted.error().what});
         return started{std::move(*adopted), a.supervisor_fd,
-                       std::move(a.service_broker), std::move(a.kill_tree)};
+                       std::move(a.service_broker), std::move(a.kill_tree),
+                       std::move(a.keepalive)};
     }
 #endif
 
@@ -193,7 +198,8 @@ start_child(const ChildRun& run) {
             return std::unexpected(std::string{adopted.error().what});
         }
         return started{std::move(*adopted), -1 /*no seccomp on windows*/,
-                       std::move(a.service_broker), std::move(a.kill_tree)};
+                       std::move(a.service_broker), std::move(a.kill_tree),
+                       std::move(a.keepalive)};
     }
 #endif
 
@@ -294,6 +300,7 @@ struct SandboxHooks {
     int                   supervisor_fd = -1;
     std::function<bool()> service_broker;   // answer one notification
     std::function<bool()> kill_tree;        // false = fall back to the group
+    std::shared_ptr<void> keepalive;        // the sandbox's own resources
 };
 }  // namespace session_detail
 }  // namespace
@@ -720,7 +727,8 @@ class JaalExec final : public mt::Exec {
         if (!st) return std::unexpected(st.error());
         // The pump answers the broker and owns cgroup.kill, as run_child does.
         session_detail::SandboxHooks hooks{st->supervisor_fd, std::move(st->service_broker),
-                                           std::move(st->kill_tree)};
+                                           std::move(st->kill_tree),
+                                           std::move(st->keepalive)};
         return std::static_pointer_cast<mt::Session>(
             std::make_shared<JaalSession>(std::move(st->proc),
                                           req.max_output_bytes.value_or(

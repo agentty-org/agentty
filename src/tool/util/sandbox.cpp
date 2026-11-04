@@ -600,6 +600,10 @@ constexpr const char* kHomeToolSubdirsWin[] = {
             // brokered syscall blocks in the kernel until someone answers.
             out.supervisor_fd = r.supervisor_fd;
             out.service = std::move(r.service_broker);
+            // The filtered network proxy owns the listening socket inside the
+            // guest's netns. Nothing below needs to know that; it just has to
+            // outlive the child, or the guest's connections start failing.
+            out.keepalive = std::move(r.net_proxy);
             // Empty unless the posture actually got a cgroup with
             // cgroup.kill. The runner falls back to the process group then,
             // which is weaker (setsid escapes it) but is all there is.
@@ -653,6 +657,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
             out.pidfd         = r.pidfd;
             out.supervisor_fd = r.supervisor_fd;
             out.service       = std::move(r.service_broker);
+            out.keepalive     = std::move(r.net_proxy);
             out.kill_tree     = std::move(r.kill_tree);
             return out;
         };
@@ -877,6 +882,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
             if (!r.started) { out.error = r.start_error; return out; }
             out.pid = r.pid;
             out.pidfd = r.pidfd;
+            out.keepalive = std::move(r.net_proxy);
             out.kill_tree = std::move(r.kill_tree);
             return out;
         };

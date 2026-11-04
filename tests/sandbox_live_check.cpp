@@ -23,7 +23,9 @@
 #include <string_view>
 #include <system_error>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -278,11 +280,16 @@ int main() {
         expect(out.find("CONNECTED") == std::string::npos, "did not reach the network");
     }
 
-    // ── 3. net_mode=Full still works ────────────────────────────────────
+    // ── 3. net_mode=Full still works, but only through the proxy ───────
     // The other half of the claim: isolation is a CHOICE, so the permissive
     // setting must actually permit. A sandbox that blocks everything is not
     // enforcing a policy, it is broken.
-    std::printf("connect() with net_mode=Full:\n");
+    //
+    // What "permit" MEANS changed with audit #1. A direct connect now fails
+    // (the box has no route off its own loopback — that is the boundary), and
+    // the real reach is through the proxy, which every tool finds via the env.
+    // So this asserts both halves: raw socket blocked, proxied fetch works.
+    std::printf("net_mode=Full: direct vs proxied:\n");
     {
         auto p = base_posture();
         p.net_mode = 0;
@@ -294,8 +301,16 @@ int main() {
             "    s.connect((\"1.1.1.1\",443)); print(\"CONNECTED\")\n"
             "except OSError as e:\n"
             "    print(\"blocked:\", e)' 2>&1", out);
-        std::printf("  exit=%d, child said: %s", rc, out.c_str());
-        expect(out.find("CONNECTED") != std::string::npos, "reached the network");
+        std::printf("  direct exit=%d, child said: %s", rc, out.c_str());
+        expect(out.find("CONNECTED") == std::string::npos,
+               "a raw socket cannot leave the box, even on Full (#1)");
+        out.clear();
+        // And the path that IS meant to work.
+        rc = run(p, "curl -sS --max-time 20 -o /dev/null -w net=%{http_code} "
+                    "https://example.com/ 2>&1", out);
+        std::printf("  proxied exit=%d, child said: %s\n", rc, out.c_str());
+        expect(out.find("net=200") != std::string::npos,
+               "a real fetch through the proxy works (#1)");
     }
 
     // ── 4. the masks that are NOT configurable ────────────────────────
@@ -896,6 +911,66 @@ int main() {
                "ordinary env vars still are (#4)");
         ::unsetenv("GROQ_API_KEY");
         ::unsetenv("MY_BUILD_FLAG");
+    }
+
+    // ── the network boundary (audit #1) ──────────────────────────────────
+    //
+    // The audit's one High finding: "network allowed" used to mean sharing
+    // agentty's namespace, so a command could reach the host's loopback
+    // services and the whole LAN. Now the box gets its own namespace and one
+    // proxy on its loopback, and these are the claims that makes.
+    {
+        auto p = base_posture();
+        std::string out;
+        // A host-only service the box must NOT be able to reach. Bound here,
+        // on the host's loopback, while the box runs.
+        int hostsrv = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        int on = 1;
+        ::setsockopt(hostsrv, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+        sockaddr_in sa{};
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(48231);
+        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        const bool have_srv = hostsrv >= 0
+            && ::bind(hostsrv, reinterpret_cast<sockaddr*>(&sa), sizeof sa) == 0
+            && ::listen(hostsrv, 4) == 0;
+
+        // Its own namespace: a fresh one has loopback and nothing else.
+        run(p, "cat /proc/net/dev | awk 'NR>2 {print $1}' | tr -d ' :' | sort | tr '\\n' ' '", out);
+        expect(out.find("lo") != std::string::npos && out.find("eth") == std::string::npos
+                   && out.find("wl") == std::string::npos,
+               "the box has its own netns: loopback only (#1)");
+        out.clear();
+        // The proxy env the toolchain reads, in every spelling.
+        run(p, "env | grep -c -i '^\\(http\\|https\\|all\\)_proxy=127\\|^\\(HTTP\\|HTTPS\\|ALL\\)_PROXY=http'", out);
+        expect(out.find("6") != std::string::npos,
+               "all six proxy env spellings point at the box's loopback (#1)");
+        out.clear();
+        if (have_srv) {
+            // Direct: the host's service is not in this namespace at all.
+            run(p, "curl -sS --max-time 5 --noproxy '*' -o /dev/null "
+                   "-w direct=%{http_code} http://127.0.0.1:48231/ 2>&1", out);
+            expect(out.find("direct=000") != std::string::npos
+                       || out.find("Could not connect") != std::string::npos,
+                   "a host loopback service is unreachable from the box (#1)");
+            out.clear();
+            // Through the proxy: refused on the resolved address.
+            run(p, "curl -sS --max-time 5 -o /dev/null -w loop=%{http_code} "
+                   "-x http://127.0.0.1:3128 http://127.0.0.1:48231/ 2>&1", out);
+            expect(out.find("loop=403") != std::string::npos,
+                   "the proxy refuses the host's loopback (#1)");
+            out.clear();
+        }
+        run(p, "curl -sS --max-time 5 -o /dev/null -w lan=%{http_code} "
+               "-x http://127.0.0.1:3128 http://192.168.1.1/ 2>&1", out);
+        expect(out.find("lan=403") != std::string::npos, "the proxy refuses RFC1918 (#1)");
+        out.clear();
+        run(p, "curl -sS --max-time 5 -o /dev/null -w meta=%{http_code} "
+               "-x http://127.0.0.1:3128 http://169.254.169.254/latest/meta-data/ 2>&1", out);
+        expect(out.find("meta=403") != std::string::npos,
+               "the proxy refuses cloud metadata (#1)");
+        out.clear();
+        if (hostsrv >= 0) ::close(hostsrv);
     }
 
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");

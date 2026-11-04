@@ -1,0 +1,501 @@
+// The sandbox's filtered outbound network. See the header for why.
+#include "agentty/tool/util/sandbox_netproxy.hpp"
+
+#include "agentty/util/background.hpp"
+#include "agentty/util/logx.hpp"
+
+#if defined(__linux__)
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include <atomic>
+#include <cstring>
+#include <vector>
+
+namespace agentty::tools::util::sandbox::netproxy {
+
+namespace {
+
+// ── the address filter ───────────────────────────────────────────────────
+//
+// Written over the PARSED bytes rather than the string: a textual check is
+// how "127.1", "0x7f.1", "::ffff:127.0.0.1" and "2130706433" get through.
+// inet_pton does the parsing, so every spelling of an address lands on the
+// same four (or sixteen) bytes.
+
+bool v4_blocked(const unsigned char b[4]) noexcept {
+    // 0.0.0.0/8 — "this network". not a destination, and 0.0.0.0 itself
+    // means "the local host" to connect(2).
+    if (b[0] == 0) return true;
+    // 127/8 — the host's own loopback. THE finding.
+    if (b[0] == 127) return true;
+    // 10/8, 172.16/12, 192.168/16 — RFC1918. the LAN.
+    if (b[0] == 10) return true;
+    if (b[0] == 172 && (b[1] & 0xf0) == 16) return true;
+    if (b[0] == 192 && b[1] == 168) return true;
+    // 169.254/16 — link-local, and with it 169.254.169.254: the cloud
+    // metadata endpoint that hands out instance credentials.
+    if (b[0] == 169 && b[1] == 254) return true;
+    // 100.64/10 — CGNAT, which is also Tailscale's range. A tailnet is a
+    // private network with a different name.
+    if (b[0] == 100 && (b[1] & 0xc0) == 64) return true;
+    // 192.0.0/24 (IETF protocol assignments), 192.0.2/24, 198.51.100/24,
+    // 203.0.113/24 (documentation), 198.18/15 (benchmarking).
+    if (b[0] == 192 && b[1] == 0 && b[2] == 0) return true;
+    if (b[0] == 192 && b[1] == 0 && b[2] == 2) return true;
+    if (b[0] == 198 && b[1] == 51 && b[2] == 100) return true;
+    if (b[0] == 203 && b[1] == 0 && b[2] == 113) return true;
+    if (b[0] == 198 && (b[1] & 0xfe) == 18) return true;
+    // 224/4 multicast and 240/4 reserved: not unicast destinations.
+    if ((b[0] & 0xf0) == 224) return true;
+    if ((b[0] & 0xf0) == 240) return true;
+    return false;
+}
+
+bool v6_blocked(const unsigned char b[16]) noexcept {
+    // ::/128 (unspecified) and ::1/128 (loopback).
+    bool all_zero_but_last = true;
+    for (int i = 0; i < 15; ++i)
+        if (b[i] != 0) { all_zero_but_last = false; break; }
+    if (all_zero_but_last && (b[15] == 0 || b[15] == 1)) return true;
+    // v4-mapped (::ffff:a.b.c.d) and v4-compatible: apply the v4 rules, or
+    // ::ffff:127.0.0.1 walks straight through an IPv6-only check.
+    bool v4_mapped = true;
+    for (int i = 0; i < 10; ++i)
+        if (b[i] != 0) { v4_mapped = false; break; }
+    if (v4_mapped && ((b[10] == 0xff && b[11] == 0xff) || (b[10] == 0 && b[11] == 0))) {
+        unsigned char v4[4] = {b[12], b[13], b[14], b[15]};
+        return v4_blocked(v4);
+    }
+    // fc00::/7 — unique local, the IPv6 LAN.
+    if ((b[0] & 0xfe) == 0xfc) return true;
+    // fe80::/10 — link-local.
+    if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
+    // ff00::/8 — multicast.
+    if (b[0] == 0xff) return true;
+    // 2002::/16 (6to4) and 2001::/32 (Teredo) tunnel to v4 addresses we
+    // cannot see from here, so they can carry a connection to the LAN.
+    if (b[0] == 0x20 && b[1] == 0x02) return true;
+    if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0 && b[3] == 0) return true;
+    return false;
+}
+
+}  // namespace
+
+bool is_blocked_address(std::string_view addr) noexcept {
+#if defined(__linux__)
+    // A string_view is not nul-terminated; inet_pton needs a C string.
+    char buf[64];
+    if (addr.empty() || addr.size() >= sizeof buf) return true;
+    std::memcpy(buf, addr.data(), addr.size());
+    buf[addr.size()] = '\0';
+
+    unsigned char v6[16];
+    if (::inet_pton(AF_INET6, buf, v6) == 1) return v6_blocked(v6);
+    unsigned char v4[4];
+    if (::inet_pton(AF_INET, buf, v4) == 1) return v4_blocked(v4);
+    // Not an address at all. Refuse: every caller here has already resolved,
+    // so an unparseable string is a bug, and a bug must fail closed.
+    return true;
+#else
+    (void)addr;
+    return true;
+#endif
+}
+
+}  // namespace agentty::tools::util::sandbox::netproxy
+
+#if !defined(__linux__)
+
+namespace agentty::tools::util::sandbox::netproxy {
+Proxy::~Proxy() = default;
+bool Proxy::start(int) { return false; }
+void Proxy::stop(const maya::unlocked&) noexcept {}
+bool Proxy::running() const noexcept { return false; }
+std::uint64_t Proxy::refused() const noexcept { return 0; }
+std::uint64_t Proxy::served() const noexcept { return 0; }
+}  // namespace agentty::tools::util::sandbox::netproxy
+
+#else
+
+namespace agentty::tools::util::sandbox::netproxy {
+
+namespace {
+
+// Resolve `host` and return the first address that passes the filter, as a
+// connected socket. -1 on refusal or failure; `refused` says which.
+//
+// The dial uses the SAME sockaddr the filter checked, so there is no window
+// in which a second lookup could return a different answer.
+int dial_filtered(const std::string& host, std::uint16_t port, bool& refused) {
+    refused = false;
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = nullptr;
+    const std::string svc = std::to_string(port);
+    if (::getaddrinfo(host.c_str(), svc.c_str(), &hints, &res) != 0 || !res)
+        return -1;
+
+    int fd = -1;
+    bool any_blocked = false;
+    for (addrinfo* a = res; a; a = a->ai_next) {
+        char txt[64]{};
+        const void* src = nullptr;
+        if (a->ai_family == AF_INET)
+            src = &reinterpret_cast<sockaddr_in*>(a->ai_addr)->sin_addr;
+        else if (a->ai_family == AF_INET6)
+            src = &reinterpret_cast<sockaddr_in6*>(a->ai_addr)->sin6_addr;
+        else
+            continue;
+        if (!::inet_ntop(a->ai_family, src, txt, sizeof txt)) continue;
+        if (is_blocked_address(txt)) {
+            any_blocked = true;
+            AGT_LOG(Tool, Warn, "sandbox.proxy.refused", "host={} addr={} port={}",
+                    host, txt, port);
+            continue;
+        }
+        const int s = ::socket(a->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (s < 0) continue;
+        if (::connect(s, a->ai_addr, a->ai_addrlen) == 0) { fd = s; break; }
+        ::close(s);
+    }
+    ::freeaddrinfo(res);
+    if (fd < 0 && any_blocked) refused = true;
+    return fd;
+}
+
+// Copy bytes both ways until either side closes. One poll loop, no threads:
+// a connection is two descriptors and some buffering, not a subsystem.
+void pump(int a, int b, const std::stop_token& stop) {
+    char buf[32 * 1024];
+    bool a_open = true, b_open = true;
+    while ((a_open || b_open) && !stop.stop_requested()) {
+        pollfd fds[2]{{a, POLLIN, 0}, {b, POLLIN, 0}};
+        const int n = ::poll(fds, 2, 500);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0) continue;
+        auto move = [&](int from, int to, bool& open) {
+            const ssize_t got = ::read(from, buf, sizeof buf);
+            if (got <= 0) {
+                open = false;
+                ::shutdown(to, SHUT_WR);
+                return;
+            }
+            ssize_t sent = 0;
+            while (sent < got) {
+                const ssize_t w = ::write(to, buf + sent, static_cast<std::size_t>(got - sent));
+                if (w <= 0) {
+                    if (w < 0 && errno == EINTR) continue;
+                    open = false;
+                    return;
+                }
+                sent += w;
+            }
+        };
+        if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) move(a, b, a_open);
+        if (b_open && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) move(b, a, b_open);
+    }
+}
+
+bool read_some(int fd, std::string& into, std::size_t cap, const std::stop_token& stop) {
+    char buf[1024];
+    while (into.size() < cap && !stop.stop_requested()) {
+        pollfd p{fd, POLLIN, 0};
+        const int r = ::poll(&p, 1, 5000);
+        if (r <= 0) return false;
+        const ssize_t n = ::read(fd, buf, sizeof buf);
+        if (n <= 0) return false;
+        into.append(buf, static_cast<std::size_t>(n));
+        // HTTP: a blank line ends the request. SOCKS: the caller checks its
+        // own length, so returning early with "enough" is fine.
+        if (into.find("\r\n\r\n") != std::string::npos) return true;
+        if (into.size() >= 2 && static_cast<unsigned char>(into[0]) == 0x05) return true;
+    }
+    return !into.empty();
+}
+
+void write_all(int fd, std::string_view s) {
+    std::size_t off = 0;
+    while (off < s.size()) {
+        const ssize_t w = ::write(fd, s.data() + off, s.size() - off);
+        if (w <= 0) {
+            if (w < 0 && errno == EINTR) continue;
+            return;
+        }
+        off += static_cast<std::size_t>(w);
+    }
+}
+
+// SOCKS5 (RFC 1928), the no-auth subset every client uses.
+// Returns the upstream fd, or -1 after answering the client with a failure.
+int serve_socks5(int c, const std::string& first, std::atomic<std::uint64_t>& refused_count,
+                 const std::stop_token& stop) {
+    // greeting: 05 NMETHODS METHODS...
+    std::string in = first;
+    if (in.size() < 2) return -1;
+    const std::size_t nmethods = static_cast<unsigned char>(in[1]);
+    while (in.size() < 2 + nmethods) {
+        if (!read_some(c, in, 2 + nmethods, stop)) return -1;
+    }
+    bool no_auth = false;
+    for (std::size_t i = 0; i < nmethods && 2 + i < in.size(); ++i)
+        if (static_cast<unsigned char>(in[2 + i]) == 0x00) no_auth = true;
+    if (!no_auth) {
+        const char none[2] = {'\x05', '\xff'};   // no acceptable method
+        write_all(c, std::string_view{none, sizeof none});
+        return -1;
+    }
+    {
+        const char ok[2] = {'\x05', '\x00'};
+        write_all(c, std::string_view{ok, sizeof ok});
+    }
+
+    // request: 05 CMD 00 ATYP ADDR PORT
+    std::string req;
+    if (!read_some(c, req, 512, stop) || req.size() < 7) return -1;
+    const unsigned char cmd = static_cast<unsigned char>(req[1]);
+    const unsigned char atyp = static_cast<unsigned char>(req[3]);
+    std::string host;
+    std::size_t pos = 4;
+    if (atyp == 0x01) {   // IPv4
+        if (req.size() < 10) return -1;
+        char txt[INET_ADDRSTRLEN]{};
+        ::inet_ntop(AF_INET, req.data() + 4, txt, sizeof txt);
+        host = txt;
+        pos = 8;
+    } else if (atyp == 0x03) {   // name
+        const std::size_t len = static_cast<unsigned char>(req[4]);
+        if (req.size() < 5 + len + 2) return -1;
+        host.assign(req, 5, len);
+        pos = 5 + len;
+    } else if (atyp == 0x04) {   // IPv6
+        if (req.size() < 22) return -1;
+        char txt[INET6_ADDRSTRLEN]{};
+        ::inet_ntop(AF_INET6, req.data() + 4, txt, sizeof txt);
+        host = txt;
+        pos = 20;
+    } else {
+        const char nosup[10] = {'\x05', '\x08', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
+        write_all(c, std::string_view{nosup, sizeof nosup});
+        return -1;
+    }
+    const std::uint16_t port = static_cast<std::uint16_t>(
+        (static_cast<unsigned char>(req[pos]) << 8) | static_cast<unsigned char>(req[pos + 1]));
+
+    // CONNECT only. BIND and UDP ASSOCIATE would both be inbound paths, and
+    // nothing a build does needs them.
+    if (cmd != 0x01) {
+        const char nocmd[10] = {'\x05', '\x07', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
+        write_all(c, std::string_view{nocmd, sizeof nocmd});
+        return -1;
+    }
+
+    bool refused = false;
+    const int up = dial_filtered(host, port, refused);
+    if (up < 0) {
+        if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
+        // 0x02 = "connection not allowed by ruleset" for a refusal, which is
+        // the honest code; 0x05 = connection refused otherwise.
+        //
+        // Built as an explicit 10-byte array, NOT a string literal: a SOCKS
+        // reply is mostly NUL bytes, so a std::string built from one stops at
+        // the first and the client sees a truncated reply (curl reports
+        // "proxy closed connection" rather than the refusal it was sent).
+        const char reply[10] = {'\x05', refused ? '\x02' : '\x05', '\x00', '\x01',
+                                0, 0, 0, 0, 0, 0};
+        write_all(c, std::string_view{reply, sizeof reply});
+        return -1;
+    }
+    {
+        const char ok[10] = {'\x05', '\x00', '\x00', '\x01', 0, 0, 0, 0, 0, 0};
+        write_all(c, std::string_view{ok, sizeof ok});
+    }
+    return up;
+}
+
+// HTTP CONNECT, plus a plain absolute-form request for http:// URLs.
+int serve_http(int c, const std::string& head, std::atomic<std::uint64_t>& refused_count,
+               bool& forward_head, std::string& rest) {
+    forward_head = false;
+    const auto sp1 = head.find(' ');
+    if (sp1 == std::string::npos) return -1;
+    const std::string method = head.substr(0, sp1);
+    const auto sp2 = head.find(' ', sp1 + 1);
+    if (sp2 == std::string::npos) return -1;
+    std::string target = head.substr(sp1 + 1, sp2 - sp1 - 1);
+
+    std::string host;
+    std::uint16_t port = 0;
+    if (method == "CONNECT") {
+        // authority-form: host:port
+        const auto colon = target.rfind(':');
+        if (colon == std::string::npos) return -1;
+        host = target.substr(0, colon);
+        port = static_cast<std::uint16_t>(std::atoi(target.c_str() + colon + 1));
+    } else {
+        // absolute-form: http://host[:port]/path
+        const auto scheme = target.find("://");
+        if (scheme == std::string::npos) return -1;
+        const auto start = scheme + 3;
+        const auto slash = target.find('/', start);
+        std::string authority = target.substr(start, slash == std::string::npos
+                                                         ? std::string::npos
+                                                         : slash - start);
+        const auto colon = authority.rfind(':');
+        if (colon != std::string::npos) {
+            host = authority.substr(0, colon);
+            port = static_cast<std::uint16_t>(std::atoi(authority.c_str() + colon + 1));
+        } else {
+            host = authority;
+            port = 80;
+        }
+        forward_head = true;
+        rest = head;
+    }
+    if (host.empty() || port == 0) return -1;
+    // Strip [] from an IPv6 literal.
+    if (host.size() >= 2 && host.front() == '[' && host.back() == ']')
+        host = host.substr(1, host.size() - 2);
+
+    bool refused = false;
+    const int up = dial_filtered(host, port, refused);
+    if (up < 0) {
+        if (refused) refused_count.fetch_add(1, std::memory_order_relaxed);
+        write_all(c, refused ? "HTTP/1.1 403 Forbidden\r\n"
+                               "Content-Length: 0\r\n"
+                               "X-Agentty-Sandbox: address refused by the sandbox proxy\r\n\r\n"
+                             : "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        return -1;
+    }
+    if (method == "CONNECT") write_all(c, "HTTP/1.1 200 Connection established\r\n\r\n");
+    return up;
+}
+
+// Shared between the accept loop, the per-connection jobs and the owner, so
+// every field is atomic: co_owned<T> requires Sync, which is the type system
+// asking "is this safe from all of them at once" rather than taking a promise.
+struct ProxyState {
+    std::atomic<int> listen_fd{-1};
+    std::atomic<bool> live{false};
+    std::atomic<std::uint64_t> refused{0};
+    std::atomic<std::uint64_t> served{0};
+};
+
+}  // namespace
+
+struct Proxy::Impl {
+    ::maya::co_owned<ProxyState> st = ::maya::co_owned<ProxyState>::make();
+    ::agentty::util::WorkerGroup group{"sandbox.netproxy"};
+};
+
+Proxy::~Proxy() {
+    // The group joins in its own destructor, which is the barrier that makes
+    // the connection jobs' use of ProxyState safe. stop(cap) is the explicit
+    // path; this is the backstop for an owner that forgot.
+    if (impl_) {
+        const int lfd = impl_->st->listen_fd.exchange(-1, std::memory_order_relaxed);
+        if (lfd >= 0) {
+            ::shutdown(lfd, SHUT_RDWR);
+            ::close(lfd);
+        }
+    }
+    delete impl_;
+    impl_ = nullptr;
+}
+
+bool Proxy::start(int listen_fd) {
+    if (listen_fd < 0) return false;
+    if (impl_) { ::close(listen_fd); return false; }
+    impl_ = new Impl{};
+    impl_->st->listen_fd.store(listen_fd, std::memory_order_relaxed);
+    impl_->st->live.store(true, std::memory_order_relaxed);
+
+    // ONE job: accept, then serve. Serving inline keeps the whole proxy to a
+    // single background job, and a sandboxed build's traffic is a handful of
+    // connections, not a web server's. The cost is that a slow upstream
+    // delays the NEXT accept, which is a queue rather than a failure.
+    impl_->group.post(
+        [](const maya::unlocked&, std::stop_token stop, ::maya::co_owned<ProxyState> st) {
+            while (!stop.stop_requested()) {
+                const int lfd = st->listen_fd.load(std::memory_order_relaxed);
+                if (lfd < 0) break;
+                pollfd p{lfd, POLLIN, 0};
+                const int r = ::poll(&p, 1, 300);
+                if (r < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (r == 0) continue;
+                if (!(p.revents & POLLIN)) {
+                    if (p.revents & (POLLERR | POLLNVAL)) break;
+                    continue;
+                }
+                const int c = ::accept4(lfd, nullptr, nullptr, SOCK_CLOEXEC);
+                if (c < 0) {
+                    if (errno == EINTR || errno == EAGAIN) continue;
+                    break;
+                }
+                st->served.fetch_add(1, std::memory_order_relaxed);
+                std::string first;
+                if (!read_some(c, first, 8192, stop) || first.empty()) {
+                    ::close(c);
+                    continue;
+                }
+                int up = -1;
+                std::string replay;
+                if (static_cast<unsigned char>(first[0]) == 0x05) {
+                    up = serve_socks5(c, first, st->refused, stop);
+                } else {
+                    bool forward_head = false;
+                    up = serve_http(c, first, st->refused, forward_head, replay);
+                    if (up >= 0 && forward_head) write_all(up, replay);
+                }
+                if (up < 0) {
+                    ::close(c);
+                    continue;
+                }
+                pump(c, up, stop);
+                ::close(up);
+                ::close(c);
+            }
+            st->live.store(false, std::memory_order_relaxed);
+        },
+        impl_->st);
+    return true;
+}
+
+void Proxy::stop(const maya::unlocked& cap) noexcept {
+    if (!impl_) return;
+    // Closing the listener wakes the accept poll immediately, rather than
+    // waiting out its 300 ms tick.
+    const int lfd = impl_->st->listen_fd.exchange(-1, std::memory_order_relaxed);
+    if (lfd >= 0) {
+        ::shutdown(lfd, SHUT_RDWR);
+        ::close(lfd);
+    }
+    impl_->group.stop(cap);
+    impl_->st->live.store(false, std::memory_order_relaxed);
+}
+
+bool Proxy::running() const noexcept {
+    return impl_ && impl_->st->live.load(std::memory_order_relaxed);
+}
+std::uint64_t Proxy::refused() const noexcept {
+    return impl_ ? impl_->st->refused.load(std::memory_order_relaxed) : 0;
+}
+std::uint64_t Proxy::served() const noexcept {
+    return impl_ ? impl_->st->served.load(std::memory_order_relaxed) : 0;
+}
+
+}  // namespace agentty::tools::util::sandbox::netproxy
+
+#endif  // __linux__

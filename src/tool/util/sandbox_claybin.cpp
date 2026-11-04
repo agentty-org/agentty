@@ -57,6 +57,8 @@
 #include "claybin/policy/profiles.hpp"
 
 #if defined(__linux__)
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include "claybin/broker/notify.hpp"
 #include "claybin/plan/spawn.hpp"
 #elif defined(__APPLE__)
@@ -78,6 +80,14 @@ namespace {
 
 using namespace ::clay;
 using namespace ::clay::literals;
+
+// Where the guest's proxy listens, inside its OWN network namespace.
+//
+// A FIXED port, chosen by us rather than the kernel: the guest's environment
+// (http_proxy and friends) has to name the address before exec, and the
+// namespace does not exist until setup runs. Nothing can collide with it --
+// a fresh namespace has no other sockets at all.
+constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 
 }  // namespace
 
@@ -231,21 +241,30 @@ namespace {
 
     // ── network ─────────────────────────────────────────────────────────
     //
-    // Three modes, and the middle one is the interesting one:
+    // Three modes:
     //
-    //   Full  a blanket grant. The report says `partial` for network
-    //         isolation, because a shared netns is not a boundary -- which is
-    //         honest rather than flattering.
+    //   Full  the guest may reach the internet, but through its OWN network
+    //         namespace and a loopback proxy this process serves. It used to
+    //         mean "share agentty's namespace", which is not a boundary at
+    //         all: the sandbox audit's one High finding was that a command
+    //         the agent ran could reach the host's own loopback services and
+    //         the whole LAN. Now the kernel gives the box no route off its
+    //         own loopback, and sandbox_netproxy decides what each connection
+    //         may dial (no host loopback, no RFC1918, no link-local metadata,
+    //         no CGNAT/tailnet). `strong`.
     //   None  no grant at all, so claybin leaves the netns empty. `strong`.
     //   Ports one grant per port, enforced by landlock (abi 4+). `strong`,
     //         and the thing no proxy-based allowlist can claim: an agent
-    //         cannot be talked into bypassing a kernel rule.
+    //         cannot be talked into bypassing a kernel rule. Shares the host
+    //         namespace, because a port rule is about reaching real hosts.
     switch (p.net_mode) {
         case 1: break;  // None
         case 2:
             for (auto port : p.allow_ports) d = std::move(d).connect("", port);
             break;
-        default: d = std::move(d).connect("", 0); break;  // Full
+        default:
+            d = std::move(d).connect("", 0).proxied_netns(kProxyPort);
+            break;  // Full
     }
 
     // ── process hardening ──────────────────────────────────────────────
@@ -870,6 +889,25 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
             if (!overridden) env_store.emplace_back(kv);
         }
         for (const auto& [k, v] : env) env_store.push_back(k + "=" + v);
+        // The guest's route off its own loopback. Every spelling is set
+        // because the toolchain is not consistent: curl reads
+        // http_proxy/https_proxy and ALL_PROXY, git reads http_proxy,
+        // npm/pip/cargo want the uppercase forms, go reads HTTP(S)_PROXY.
+        // One address under all of them, so no tool bypasses the proxy just
+        // by not being asked.
+        //
+        // No NO_PROXY for localhost: inside the box localhost IS the proxy,
+        // and an exemption there would break the connection rather than open
+        // a hole, because nothing else is listening in that namespace.
+        if (p.net_mode != 1 /* not None */) {
+            const std::string addr = "http://127.0.0.1:" + std::to_string(kProxyPort);
+            for (const char* k : {"http_proxy", "https_proxy", "HTTP_PROXY",
+                                  "HTTPS_PROXY", "ALL_PROXY", "all_proxy"}) {
+                bool have = false;
+                for (const auto& [ek, ev] : env) if (ek == k) { have = true; break; }
+                if (!have) env_store.push_back(std::string{k} + "=" + addr);
+            }
+        }
         envp.reserve(env_store.size() + 1);
         for (const auto& s : env_store) envp.push_back(s.c_str());
         envp.push_back(nullptr);
@@ -904,6 +942,29 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     out.started = true;
     out.pid = spawned->pid;
     out.pidfd = spawned->pidfd;
+
+    // The guest's outbound network, filtered.
+    //
+    // claybin put the box in its own network namespace and opened one
+    // listener on its loopback; from here we accept on that descriptor and
+    // decide what each connection may dial. Without this the box has no
+    // route anywhere, so a failure to start is fail-CLOSED (the guest's
+    // connections are refused) rather than fail-open.
+    //
+    // Lifetime rides in the closure the same way the broker's listener does:
+    // SpawnResult is copyable and a Proxy is not, so the shared_ptr is what
+    // makes "the proxy dies when the command's result does" true without the
+    // runner having to know it exists.
+    if (spawned->proxy_listen_fd >= 0) {
+        auto proxy = std::make_shared<netproxy::Proxy>();
+        if (proxy->start(spawned->proxy_listen_fd)) {
+            AGT_LOG(Tool, Debug, "sandbox.proxy.up", "port={} pid={} netns={}",
+                    spawned->proxy_port, spawned->pid, spawned->proxy_netns_ino);
+            out.net_proxy = std::move(proxy);
+        } else {
+            AGT_LOG(Tool, Warn, "sandbox.proxy.start_failed", "pid={}", spawned->pid);
+        }
+    }
 
     // Killing the tree, when the kernel gives us the means (cgroup.kill,
     // 5.14+). Left empty otherwise so the runner keeps its process-group

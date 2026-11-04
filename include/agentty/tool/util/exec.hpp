@@ -107,6 +107,10 @@ struct AdoptedChild {
     int supervisor_fd = -1;                 ///< seccomp listener, -1 if none
     std::function<bool()> service_broker;   ///< answer one notification
     std::function<bool()> kill_tree;        ///< cgroup.kill; false = fall back
+    /// Resources the sandbox must keep alive for the child's whole life: the
+    /// filtered network proxy owns the listening socket in the guest's netns,
+    /// and dropping it closes that socket under the guest.
+    std::shared_ptr<void> keepalive;
     bool leads_own_group = true;
     std::string error;                      ///< non-empty = it never started
 };
