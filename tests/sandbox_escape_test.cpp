@@ -25,11 +25,22 @@ namespace sb = agentty::tools::util::sandbox;
 TEST_CASE("sandbox: JIT commands are recognised for the W^X exemption") {
     for (const char* c : {"node -e 1", "npm install", "cd web && pnpm test",
                           "/usr/bin/node22 x.js", "FOO=1 npx tsc -p .", "(java -jar a.jar)",
-                          "./gradlew build", "C:\\x\\node.exe a.js", "bun run dev",
-                          "git status | node fmt.js"})
+                          "./gradlew build", "bun run dev",
+                          "git status | node fmt.js", "sh -c 'node x.js'",
+                          "bash -lc \"cd a && npm test\"", "env NODE_ENV=1 node a.js",
+                          "timeout 30s npm test", "nohup nice -n 5 node srv.js &",
+                          "echo $(node -v)", "exec java -jar x.jar", "x=1; node a",
+                          "if true; then node a; fi"})
         check(sb::command_needs_jit(c), c);
+#if defined(_WIN32)
+    check(sb::command_needs_jit("C:\\x\\node.exe a.js"), "windows path");
+#endif
     for (const char* c : {"ls -la", "python3 x.py", "cargo build", "make -j8",
-                          "cat node_modules/x", "grep -r nodejs.org .", "echo javascript", ""})
+                          "cat node_modules/x", "grep -r nodejs.org .", "echo javascript", "",
+                          // a JIT name that is only an argument must not lift W^X
+                          "echo node; ./exploit", "echo \"npm\" | cat", "ls node java",
+                          "python3 -c 'print(\"node\")'", "grep node *.js",
+                          "git commit -m 'bump node'", "./run.sh node"})
         check(!sb::command_needs_jit(c), c);
 }
 

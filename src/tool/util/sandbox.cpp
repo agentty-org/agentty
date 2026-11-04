@@ -1374,26 +1374,98 @@ bool command_needs_jit(std::string_view cmd) noexcept {
         "gradlew", "mvn", "mvnw", "kotlin", "kotlinc", "sbt", "scala",
         "clojure", "lein", "dotnet", "luajit", "pypy", "pypy3", "julia",
     };
-    auto is_sep = [](char c) {
-        return c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|'
-            || c == '(' || c == ')' || c == '`' || c == '"' || c == '\'' || c == '$'
-            || c == '{' || c == '}' || c == '<' || c == '>';
+    // run wrappers: the command word comes after them and their options.
+    static constexpr std::string_view kWrap[] = {
+        "env", "exec", "command", "builtin", "time", "nice", "nohup", "timeout",
+        "stdbuf", "ionice", "setsid", "taskset", "xargs", "then", "do", "else",
+        "!", "{",
     };
-    std::size_t i = 0;
-    while (i < cmd.size()) {
-        while (i < cmd.size() && is_sep(cmd[i])) ++i;
-        std::size_t j = i;
-        while (j < cmd.size() && !is_sep(cmd[j])) ++j;
-        std::string_view w = cmd.substr(i, j - i);
-        i = j;
+    auto base = [](std::string_view w) {
         if (auto s = w.find_last_of("/\\"); s != std::string_view::npos) w = w.substr(s + 1);
         for (std::string_view ext : {".exe", ".cmd", ".bat"})
             if (w.size() > ext.size() && w.ends_with(ext)) w.remove_suffix(ext.size());
+        return w;
+    };
+    auto is_jit = [&](std::string_view w) {
+        w = base(w);
         // versioned names: node22, java17, pypy3.10
         while (!w.empty() && ((w.back() >= '0' && w.back() <= '9') || w.back() == '.' || w.back() == '-'))
             w.remove_suffix(1);
         for (auto k : kJit)
             if (w == k) return true;
+        return false;
+    };
+
+    // Split into words (quotes removed) and operators. Quoted text is data,
+    // so `echo "node"` never reaches command position.
+    struct Tok { std::string text; bool op; };
+    std::vector<Tok> toks;
+    std::string cur;
+    bool have = false;
+    auto flush = [&] { if (have) toks.push_back({cur, false}); cur.clear(); have = false; };
+    // sh escapes with backslash; cmd.exe (Windows) treats it as a path char.
+#if defined(_WIN32)
+    constexpr bool kBackslashEscapes = false;
+#else
+    constexpr bool kBackslashEscapes = true;
+#endif
+    for (std::size_t i = 0; i < cmd.size(); ++i) {
+        const char c = cmd[i];
+        if (kBackslashEscapes && c == '\\' && i + 1 < cmd.size()) { cur += cmd[++i]; have = true; }
+        else if (c == '\'') {
+            have = true;
+            while (++i < cmd.size() && cmd[i] != '\'') cur += cmd[i];
+        } else if (c == '"') {
+            have = true;
+            while (++i < cmd.size() && cmd[i] != '"') {
+                if (cmd[i] == '\\' && i + 1 < cmd.size()) ++i;
+                cur += cmd[i];
+            }
+        } else if (c == ' ' || c == '\t') flush();
+        else if (c == ';' || c == '&' || c == '|' || c == '(' || c == ')' || c == '`'
+                 || c == '\n') {
+            flush();
+            toks.push_back({std::string(1, c), true});
+        } else if (c == '$' && i + 1 < cmd.size() && cmd[i + 1] == '(') {
+            flush();
+            toks.push_back({"$(", true});
+            ++i;
+        } else { cur += c; have = true; }
+    }
+    flush();
+
+    bool at_cmd = true, after_wrap = false;
+    for (std::size_t k = 0; k < toks.size(); ++k) {
+        const auto& t = toks[k];
+        if (t.op) { at_cmd = true; after_wrap = false; continue; }
+        if (!at_cmd) continue;
+        const std::string_view w = t.text;
+        // FOO=1 cmd
+        if (auto eq = w.find('='); eq != std::string_view::npos && eq > 0
+                && w.substr(0, eq).find('/') == std::string_view::npos)
+            continue;
+        // wrapper options and arguments: -n 10, 30s
+        if (after_wrap && !w.empty() && (w[0] == '-' || (w[0] >= '0' && w[0] <= '9')))
+            continue;
+        const auto b = base(w);
+        if (std::find(std::begin(kWrap), std::end(kWrap), b) != std::end(kWrap)) {
+            after_wrap = true;
+            continue;
+        }
+        // sh -c '...': the script is its own command line
+        if (b == "sh" || b == "bash" || b == "dash" || b == "zsh" || b == "ash") {
+            for (std::size_t m = k + 1; m < toks.size() && !toks[m].op; ++m)
+                if (toks[m].text == "-c" || (toks[m].text.size() > 1 && toks[m].text[0] == '-'
+                                            && toks[m].text.back() == 'c')) {
+                    if (m + 1 < toks.size() && !toks[m + 1].op
+                        && command_needs_jit(toks[m + 1].text))
+                        return true;
+                    break;
+                }
+        }
+        if (is_jit(w)) return true;
+        at_cmd = false;
+        after_wrap = false;
     }
     return false;
 }
