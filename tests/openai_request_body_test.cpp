@@ -95,6 +95,18 @@ TEST_CASE("body: max_tokens, NOT max_completion_tokens") {
     CHECK(!b.contains("max_completion_tokens"));
 }
 
+TEST_CASE("body: a host that 400'd max_tokens gets max_completion_tokens") {
+    // OpenAI's o-series on chat rejects the old name. Learned per host.
+    using agentty::provider::OptionalField;
+    auto ep = hosted();
+    ep.host = "maxtok-rename.example.com";
+    agentty::add_rejected_field(agentty::host_key(ep.host, ep.port),
+                                agentty::provider::bit(OptionalField::MaxTokens));
+    const json b = oa::build_request_body(base(ep));
+    CHECK(!b.contains("max_tokens"));
+    CHECK(b["max_completion_tokens"] == 4096);
+}
+
 TEST_CASE("body: the legacy tool shape stays dead") {
     auto req = base(hosted());
     req.tools.push_back({.name = "read_file",

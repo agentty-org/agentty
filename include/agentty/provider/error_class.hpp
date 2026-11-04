@@ -418,6 +418,9 @@ enum class OptionalField : std::uint16_t {
     // reasoning_effort:"none" sent for "off" to a custom host. Most servers
     // take it (vLLM, current llama.cpp); an older one 400s on the value.
     EffortNone       = 1u << 8,
+    // Not a drop but a rename: OpenAI's reasoning models on chat 400
+    // `max_tokens` and want `max_completion_tokens`. Set = use that name.
+    MaxTokens        = 1u << 9,
 };
 [[nodiscard]] constexpr std::uint16_t bit(OptionalField f) noexcept {
     return static_cast<std::uint16_t>(f);
@@ -433,6 +436,7 @@ enum class OptionalField : std::uint16_t {
         case OptionalField::SessionId:        return "session_id";
         case OptionalField::ChatTemplateKwargs: return "chat_template_kwargs";
         case OptionalField::EffortNone:       return "reasoning_effort";
+        case OptionalField::MaxTokens:        return "max_tokens";
         case OptionalField::None:             break;
     }
     return {};
@@ -470,6 +474,12 @@ enum class OptionalField : std::uint16_t {
     // custom-host "none" arm); a message naming it is not about `reasoning`.
     if (icontains("reasoning_effort") || icontains("reasoning.effort"))
         return OptionalField::None;
+    // "'max_tokens' is not supported with this model. Use
+    // 'max_completion_tokens' instead." Needs the hint: plenty of 400s name
+    // max_tokens for a too-large VALUE, and those must not flip the name.
+    if (icontains("max_tokens") && icontains("max_completion_tokens"))
+        return OptionalField::MaxTokens;
+    if (icontains("max_tokens")) return OptionalField::None;
     for (auto f : {OptionalField::PromptCacheKey, OptionalField::StreamOptions,
                    OptionalField::ReasoningDetails, OptionalField::ExtraContent,
                    OptionalField::CacheControl, OptionalField::SessionId,

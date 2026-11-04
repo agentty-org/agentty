@@ -488,6 +488,20 @@ TEST_CASE("parse_rejected_field: the issue's bodies and its neighbours") {
     CHECK(parse_rejected_field("prompt_cache_key is unsupported", 0) == F::PromptCacheKey);
 }
 
+TEST_CASE("parse_rejected_field: max_tokens rename, and only the rename") {
+    using agentty::provider::parse_rejected_field;
+    using F = agentty::provider::OptionalField;
+    // OpenAI's exact o-series / Azure body.
+    CHECK(parse_rejected_field(
+              "Unsupported parameter: 'max_tokens' is not supported with this "
+              "model. Use 'max_completion_tokens' instead.", 400) == F::MaxTokens);
+    // A too-large value names max_tokens too; that's a real error.
+    CHECK(parse_rejected_field("max_tokens is too large: 200000. This model "
+                               "supports at most 128000 completion tokens", 400)
+          == F::None);
+    CHECK(parse_rejected_field("max_tokens must be at least 1", 400) == F::None);
+}
+
 TEST_CASE("learned rejected field is omitted from the next body (#93)") {
     namespace oa = agentty::provider::openai;
     using agentty::provider::OptionalField;

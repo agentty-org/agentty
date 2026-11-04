@@ -2867,18 +2867,18 @@ json build_request_body(const Request& req) {
         return body;
     }
 
-    // max_tokens is `max_tokens` on the OpenAI chat endpoint (newer models
-    // also accept max_completion_tokens; max_tokens stays accepted for the
-    // whole compatible family, so use it for portability).
-    body["max_tokens"] = req.max_tokens;
-    // Optional fields this host has REJECTED before (its own 400, learned
-    // by the stream reducer and persisted). Checked per field below so a
-    // strict host gets a body it accepts on every turn after the first.
+    // max_tokens is `max_tokens` on the OpenAI chat endpoint: the whole
+    // compatible family takes it. OpenAI's own reasoning models 400 it and
+    // want max_completion_tokens; that host learns the rename once.
     const std::uint16_t rejected =
         rejected_fields_for(host_key(req.endpoint.host, req.endpoint.port));
     auto allowed = [&](provider::OptionalField f) {
         return (rejected & provider::bit(f)) == 0;
     };
+    if (allowed(provider::OptionalField::MaxTokens))
+        body["max_tokens"] = req.max_tokens;
+    else
+        body["max_completion_tokens"] = req.max_tokens;
     // Ask for a usage frame on the final SSE event so the context gauge can
     // update even on streaming requests.
     if (allowed(provider::OptionalField::StreamOptions))
