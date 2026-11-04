@@ -99,10 +99,22 @@ jobs:
           # API omits it). So after ensuring it exists, ALWAYS force it
           # published + non-prerelease. This is the fix for "run succeeded but
           # assets 404 / release doesn't show up".
+          # The release page shows THIS version's changelog section, not a
+          # bare link: what changed belongs where people download it. Cut from
+          # CHANGELOG.md (cut-release.sh has already promoted [Unreleased] to
+          # [V]); falls back to the link if the section is missing or empty.
+          awk -v v="$V" '
+            $0 ~ "^## \\["v"\\]" {f=1; next}
+            /^## \[/ { if (f) exit }
+            f' CHANGELOG.md | sed '/./,$!d' > notes.md
+          if [ -s notes.md ]; then
+            printf '\n---\nFull history: [CHANGELOG.md](https://github.com/agentty-org/agentty/blob/master/CHANGELOG.md)\n' >> notes.md
+          else
+            echo "See [CHANGELOG.md](https://github.com/agentty-org/agentty/blob/master/CHANGELOG.md)." > notes.md
+          fi
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" \
-                 --notes "See [CHANGELOG.md](https://github.com/agentty-org/agentty/blob/master/CHANGELOG.md)."
-          gh release edit "$TAG" --draft=false --prerelease=false
+            || gh release create "$TAG" --title "$TAG" --notes-file notes.md
+          gh release edit "$TAG" --draft=false --prerelease=false --notes-file notes.md
           pipx run git-archive-all "agentty-${V}.tar.gz"
           gh release upload "$TAG" "agentty-${V}.tar.gz" --clobber
 
