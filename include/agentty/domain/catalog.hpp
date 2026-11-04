@@ -509,10 +509,20 @@ struct ModelCapabilities {
     // "off" has to be said: thinking:{type:"disabled"}. Earlier models
     // treat a missing field as off. Fable and Mythos also think by default
     // but reject "disabled" with a 400, so they're excluded (it can't be
-    // turned off there). Matches Zed's requires_explicit_thinking_opt_out.
+    // turned off there). Opus 5.5 is the same: it 400s on "disabled".
     [[nodiscard]] constexpr bool needs_explicit_thinking_off() const noexcept {
         if (family == Family::Opus)  return generation == 5 && revision == 0;
         if (family == Family::Haiku) return generation == 5 && revision == 5;
+        return false;
+    }
+
+    // Models that think by default and 400 on "disabled". The closest we can
+    // get to off is the lowest effort, so thinking can't eat the whole turn.
+    [[nodiscard]] constexpr bool thinking_always_on() const noexcept {
+        if (family == Family::Fable || family == Family::Mythos)
+            return generation >= 5;
+        if (family == Family::Opus)
+            return generation > 5 || (generation == 5 && revision > 0);
         return false;
     }
 

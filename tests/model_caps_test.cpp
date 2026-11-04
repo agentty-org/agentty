@@ -275,6 +275,12 @@ TEST_CASE("gpt5 codex caps") {
 TEST_CASE("anthropic thinking: which models need an explicit off") {
     using MC = agentty::ModelCapabilities;
     CHECK(MC::from_id("claude-opus-5").needs_explicit_thinking_off());
+    CHECK(!MC::from_id("claude-opus-5-5").needs_explicit_thinking_off());
+    CHECK(MC::from_id("claude-opus-5-5").thinking_always_on());
+    CHECK(MC::from_id("claude-fable-5").thinking_always_on());
+    CHECK(!MC::from_id("claude-opus-5").thinking_always_on());
+    CHECK(!MC::from_id("claude-haiku-5-5").thinking_always_on());
+    CHECK(!MC::from_id("claude-opus-4-8").thinking_always_on());
     CHECK(MC::from_id("claude-haiku-5-5").needs_explicit_thinking_off());
     // Off by default on older models: leaving the field out is enough.
     CHECK(!MC::from_id("claude-opus-4-8").needs_explicit_thinking_off());

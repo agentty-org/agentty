@@ -476,10 +476,15 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             body["thinking"]      = std::move(thinking);
             body["output_config"] = json{{"effort", req.effort}};
         }
-    } else if (ModelCapabilities::from_id(wire_model_id(req.model)).needs_explicit_thinking_off()) {
+    } else if (const auto off = ModelCapabilities::from_id(wire_model_id(req.model));
+               off.needs_explicit_thinking_off()) {
         // Effort is off, but this model thinks unless told not to. Leaving
         // `thinking` out would bill reasoning the user turned off.
         body["thinking"] = json{{"type", "disabled"}};
+    } else if (off.thinking_always_on()) {
+        // Can't be disabled, and left alone it thinks at its default effort,
+        // which can spend all of max_tokens before any text.
+        body["output_config"] = json{{"effort", "low"}};
     }
     // Splice marker for the messages array. nlohmann gives the dumped
     // form `"messages":<unique-string>"`; we string-replace the
@@ -555,23 +560,37 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     // heartbeats, buffered-wait, wire dump, capped error-body accumulation —
     // is the shared StreamScaffold. Only the parser feed is ours.
     provider::StreamScaffold sc;
-    sc.dialect = "anthropic-messages";
-    sc.sink    = ctx.sink;
-    sc.feed    = [&](std::string_view chunk) {
-        feed_sse(ctx, chunk.data(), chunk.size());
-        return true;
+    auto arm = [&] {
+        sc = provider::StreamScaffold{};
+        sc.dialect = "anthropic-messages";
+        sc.sink    = ctx.sink;
+        sc.feed    = [&](std::string_view chunk) {
+            feed_sse(ctx, chunk.data(), chunk.size());
+            return true;
+        };
     };
-    http::StreamHandler handler = sc.handler();
+    arm();
 
     // Standard streaming ladder — the rationale lives with stream_timeouts().
-    http::Timeouts tos = provider::stream_timeouts();
-
-    // Keep a copy of the cancel token: it is moved into the stream call below,
-    // but finish_stream needs it to distinguish a user cancel from a transport
-    // error at the post-loop.
+    const http::Timeouts tos = provider::stream_timeouts();
     http::CancelTokenPtr cancel_for_end = cancel;
-    auto result = http::default_client(::agentty::IoAccess::grant()).stream(hreq, std::move(handler),
-                                                tos, std::move(cancel));
+    auto& client = http::default_client(::agentty::IoAccess::grant());
+    auto result  = client.stream(hreq, sc.handler(), tos, cancel);
+
+    // A model we think takes "disabled" may still 400 on it (opus-5-5 does).
+    // A 400 streams nothing, so swap in the lowest effort and send once more.
+    constexpr std::string_view kDisabled = R"("thinking":{"type":"disabled"})";
+    constexpr std::string_view kLow      = R"("output_config":{"effort":"low"})";
+    if (result && sc.http_status == 400
+        && sc.error_body.find("thinking.type.disabled") != std::string::npos) {
+        if (auto p = hreq.body.find(kDisabled); p != std::string::npos) {
+            AGT_LOG(Wire, Warn, "anthropic.thinking_disabled_rejected",
+                    "model={} retrying with effort=low", req.model);
+            hreq.body.replace(p, kDisabled.size(), kLow);
+            arm();
+            result = client.stream(hreq, sc.handler(), tos, cancel);
+        }
+    }
 
     // Uniform end-of-turn pair via the scaffold; thinking_deltas appended so
     // a "reasoning not showing" report splits server-vs-client from the log.
