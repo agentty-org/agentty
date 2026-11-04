@@ -252,6 +252,24 @@ TEST_CASE("exec: the sandboxed path spawns, is watched, and still obeys the cloc
     CHECK_MESSAGE(elapsed < 15s, "reaped at its ceiling, not left spinning");
 }
 
+TEST_CASE("exec: node runs sandboxed under the default policy") {
+    // V8 needs RWX pages. Below Strict a JIT command gets W^X lifted.
+    namespace sb = agentty::tools::util::sandbox;
+#if defined(__linux__)
+    if (::access("/usr/bin/node", X_OK) != 0) return;
+    if (!sb::init(sb::Mode::On) || !sb::is_active()) return;
+    auto e = agentty::tools::util::make_exec();
+    auto r = e->run(mt::Call{}, {.program = {"/bin/sh", {"-c", "node -e 'console.log(6*7)'"}},
+                                 .budgets = {.idle = 20s, .wall = 30s}});
+    CHECK_MESSAGE(r.output.find("42") != std::string::npos, "node said: " << r.output);
+    // and a non-JIT command still gets the RWX wall.
+    auto w = e->run(mt::Call{}, {.program = {"/bin/sh", {"-c",
+                     "python3 -c 'import mmap; mmap.mmap(-1,4096,prot=7); print(\"MAPPED\")' 2>&1"}},
+                                 .budgets = {.idle = 20s, .wall = 30s}});
+    CHECK_MESSAGE(w.output.find("PermissionError") != std::string::npos, "python got RWX: " << w.output);
+#endif
+}
+
 TEST_CASE("exec: the request's env reaches a sandboxed child") {
     // Tools set env to keep children non-interactive (GIT_EDITOR=true,
     // PAGER=cat, GIT_TERMINAL_PROMPT=0). The sandboxed spawn used to drop it.

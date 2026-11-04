@@ -22,6 +22,17 @@
 
 namespace sb = agentty::tools::util::sandbox;
 
+TEST_CASE("sandbox: JIT commands are recognised for the W^X exemption") {
+    for (const char* c : {"node -e 1", "npm install", "cd web && pnpm test",
+                          "/usr/bin/node22 x.js", "FOO=1 npx tsc -p .", "(java -jar a.jar)",
+                          "./gradlew build", "C:\\x\\node.exe a.js", "bun run dev",
+                          "git status | node fmt.js"})
+        check(sb::command_needs_jit(c), c);
+    for (const char* c : {"ls -la", "python3 x.py", "cargo build", "make -j8",
+                          "cat node_modules/x", "grep -r nodejs.org .", "echo javascript", ""})
+        check(!sb::command_needs_jit(c), c);
+}
+
 
 TEST_CASE("sandbox escape") {
     std::printf("=== sandbox_escape_test ===\n");

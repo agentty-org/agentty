@@ -308,6 +308,18 @@ constexpr const char* kHomeToolSubdirsWin[] = {
 // run_wrapped(), and the per-platform arm reopens right after it.
 #endif  // __linux__ (reopened below)
 
+// Below Strict, a JIT command gets W^X lifted or it cannot start at all.
+// Strict (Hardened, Airgapped) keeps the wall and the build fails instead.
+void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
+    if (p.wx_protect && p.syscall_mode != 2 && command_needs_jit(cmd))
+        p.wx_protect = false;
+}
+[[maybe_unused]] std::string join_argv(const std::vector<std::string>& argv) {
+    std::string s;
+    for (const auto& a : argv) { s += a; s += ' '; }
+    return s;
+}
+
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 // The directory a trusted file under one of these is protected through, or
 // nullopt. These hold many files (and running binaries), so one read-only
@@ -586,6 +598,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
                                    int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
+            relax_wx_for_jit(posture, shell_cmd);
             // Both streams onto the one pipe the runner already made.
             auto r = claybin_backend::spawn_shell(posture, shell_cmd, pipe_write_fd,
                                                   pipe_write_fd);
@@ -650,6 +663,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
                               int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
+            relax_wx_for_jit(posture, join_argv(argv));
             auto r = claybin_backend::spawn_argv(posture, argv, pipe_write_fd,
                                                  pipe_write_fd);
             if (!r.started) { out.error = r.start_error; return out; }
@@ -838,6 +852,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
                            int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
+            relax_wx_for_jit(posture, shell_cmd);
             // Both streams onto the one pipe the runner already made. The
             // window HANDLE arrives as an int (the runner's pipe was a
             // HANDLE); the adapter maps it onto the child's stdout/stderr.
@@ -877,6 +892,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
                            int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
+            relax_wx_for_jit(posture, join_argv(argv));
             auto r = claybin_backend::spawn_argv(posture, argv, pipe_write_fd,
                                                  pipe_write_fd);
             if (!r.started) { out.error = r.start_error; return out; }
@@ -1204,6 +1220,7 @@ claybin_backend::SpawnResult spawn_in_sandbox(
 #if defined(__linux__) || defined(_WIN32)
     if (detected_backend() == Backend::Claybin) {
         auto posture = build_claybin_posture(trusted);
+        relax_wx_for_jit(posture, join_argv(argv));
         if (!cwd.empty()) posture.cwd = std::string{cwd};
         // A call scoped to more folders (an editor session's extra roots)
         // may write there too, like the workspace.
@@ -1228,6 +1245,7 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
     std::string profile;
     if (detected_backend() == Backend::Claybin) {
         auto posture = build_claybin_posture();
+        relax_wx_for_jit(posture, join_argv(argv));
         if (!cwd.empty()) posture.cwd = std::string{cwd};
         for (const auto& r : extra_roots)
             if (!r.empty()) posture.write_paths.push_back(r);
@@ -1254,6 +1272,38 @@ claybin_backend::Posture claybin_posture_for_test() {
 #else
     return {};
 #endif
+}
+
+bool command_needs_jit(std::string_view cmd) noexcept {
+    static constexpr std::string_view kJit[] = {
+        "node", "nodejs", "npm", "npx", "pnpm", "yarn", "corepack", "deno",
+        "bun", "bunx", "tsx", "ts-node", "vite", "next", "jest", "vitest",
+        "eslint", "tsc", "prettier", "electron", "java", "javac", "gradle",
+        "gradlew", "mvn", "mvnw", "kotlin", "kotlinc", "sbt", "scala",
+        "clojure", "lein", "dotnet", "luajit", "pypy", "pypy3", "julia",
+    };
+    auto is_sep = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|'
+            || c == '(' || c == ')' || c == '`' || c == '"' || c == '\'' || c == '$'
+            || c == '{' || c == '}' || c == '<' || c == '>';
+    };
+    std::size_t i = 0;
+    while (i < cmd.size()) {
+        while (i < cmd.size() && is_sep(cmd[i])) ++i;
+        std::size_t j = i;
+        while (j < cmd.size() && !is_sep(cmd[j])) ++j;
+        std::string_view w = cmd.substr(i, j - i);
+        i = j;
+        if (auto s = w.find_last_of("/\\"); s != std::string_view::npos) w = w.substr(s + 1);
+        for (std::string_view ext : {".exe", ".cmd", ".bat"})
+            if (w.size() > ext.size() && w.ends_with(ext)) w.remove_suffix(ext.size());
+        // versioned names: node22, java17, pypy3.10
+        while (!w.empty() && ((w.back() >= '0' && w.back() <= '9') || w.back() == '.' || w.back() == '-'))
+            w.remove_suffix(1);
+        for (auto k : kJit)
+            if (w == k) return true;
+    }
+    return false;
 }
 
 } // namespace agentty::tools::util::sandbox

@@ -261,4 +261,9 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
 // workspace sweep in sandbox.cpp. Empty/default on non-Linux builds.
 [[nodiscard]] claybin_backend::Posture claybin_posture_for_test();
 
+// True when a command runs a JIT runtime (node, npm, deno, bun, java, ...)
+// that needs RWX pages. Below Strict such a command gets W^X lifted, since
+// it cannot start otherwise. Matches any word of a shell string by basename.
+[[nodiscard]] bool command_needs_jit(std::string_view cmd) noexcept;
+
 } // namespace agentty::tools::util::sandbox
