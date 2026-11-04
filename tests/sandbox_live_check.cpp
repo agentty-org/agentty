@@ -1142,6 +1142,29 @@ int main() {
                "a JIT can reserve its code cage");
         expect(out.find("rx ok") != std::string::npos,
                "a JIT can flip a page to executable (W->X is allowed by default)");
+        // node/V8 needs RWX pages, so it dies whenever W^X is on. With W^X off
+        // it has to run, even under the Compiler filter.
+        {
+            auto np = base_posture();
+            np.wx_protect = false;
+            std::string nout;
+            run(np, "command -v node >/dev/null || { echo NODE_OK; exit; }; "
+                    "node -e 'console.log(\"NODE_OK\")' 2>&1 | tail -2", nout);
+            expect(nout.find("NODE_OK") != std::string::npos,
+                   "node runs under Compiler with W^X off");
+        }
+        // /proc/sys is visible (V8 reads /proc/sys/vm) but read-only.
+        std::string sys;
+        run(base_posture(), "cat /proc/sys/kernel/core_pattern | wc -c; "
+                            "ls /proc/sys/vm >/dev/null && echo VM_OK; "
+                            "echo 1 > /proc/sys/vm/drop_caches 2>/dev/null && echo SYS_WRITABLE; "
+                            "echo x > /proc/sys/kernel/core_pattern 2>/dev/null && echo CORE_WRITABLE",
+            sys);
+        expect(sys.find("VM_OK") != std::string::npos, "/proc/sys/vm is readable");
+        expect(sys.find("SYS_WRITABLE") == std::string::npos &&
+                   sys.find("CORE_WRITABLE") == std::string::npos,
+               "/proc/sys is read-only");
+        expect(sys.rfind("0\n", 0) == 0, "core_pattern still masked");
     }
 
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");

@@ -345,15 +345,20 @@ namespace {
     if (p.wx_protect && p.syscall_mode == 2 /* Strict */)
         d = std::move(d).deny_write_execute();
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
-    if (p.syscall_mode == 0 && p.wx_protect) {
 #if defined(__x86_64__)
-        constexpr clay::SysNr kMmap = 9, kMprotect = 10;
+    constexpr clay::SysNr kMmap = 9, kMprotect = 10;
 #else
-        constexpr clay::SysNr kMmap = 222, kMprotect = 226;
+    constexpr clay::SysNr kMmap = 222, kMprotect = 226;
 #endif
-        constexpr std::uint64_t kProtWriteExec = 0x2 | 0x4;
+    constexpr std::uint64_t kProtWriteExec = 0x2 | 0x4;
+    if (p.syscall_mode == 0 && p.wx_protect) {
         sp.deny_arg_all(kMmap, 2, kProtWriteExec, clay::SysAction::errno_, 1);
         sp.deny_arg_all(kMprotect, 2, kProtWriteExec, clay::SysAction::errno_, 1);
+    }
+    // W^X off: lift the profile's rule too, or node/V8 can't start.
+    if (p.syscall_mode != 0 && !p.wx_protect) {
+        sp.drop_arg_rules(kMmap, 2);
+        sp.drop_arg_rules(kMprotect, 2);
     }
 #endif
 
