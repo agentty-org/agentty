@@ -22,6 +22,17 @@ The same policy compiles to whatever the kernel underneath can actually enforce:
 
 agentty reports *per capability* which walls the host actually built, rather than claiming "sandbox: active" and leaving you to guess. Where a platform cannot enforce something — macOS and Windows have no equivalent of the Linux syscall filter — it says so instead of pretending. Apple's `sandbox-exec` remains as the macOS fallback; on Linux and Windows there is one engine.
 
+## Control the network, down to the site
+
+A sandboxed command never touches the network directly. It goes through agentty's own proxy, which refuses your local network, services on `localhost` and cloud metadata endpoints — so the internet works for `git push` and `npm install`, but a prompt-injected command can't reach your router or a database on your machine.
+
+You choose how much further to go:
+
+- **Allowed hosts** — list the sites commands may reach (`github.com`, `*.github.com`, `registry.npmjs.org`) and everything else is refused, including raw IP addresses. Paste a URL and it's trimmed to the host. The agent is told the list, so it picks an allowed mirror instead of retrying a blocked one.
+- **`airgapped`** — one preset, no network at all, for working on code you don't trust.
+
+Every preset survives a restart, and your own lists never knock it to `custom`.
+
 ## Air-gap a whole session
 
 For maximum safety, agentty can air-gap an entire session over SSH with a single command — the agent operates on a remote machine with no path back to your local environment.
@@ -38,4 +49,4 @@ For maximum safety, agentty can air-gap an entire session over SSH with a single
 curl -fsSL https://agentty.org/install.sh | sh
 ```
 
-Sandboxing is enabled by default. See the [security docs](/docs/) for details.
+Sandboxing is enabled by default. See [Sandboxing](/docs/sandboxing) for details.

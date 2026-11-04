@@ -46,6 +46,10 @@ Linux, macOS, and Windows — all built and tested daily. Prebuilt binaries ship
 
 Every shell/build call runs in a sandbox the kernel enforces, so it holds even if the command tries to escape. The workspace is read-write, system libs read-only, and `~/.ssh` / `/etc` / other projects are blocked. That is true on Linux (namespaces + Landlock + seccomp + cgroup2), on macOS (seatbelt + rlimits) and — since 0.9.29 — on Windows (AppContainer + restricted token + job object + mitigation policies). Windows has no weaker fallback engine: if the host can't build a wall, agentty says `sandbox: unavailable, running unsandboxed` instead of pretending. Unrooted Android/Termux still runs unsandboxed.
 
+## Can I limit which websites commands can reach?
+
+Yes. Commands reach the internet only through agentty's own proxy, which already refuses your local network, `localhost` services and cloud metadata addresses. **Settings → Sandbox → Network → Allowed hosts** narrows it to the sites you name — `github.com`, `*.npmjs.org`, and so on (`*.x` means subdomains, so list `x` too for the site itself). Leave it empty for any public site. Or pick the `airgapped` preset for no network at all. See [Sandboxing](/docs/sandboxing#only-the-sites-you-name).
+
 ## Can I run it on a machine with no internet?
 
 Yes. `agentty airgap user@host` relays traffic from your laptop over SOCKS5-over-SSH, with TLS pinned end-to-end. See the [air-gap guide](/docs/airgap).

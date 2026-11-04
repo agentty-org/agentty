@@ -4,6 +4,34 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Allowed hosts.** Settings → Sandbox → Network → Allowed hosts limits
+  sandboxed commands to the sites you list: `github.com` exactly, or
+  `*.github.com` for its subdomains. Leave it empty for any public site.
+  Pasted URLs are trimmed to the host, typos and IP addresses are refused
+  with the reason, and the agent is told which hosts it may use.
+
+### Changed
+- On macOS, sandboxed commands reach the network only through agentty's
+  filtering proxy, as on Linux. Your local network, services on
+  `localhost` and cloud metadata addresses are refused; the internet
+  still works for `git`, `curl`, `npm`, `pip`, Python and Node.
+- The macOS sandbox no longer lets a command read your clipboard, list
+  your keychains, or check whether files exist outside what it was
+  granted.
+
+### Fixed
+- Picking `hardened` or `airgapped` and restarting no longer shows
+  `custom`. The memory cap was lost on every reload, so those presets
+  came back without it. A memory cap or `/tmp` size you set yourself was
+  dropped the same way. If an older build saved one of these presets for
+  you, pick it once more.
+- Picking `permissive` no longer shows `custom` straight away.
+- Under the macOS sandbox, `/usr/bin/git`, `cc` and `python3` run again
+  instead of failing at startup.
+- A command refused by the sandbox proxy now gets the `[sandbox]` note,
+  so the agent stops retrying it.
+
 ## [0.9.45] - 2026-11-03
 
 ### Fixed

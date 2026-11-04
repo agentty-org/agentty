@@ -37,6 +37,7 @@ so much of the design is about *measuring* rather than *claiming*.
 | see what is enforcing right now | the startup banner, or the Sandbox settings pane |
 | tighten everything at once | Sandbox pane → **Posture** → `hardened` |
 | stop anything phoning home | Posture → `airgapped` |
+| let commands reach only some sites | Network → **Allowed hosts** → `github.com`, `*.npmjs.org`, … |
 | a build that breaks under the filter | Posture → `permissive` (keeps the mount walls) |
 | turn it off entirely | `--sandbox off` |
 | require it, fail if unavailable | `--sandbox on` |
@@ -96,7 +97,7 @@ What differs is what the OS will enforce:
 |---|---|---|---|
 | filesystem read/write | strong (landlock + mount ns) | **strong**† (seatbelt) | strong, fixed profile |
 | filesystem exec | strong (landlock) | **strong**† (seatbelt) | strong, fixed profile |
-| network isolation | strong (netns) | **strong** denying, partial allow-listing | none |
+| network isolation | strong (netns + proxy) | **strong** (one loopback port, the proxy) | none |
 | syscall filter | strong (seccomp) | **none** | none |
 | memory / cpu caps | strong (cgroup2) | partial (rlimits) | none |
 | pid caps | strong (cgroup2) | **advisory** (RLIMIT_NPROC is per-UID) | none |
@@ -117,6 +118,41 @@ about what survives the trip. The `sandbox-exec` path concatenates one fixed
 profile string, so the pane's settings have nowhere to go; the claybin path
 compiles the policy you actually configured, and reports per capability which
 walls the kernel agreed to build.
+
+What the macOS profile closes that a naive seatbelt profile leaves open —
+each one measured, and each one pinned by claybin's
+`macos_escape_corpus_test`, which plants a canary outside the grant and
+tries 21 routes out:
+
+- **Network goes through the proxy, nowhere else.** macOS has no private
+  network namespace, so the guest is pinned with
+  `(remote ip "localhost:PORT")` to the one loopback port agentty's proxy
+  listens on (kernel-chosen, so nothing else on your machine can own it).
+  Every other port, `::1`, the LAN and the internet are `EPERM`. The proxy
+  address is handed to the command as `http_proxy` / `https_proxy` /
+  `ALL_PROXY` (plus `NODE_USE_ENV_PROXY=1` for node's `fetch`). The guest
+  gets no DNS at all — the proxy resolves — so there is no DNS side channel.
+- **System services by name, not all of them.** A bare
+  `(allow mach-lookup)` lets a command with no home grant and no network
+  read your **clipboard** and list your **keychains**, because those
+  daemons run outside the sandbox. Only directory lookup, logging,
+  preferences and the temp-dir helper are allowed; TLS trust services are
+  added only when the network is on, and never `SecurityServer` (the
+  keychain daemon — TLS does not need it).
+- **No disk-wide `stat`.** A blanket `(allow file-read-metadata)` answers
+  "does `~/.ssh/id_ed25519` exist, how big, when changed" for any path.
+  Metadata is allowed on `/`'s children and on the folders leading down to
+  each grant — exactly what `realpath`, `getcwd` and git's repo discovery
+  walk — and nowhere else.
+- **The Xcode toolchain runs.** `/usr/bin/git`, `cc` and `python3` are
+  xcrun shims that load from the active developer directory and write a
+  cache to `$TMPDIR` (`/var/folders/…`, not `/tmp`). Both are granted, as is
+  `~/.gitconfig` read-only — git treats an unreadable one as fatal.
+
+What seatbelt cannot do, so it is not claimed: `launchctl print` is
+read-only and travels over the bootstrap port every process is born with,
+so no profile can withhold it (`launchctl submit` **is** refused); and
+setuid binaries such as `/bin/ps` never exec under any seatbelt profile.
 
 Two honest gaps, stated rather than papered over:
 
@@ -282,6 +318,24 @@ writes every other row:
 | `airgapped` | hardened + no network at all | `git push`, `npm install`, `curl` all stop working |
 | `custom` | not selectable | what the pane *reports* when the rows match no preset |
 
+**A preset survives a restart.** Picking `airgapped` and relaunching shows
+`airgapped`, not `custom` — which was not always true. Two bugs made it lie,
+both fixed and both pinned by `tests/sandbox_preset_roundtrip_test.cpp`,
+which applies every preset (and every switch between two), writes the real
+settings file, loads it as a launch does, and names any field that did not
+survive:
+
+- the loader's range check read every positive 64-bit value (`memory_mb`,
+  `tmp_mb`) as out of range and reset it — so `hardened` and `airgapped`
+  came back without their memory cap;
+- the pane read **locked** rows back into the config. A locked row shows
+  what the *engine* enforces (Scope IPC is always on under seatbelt), and
+  writing that display into the config turned `permissive` into `custom`
+  the moment it was picked.
+
+If an older build saved `hardened` or `airgapped` for you, pick it once more
+and it will stick.
+
 **`permissive` keeps the fork-bomb cap.** It drops memory, CPU, file-descriptor
 and time limits, because the right ceiling for those is a property of the
 machine and a wrong guess turns a working `cargo build` into an OOM kill that
@@ -297,9 +351,9 @@ machine is forfeit".
 ### What the label asserts — and what it doesn't
 
 `detect_posture` is a fixpoint test, so a field `apply_posture` does not *write*
-is outside the posture's definition by construction. Two such fields are
-genuinely enforced: `write_paths` and `allow_ports`. A config can therefore read
-**Hardened** while carrying extra grants you added.
+is outside the posture's definition by construction. Three such fields are
+genuinely enforced: `write_paths`, `allow_ports` and `allow_hosts`. A config
+can therefore read **Hardened** while carrying extra grants you added.
 
 That is deliberate — invariant 3 below says a preset never touches your path
 lists, because wiping a project's `read_paths` when you *tried* a preset would
@@ -327,6 +381,58 @@ Three properties make presets safe rather than a second source of truth:
    on a host where claybin cannot start must not silently switch backends, and
    wiping your project's `read_paths` because you tried a preset would make
    presets hostile to explore.
+
+---
+
+## Allowed hosts
+
+With Access at `full`, every connection goes through agentty's proxy, which
+already refuses loopback, private ranges, link-local and cloud metadata. The
+**Allowed hosts** row narrows it further, by name:
+
+| entry | matches | does not match |
+|---|---|---|
+| `github.com` | `github.com` | `api.github.com`, `github.com.evil.io` |
+| `*.github.com` | `api.github.com`, `a.b.github.com` | `github.com` itself, `evilgithub.com` |
+
+- **Empty means any public host** — today's behaviour, and the default. The
+  row says so ("any public host · Enter to restrict").
+- **`*.x` is strictly under `x`.** List both `github.com` and
+  `*.github.com` if you mean both; the editor reminds you, and the pane
+  warns when every entry is a wildcard.
+- **IP addresses are never allowlisted.** Once a list is set, `curl
+  https://140.82.x.x` is refused — otherwise every name rule could be
+  bypassed with the address.
+- **Checked on the name the command asked for,** before resolution, and the
+  proxy then resolves that same name itself. A command cannot steer it with
+  DNS, `--resolve` or a forged `Host:` header, and an allowed name that
+  resolves to `10.0.0.1` is still refused by the address filter.
+- **Paste a URL and it is trimmed to its host** (`https://GitHub.com/x` →
+  `github.com`); the editor shows "saved as …" under it. `.npmjs.org` is
+  read as `*.npmjs.org`. A bare `*`, `*.com`, a wildcard that is not the
+  first label, an IP, or anything that is not a host name is rejected with
+  the reason, and dropped on close.
+- **The pane and the proxy share one rule** (`netproxy::normalize_host_entry`),
+  so what the editor accepts is exactly what is enforced. A hand-edited
+  `settings.json` entry the rule rejects is named in a warning, and a list
+  where *every* entry is invalid blocks everything rather than widening to
+  "any host".
+- **Proxy-aware clients only.** curl, git, pip, npm, python's urllib and
+  node's `fetch` all honour the proxy variables agentty sets. A tool that
+  ignores them gets **no network**, never an unfiltered one — the kernel
+  rule underneath only lets it reach the proxy.
+
+The model is told the list: the system prompt names the allowed hosts and
+the `*.` rule, and a refused command (curl's `CONNECT tunnel failed`,
+python's `Tunnel connection failed`, a `403` from the proxy) gets a
+`[sandbox]` note listing what *is* reachable, so it picks an allowed mirror
+instead of retrying.
+
+Saved as `sandbox.allow_hosts` in `settings.json`:
+
+```json
+"sandbox": { "net_mode": 0, "allow_hosts": ["github.com", "*.github.com", "registry.npmjs.org"] }
+```
 
 ---
 
@@ -586,12 +692,13 @@ authoring a file your host later executes.
 
 **Does not stop:**
 
-- **Exfiltration to the open internet.** With network on, a command that can
-  read can also send — to a public address. The proxy refuses private ranges,
-  so the blast radius no longer includes your own machines, but it is not an
-  egress allow-list: sandboxing egress by destination would break `git push`,
-  `npm install` and `curl`. This is why the default read set is narrow rather
-  than convenient, and why `airgapped` exists.
+- **Exfiltration to the open internet — unless you list hosts.** With network
+  on and **Allowed hosts** empty, a command that can read can also send, to
+  any public address. The proxy refuses private ranges, so the blast radius
+  never includes your own machines. Set [Allowed hosts](#allowed-hosts) and it
+  can send only to those names (and anything a listed host will relay). This
+  is why the default read set is narrow rather than convenient, and why
+  `airgapped` exists.
 - **A proxy bug.** The private-range refusal is policy code in agentty, not a
   kernel rule, so its strength is that code being right. What the KERNEL
   guarantees is the part underneath: without a descriptor from the supervisor
@@ -604,7 +711,6 @@ authoring a file your host later executes.
 - **Kernel-level escape.** The command shares your kernel. A kernel LPE defeats
   every process backend, which is what `host.kernel_isolation: none` means.
 - **agentty's own API traffic.** In-process, never crosses the boundary.
-- **Windows.** No backend. `--sandbox on` fails loudly rather than pretending.
 
 ---
 
@@ -616,7 +722,8 @@ Three layers, deliberately:
 |---|---|---|
 | `sandbox_audit` | what your host enforces, per capability | `cmake --build build --target sandbox_audit && ./build/sandbox_audit` |
 | `sandbox_live_check` | the child actually experiences it — spawns real commands and reads the results | `cmake --build build --target sandbox_live_check && ./build/sandbox_live_check` |
-| the ctest suite | every table-level and reducer-level property | `ctest --test-dir build -R sandbox` |
+| `exec_exit_probe` | any command list, through the exact shipped spawn path | `./build/exec_exit_probe /tmp/ws on 0 cmds.txt` · `PROBE_DUMP=1` prints the sandbox argv · `PROBE_ALLOW_HOSTS=a,b` sets the host list |
+| the ctest suite | every table-level and reducer-level property, plus every preset through a real restart | `ctest --test-dir build -R 'sandbox\|netproxy'` |
 
 The middle one exists because the gap between "the plan says X" and "the child
 experiences X" is where real bugs live. A missing `mremap` in the syscall profile

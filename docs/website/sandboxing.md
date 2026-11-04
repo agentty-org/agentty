@@ -49,10 +49,10 @@ A **posture** is a preset: pick one and it fills in every other setting for you.
 | `hardened` | running an agent you haven't reviewed | an unusual build might need something it can't do |
 | `airgapped` | reading or editing code you don't trust | `git push`, `npm install` and `curl` all stop working |
 
-Everything stays visible and editable afterwards — a posture is a starting point, not a mode you're locked into. Change one row and the pane honestly relabels itself `custom` instead of still claiming the preset.
+Everything stays visible and editable afterwards — a posture is a starting point, not a mode you're locked into. Change one row and the pane honestly relabels itself `custom` instead of still claiming the preset. Pick one and restart, and it is still that preset: every preset is tested through a real save-and-reload. Your own lists — extra paths, ports, **Allowed hosts** — never knock a preset to `custom`.
 
 :::tip
-`airgapped` is the one worth knowing about. In every other mode, a command that can read your files can also send them somewhere. Turn the network off and that stops being true — and if you're only reading and editing code, it costs you nothing.
+`airgapped` is the one worth knowing about. In every other mode, a command that can read your files can also send them somewhere. Turn the network off and that stops being true — and if you're only reading and editing code, it costs you nothing. If you need *some* network, [Allowed hosts](#only-the-sites-you-name) is the middle ground.
 :::
 
 ## What the walls actually are
@@ -103,7 +103,7 @@ There's no capability where bwrap wins. It used to stay as a second Linux engine
 | Capability | claybin | sandbox-exec |
 |---|---|---|
 | file read/write/exec walls | yes | yes, but fixed |
-| network off, or per-port | **yes** | **no** |
+| network through the filtering proxy | **yes** | **no** — open |
 | your **Settings → Sandbox** choices apply | **yes** | **no** |
 | extra readable / masked paths | **yes** | **no** |
 | per-capability guarantee report | **yes** | **no** |
@@ -111,6 +111,15 @@ There's no capability where bwrap wins. It used to stay as a second Linux engine
 | syscall filter | no — platform has none | no |
 
 That last row is the honest one. macOS has no seccomp equivalent available to an ordinary program, so agentty reports the syscall filter as unavailable rather than implying it. The resource limits are rlimits, which count *per process* rather than per process tree — four children under a 1 GB cap can use 4 GB between them — so they report `partial`, and the process limit reports `advisory`, because it is counted per *user account*, not per sandbox.
+
+What claybin's macOS profile closes that a simple seatbelt profile leaves open — each one found by trying it, and each one in a test that tries it again on every build:
+
+- **Your clipboard and keychains.** macOS system services run *outside* any sandbox, so a profile that lets a command talk to all of them lets it read the clipboard (`pbpaste`) and list your keychains, even with no network and no home folder. agentty allows only the handful real tools need.
+- **The map of your disk.** Reading a file's *metadata* — does `~/.ssh/id_ed25519` exist, how big is it, when did it change — is a leak even when its contents are walled off. A command can only look up the folders on the way to what it was granted.
+- **The network.** A sandboxed command can reach exactly one place: agentty's own proxy, on a private port on `127.0.0.1`. No LAN, no other local services, no DNS of its own.
+- **Apple's own tools still work.** `/usr/bin/git`, `cc` and `python3` are small launchers that load the real tool from Xcode and write a cache to your per-user temp folder; both are allowed, so they run inside the sandbox instead of failing at startup.
+
+Two things no seatbelt profile can do, said plainly: `launchctl print` (read-only) always works, because it uses a channel every process is born with; and setuid programs like `/bin/ps` refuse to run inside any sandbox on macOS.
 
 Asking for claybin where it can't run gives you the platform's answer, not a silent nothing. On macOS the fallback works in both directions, so a Mac missing `sandbox-exec` still gets claybin, which talks to the kernel directly. On Windows there is nothing to fall back to, so the banner tells you instead.
 
@@ -124,13 +133,14 @@ agentty --sandbox-backend bwrap     # accepted for old scripts; bwrap is gone
 **Read and write**
 
 - your project folder
-- a private, empty `/tmp` that vanishes when the command ends
+- a private, empty `/tmp` that vanishes when the command ends (on macOS, your per-user temp and cache folders under `/var/folders`, which is where `$TMPDIR` points)
 
 **Read only**
 
 - system libraries and binaries (`/usr`, `/bin`, `/lib`) so builds work
 - your language toolchains: `~/.cargo/bin`, `~/.rustup`, `~/go/bin`, `~/.nvm`, `~/.pyenv`, `~/.rbenv`, `~/.asdf`, `~/.bun/bin`, `~/.deno/bin`, `~/.dotnet`, `~/.sdkman`, `~/.local/bin`
-- a short allow-list of `/etc` — DNS config, CA certificates, your git identity. The rest of `/etc` isn't visible.
+- your git config: `~/.gitconfig` and `~/.config/git` (git refuses to run at all if it can't read them). Your git *credentials* stay masked.
+- a short allow-list of `/etc` — DNS config, CA certificates, your git identity. The rest of `/etc` isn't visible. On macOS, also the Xcode / Command Line Tools folders and the timezone database.
 
 **Masked (reads as empty)**
 
@@ -145,6 +155,40 @@ A mask always wins. Nothing else the sandbox mounts, including the read-only bin
 **Not there at all**
 
 Everything else in your home directory. Your other projects, your documents, your browser profile.
+
+**The network**
+
+With Network set to `full` (the default), a command reaches the internet only through agentty's own proxy. The proxy refuses your machine's own services, your local network, and cloud metadata addresses — so a command can't poke your router, a database on `localhost`, or a cloud instance's credentials endpoint, even though the internet works. agentty tells the command where the proxy is (`https_proxy` and friends), so `curl`, `git`, `pip`, `npm`, Python and Node all just work.
+
+### Only the sites you name
+
+**Settings → Sandbox → Network → Allowed hosts** narrows that further: commands may reach *only* the hosts on the list.
+
+| You write | It allows | It doesn't allow |
+|---|---|---|
+| `github.com` | `github.com` | `api.github.com` |
+| `*.github.com` | `api.github.com`, `codeload.github.com` | `github.com` itself, `githubusercontent.com` |
+
+A typical list for a JavaScript project that pushes to GitHub:
+
+```
+github.com
+*.github.com
+registry.npmjs.org
+```
+
+- **Leave it empty and nothing changes** — any public site is reachable, which is the default. The row says *any public host*.
+- **`*.example.com` means subdomains only.** Add `example.com` too if you want the site itself. The editor reminds you, and the pane warns if every entry is a wildcard.
+- **Paste a URL** and it's trimmed to the host — `https://GitHub.com/me/repo` is saved as `github.com`, and the editor shows you that before you close it.
+- **Addresses don't count.** Once there's a list, `curl https://140.82.112.3` is refused: a list of names can't vouch for a raw address, and allowing them would make every rule bypassable.
+- **Typos are caught, not guessed.** `*`, `*.com`, `git*hub.com`, an IP, or anything that isn't a host name is marked with the reason and dropped when you close the editor.
+- **The agent is told.** Its instructions list the allowed hosts, and when a command is refused, the agent gets a note naming the allowed ones — so it picks a mirror you allowed instead of retrying the same blocked URL.
+
+:::note
+The list is checked on the name the command *asked for*, and the proxy then looks up that same name itself. So a command can't sneak past it with a fake DNS answer, `curl --resolve`, or a forged `Host:` header — and an allowed name that points at your local network is still refused.
+:::
+
+Allowed hosts only applies while Network is `full`. Under `ports` or `none` it's kept but unused, and the row says so.
 
 ## Secrets inside your own repo
 
@@ -165,6 +209,7 @@ Need a dependency outside your project to be readable? In **Settings → Sandbox
 - clear a line (or press [[Ctrl+X]]) to remove an entry
 - **Masked** punches a hole *inside* something you've granted — useful for "this whole folder, except that one file"
 - **Allowed ports** switches Network to per-port mode for you when you add the first one
+- **Allowed hosts** limits the network to named sites (see [above](#only-the-sites-you-name)); paste URLs freely
 
 ## Why changes need a restart
 
@@ -201,7 +246,8 @@ Where the sandbox can, it also binds the ones that already exist read-only, so t
 
 A boundary you can't see the edge of isn't one you can trust. So, plainly:
 
-- **Sending data out over a network you allowed.** If a command can read your files and the network is on, it can upload them. This is a real trade — blocking the network breaks `git push` and `npm install` — and it's exactly why `airgapped` exists. For one headless run, `agentty run --no-network` takes the network away from every command it spawns without changing your saved setting.
+- **Sending data out over a network you allowed.** If a command can read your files and the network is on, it can upload them — to any public site, or, with **Allowed hosts** set, to the sites on your list (and anywhere those sites will forward it). This is a real trade — blocking the network breaks `git push` and `npm install` — and it's exactly why `airgapped` and Allowed hosts exist. For one headless run, `agentty run --no-network` takes the network away from every command it spawns without changing your saved setting.
+- **Tools that ignore the proxy settings.** A program that doesn't read `https_proxy` gets *no* network, not an unfiltered one — the sandbox only lets it reach the proxy. If something "can't connect" inside the sandbox but works outside, that's usually why.
 - **Ports mode is TCP only.** With Network set to `ports`, the allowed-ports list limits TCP connections. UDP and ICMP aren't filtered, so DNS-based exfiltration still works there. Under `full` the ports list is ignored entirely, and the pane says so.
 - **A memory bug that maps, writes, then flips a page executable.** W^X refuses a mapping that is writable and executable at once. Writing a page and then making it executable still works, because JITs need it.
 - **Secrets deeper than the scan depth,** or inside a skipped folder like `node_modules`.

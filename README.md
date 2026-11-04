@@ -60,8 +60,10 @@ Every shell call runs inside an OS-enforced sandbox — claybin on Linux
 engine — when the host cannot build a wall, startup says so and commands run
 unconfined).
 Credential files are masked whether or not you configure anything, and file
-tools refuse paths outside your workspace. Deep dive:
-[`docs/SANDBOX.md`](docs/SANDBOX.md).
+tools refuse paths outside your workspace. Network goes through a filtering
+proxy that refuses your LAN, `localhost` and cloud metadata; **Allowed hosts**
+narrows it to the sites you name, and the `airgapped` preset turns it off.
+Deep dive: [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
 </td>
 <td width="50%">
@@ -279,7 +281,7 @@ pkg install git cmake clang openssl libnghttp2
 curl -fsSL https://raw.githubusercontent.com/agentty-org/agentty/master/install.sh | sh -s -- --build
 ```
 
-Shell/build tools run **unsandboxed** on unrooted Android (Bubblewrap needs
+Shell/build tools run **unsandboxed** on unrooted Android (claybin needs
 user namespaces Android doesn't grant) — everything else works. See
 [`packaging/termux/`](packaging/termux/) for the `pkg install agentty` recipe.
 
