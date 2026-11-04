@@ -578,6 +578,28 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
             && last.text.empty()
             && last.tool_calls.empty()
             && !last.error
+            && stop_reason == StopReason::MaxTokens) {
+            // All of max_tokens went to reasoning and nothing was said. Same
+            // fix on every provider: drop the turn and send it once more at
+            // the lowest effort the model takes.
+            if (auto* a = active_ctx(m.s.phase); a && !a->reasoning_starved_retry) {
+                a->reasoning_starved_retry = true;
+                AGT_LOG(Wire, Warn, "stream.reasoning_starved",
+                        "model={} retrying at lowest effort", m.d.model_id.value);
+                m.ui.view_cache.drop(m.d.current.id, last.id);
+                m.ui.view_cache.drop(m.d.current.id, MessageId{last.id.value + "#r"});
+                m.d.current.messages.pop_back();
+                m.d.current.messages.push_back(Message{.role = Role::Assistant});
+                if (!reschedule_streaming(m.s.phase, [](phase::Active&) {}))
+                    return Cmd::none();
+                m.s.status = "reasoning used the whole budget \xc2\xb7 retrying with less\xe2\x80\xa6";
+                return cmd::launch_stream(m);
+            }
+        }
+        if (last.role == Role::Assistant
+            && last.text.empty()
+            && last.tool_calls.empty()
+            && !last.error
             && stop_reason != StopReason::ToolUse) {
             // Name the cause when the wire gave one. `refusal` is a real
             // stop_reason (docs.claude.com/en/api/handling-stop-reasons) that

@@ -929,9 +929,17 @@ Cmd launch_stream(Model& m) {
     // that only reaches xhigh degrades instead of being sent verbatim.
     const auto launch_caps = resolved_caps(model_id);
     std::string effort = std::string{effort_wire_for(m.d.effort, launch_caps)};
+    // Retrying a turn whose reasoning ate the whole output budget: go to the
+    // cheapest setting the model has (off where it can be off).
+    const bool starved_retry = [&] {
+        const auto* a = active_ctx(m.s.phase);
+        return a && a->reasoning_starved_retry;
+    }();
+    if (starved_retry)
+        effort = std::string{effort_wire_for(Effort::None, launch_caps)};
     // The user picked off (not "Auto on a model with no ladder"): the
     // transport sends an explicit off where the model has one.
-    const bool no_reasoning = m.d.effort == Effort::None;
+    const bool no_reasoning = m.d.effort == Effort::None || starved_retry;
     const std::uint8_t reasoning_off = launch_caps.reasoning_off;
 
     // Whether to ask the provider for visible reasoning at all.

@@ -99,6 +99,10 @@ struct Active {
     int truncation_retries = 0;
     int transient_retries  = 0;
 
+    // Set when a turn spent its whole output budget on reasoning and is
+    // being re-sent at the lowest effort. Any provider; once per turn.
+    bool reasoning_starved_retry = false;
+
     // Mid-stream failure count — increments every time a retry is
     // scheduled for a failure that happened AFTER the wire proved itself
     // alive this turn (stall watchdog fired, or a content delta had

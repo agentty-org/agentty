@@ -50,7 +50,7 @@ namespace {
 // wiring: if the guard is ever moved somewhere the reducer does not reach,
 // this stops compiling or stops passing.
 Message settle_with(StopReason stop, const std::string& streamed = {},
-                    bool with_tool_call = false) {
+                    bool with_tool_call = false, bool retry_spent = false) {
     Model m;
     m.d.current.id = ThreadId{"empty-turn"};
 
@@ -69,7 +69,9 @@ Message settle_with(StopReason stop, const std::string& streamed = {},
         a.tool_calls.push_back(std::move(tc));
     }
     m.d.current.messages.push_back(std::move(a));
-    m.s.phase = phase::Streaming{phase::Active{}};
+    phase::Active act{};
+    act.reasoning_starved_retry = retry_spent;
+    m.s.phase = phase::Streaming{std::move(act)};
 
     auto [out, _] = app::update(std::move(m),
                                 Msg{msg::StreamMsg{StreamFinished{stop}}});
@@ -105,19 +107,28 @@ TEST_CASE("empty turn: a refusal says it was refused") {
 TEST_CASE("empty turn: every terminal stop is covered") {
     // The guard must not special-case only the reason we happened to hit.
     // A wire that goes quiet on ANY terminal stop is the same bug.
+    // MaxTokens retries once first (next test); here the retry is spent.
     for (const auto stop : {StopReason::Refusal,
                             StopReason::MaxTokens,
                             StopReason::ContextExceeded,
                             StopReason::EndTurn,
                             StopReason::StopSequence,
                             StopReason::Unspecified}) {
-        const auto msg = settle_with(stop);
+        const auto msg = settle_with(stop, {}, false, /*retry_spent=*/true);
         INFO("stop_reason: " << std::string{to_string(stop)});
         agtest::check(msg.error.has_value(),
                       "no terminal stop leaves a blank bubble");
         agtest::check(msg.text.empty(),
                       "no terminal stop forges assistant prose");
     }
+}
+
+TEST_CASE("empty turn: reasoning that ate the budget is retried once") {
+    // Any provider: max_tokens with nothing said means reasoning used it all.
+    // The turn is re-sent at the lowest effort instead of erroring.
+    const auto msg = settle_with(StopReason::MaxTokens);
+    agtest::check(!msg.error.has_value(), "first starve retries, no error yet");
+    agtest::check(msg.text.empty(), "retry starts from a fresh placeholder");
 }
 
 TEST_CASE("empty turn: a tool call is NOT an empty turn") {
