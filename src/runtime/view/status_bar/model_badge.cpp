@@ -79,7 +79,14 @@ maya::Element model_badge_config(const Model& m) {
     // is Default, the same colour as ordinary text, so the chip painted
     // normal foreground on a bright band (agentty #45).
     const auto& active_sel = m.d.selection;
-    const std::string prov = provider::provider_display_name(active_sel);
+    std::string prov = provider::provider_display_name(active_sel);
+    // Multi-account providers only: say WHICH identity is serving. With one
+    // account the name adds nothing, so single-account users see no new
+    // chrome. The account rides the provider chip -- it qualifies the
+    // PROVIDER (who serves the bytes), not the model.
+    if (const auto* pa = m.d.auth.find(active_sel.catalog_id());
+        pa && pa->accounts.size() > 1 && !pa->active_account.empty())
+        prov += " \xc2\xb7 " + pa->active_account;
     const Style prov_style = ui::chip_style(name.color).with_bold();
 
     // First-run honesty. If the user escaped out of the login modal (or

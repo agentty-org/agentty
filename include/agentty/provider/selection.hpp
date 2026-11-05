@@ -19,9 +19,11 @@
 #include <vector>
 
 #include "agentty/auth/auth.hpp"
+#include "agentty/domain/auth_view.hpp"   // auth::AuthView
 #include "agentty/domain/catalog.hpp"   // ModelInfo
 #include "agentty/provider/openai/endpoint.hpp"
 #include "agentty/provider/registry.hpp"
+#include "agentty/store/store.hpp"        // store::Settings
 
 #include <maya/runtime.hpp>
 #include "agentty/util/io.hpp"
@@ -248,6 +250,23 @@ void prewarm_active_provider(Io);
 // resolution on select/move) and pickers.cpp (row rendering) so the filtered
 // list can never disagree between them. Defined in selection.cpp.
 [[nodiscard]] std::vector<int> filter_provider_indices(std::string_view query);
+
+// The same ranking, but AUTH-AWARE: on an empty query only the providers you
+// have actually configured come back, so the browse view is "your backends"
+// rather than a flat dump of the vendor registry. Typing searches the whole
+// registry exactly as before, so nothing becomes unreachable -- the
+// unconfigured rows turn into sign-in offers the moment you name one.
+//
+// `n_configured` reports how many of the returned indices are configured, so
+// a caller can section the list without re-deriving auth per row.
+struct FilteredProviders {
+    std::vector<int> indices;
+    int              n_configured = 0;   // leading `indices` that are authed
+    int              n_hidden     = 0;   // registry rows withheld (empty query)
+};
+[[nodiscard]] FilteredProviders filter_provider_indices(
+    std::string_view query, const store::Settings& settings,
+    const auth::AuthView& view);
 
 // The user's saved custom OpenAI-compatible hosts, sorted. These are the
 // Settings.provider_keys entries that do not resolve onto a built-in preset

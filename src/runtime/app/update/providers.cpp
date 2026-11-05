@@ -68,7 +68,14 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
     const auto& settings = m.d.persisted;
     const std::vector<std::string> saved_custom_hosts =
         provider::saved_custom_hosts(settings.provider_keys);
-    const auto rows = ui::build_provider_rows(saved_custom_hosts, query);
+    const auto sectioned = ui::build_sectioned_provider_rows(
+        saved_custom_hosts, query, settings, m.d.auth,
+        m.d.selection.catalog_id());
+    // The reducer selects from the SAME list the view renders; section
+    // headers are decoration the view adds, so indices still line up.
+    std::vector<ui::ProviderRow> rows;
+    rows.reserve(sectioned.rows.size());
+    for (const auto& sr : sectioned.rows) rows.push_back(sr.row);
     const int n = static_cast<int>(rows.size());
 
     return std::visit(overload{
@@ -99,7 +106,12 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             //
             // Open at the row matching the currently-active provider. Fresh
             // rows with an empty query (so every provider is present to match).
-            const auto fresh = ui::build_provider_rows(saved_custom_hosts, "");
+            const auto fresh_s = ui::build_sectioned_provider_rows(
+                saved_custom_hosts, "", settings, m.d.auth,
+                m.d.selection.catalog_id());
+            std::vector<ui::ProviderRow> fresh;
+            fresh.reserve(fresh_s.rows.size());
+            for (const auto& sr : fresh_s.rows) fresh.push_back(sr.row);
             const auto& sel = m.d.selection;
             const std::string active_label =
                 sel.kind == provider::Kind::ExternalAcp ? sel.acp_agent_id
@@ -251,8 +263,12 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
                 : Cmd::none();
             // Rebuild the row list so a removed custom host is gone; clamp.
             const auto& s2 = m.d.persisted;
-            const auto fresh = ui::build_provider_rows(
-                provider::saved_custom_hosts(s2.provider_keys), p->query);
+            const auto fresh_s = ui::build_sectioned_provider_rows(
+                provider::saved_custom_hosts(s2.provider_keys), p->query,
+                s2, m.d.auth, m.d.selection.catalog_id());
+            std::vector<ui::ProviderRow> fresh;
+            fresh.reserve(fresh_s.rows.size());
+            for (const auto& sr : fresh_s.rows) fresh.push_back(sr.row);
             if (!fresh.empty() && p->index >= static_cast<int>(fresh.size()))
                 p->index = static_cast<int>(fresh.size()) - 1;
             auto toast = set_status_toast(m,

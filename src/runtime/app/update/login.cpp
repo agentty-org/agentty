@@ -661,8 +661,29 @@ Cmd account_select(Model& m) {
     m.s.status = "switched " + provider_label + " to " + label;
     m.s.status_until = m.now
                      + std::chrono::seconds{4};
+
+    // The catalog we hold was fetched as the OUTGOING account. Entitlement is
+    // account-scoped (a Pro and a Max subscription serve different model
+    // lists), so it is now wrong. Drop its freshness stamp and refetch:
+    // without this the 60s kCatalogTtlMs guard makes ^/ skip the refetch and
+    // browse the previous account's models. See domain/entitlement.hpp.
+    for (auto& c : m.d.provider_catalogs)
+        if (c.provider_id == provider) {
+            c.loaded_at_ms = 0;
+            break;
+        }
+    // For the ACTIVE provider go through fetch_models(m): it fills
+    // d.available_models (what the composer and the active row read) as well
+    // as the fused catalog. fetch_models_for only dispatches
+    // FusedCatalogLoaded, which would leave available_models on the old
+    // account's list.
+    const bool is_active = provider == m.d.selection.catalog_id();
+    Cmd refetch = is_active ? cmd::fetch_models(m)
+                            : cmd::fetch_models_for(provider);
+    if (is_active) m.s.models_loading = true;
+
     return Cmd::batch(std::move(activate), std::move(install),
-                      std::move(refresh_cmd));
+                      std::move(refresh_cmd), std::move(refetch));
 }
 
 Cmd account_remove(Model& m) {

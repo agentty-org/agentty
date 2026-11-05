@@ -215,4 +215,101 @@ struct ProviderRow {
     return rows;
 }
 
+// ── Sectioned, auth-aware variant ────────────────────────────────────────
+//
+// Same list, grouped. `^P` is the surface where you MANAGE backends, so the
+// browse view leads with the ones you can actually use; the rest of the
+// registry collapses into a single "N more — type to search" line. Typing
+// searches everything, so a provider you haven't configured is one keystroke
+// away rather than gone (the same no-dead-end contract the model picker's
+// sign-in offers hold).
+enum class ProviderSection { Yours, More, Add };
+
+struct SectionedProviderRow {
+    ProviderRow     row;
+    ProviderSection section = ProviderSection::Yours;
+    // A registry row you have NOT configured, surfaced because the query
+    // named it. Renders dim, as an offer: Enter starts its sign-in.
+    bool            offer   = false;
+};
+
+struct SectionedProviderRows {
+    std::vector<SectionedProviderRow> rows;
+    int  n_hidden = 0;       // registry rows withheld from the browse view
+    bool searching = false;  // query non-empty
+};
+
+[[nodiscard]] inline SectionedProviderRows build_sectioned_provider_rows(
+    const std::vector<std::string>& saved_custom_hosts,
+    std::string_view query,
+    const store::Settings& settings,
+    const auth::AuthView& view,
+    std::string_view active_id = {}) {
+    SectionedProviderRows out;
+    out.searching = !query.empty();
+
+    const auto presets = provider::providers();
+    const std::string canon = provider::canonical_spec(query);
+    const bool already_saved =
+        std::find(saved_custom_hosts.begin(), saved_custom_hosts.end(), canon)
+            != saved_custom_hosts.end();
+    const bool offer_host = query_looks_like_host(query) && !already_saved;
+
+    // A typed host wins the top slot: it's the most specific thing the query
+    // could mean, and it's the one row that acts on the literal text.
+    if (offer_host)
+        out.rows.push_back({{ProviderRow::NewCustomHost{canon}},
+                            ProviderSection::Yours, false});
+
+    const auto filtered =
+        provider::filter_provider_indices(query, settings, view);
+    out.n_hidden = filtered.n_hidden;
+
+    // Partition into the two bands first, so the active row joins YOURS in
+    // ORDER and not just in label.
+    std::vector<const provider::ProviderDescriptor*> mine, rest;
+    int i = 0;
+    for (int idx : filtered.indices) {
+        const auto* p = &presets[static_cast<std::size_t>(idx)];
+        // The ACTIVE provider is always yours, even if its credential has
+        // gone (expired token, unset env var). Showing the row you're
+        // currently running on under "not configured" reads as a bug, and
+        // the ● marker would sit in the wrong band.
+        const bool configured =
+            i < filtered.n_configured || std::string{p->id} == active_id;
+        (configured ? mine : rest).push_back(p);
+        ++i;
+    }
+    if (!active_id.empty())
+        for (std::size_t k = 0; k < mine.size(); ++k)
+            if (std::string{mine[k]->id} == active_id) {
+                // Active first within YOURS: it's the row you're on.
+                std::rotate(mine.begin(), mine.begin() + static_cast<long>(k),
+                            mine.begin() + static_cast<long>(k) + 1);
+                break;
+            }
+    for (const auto* p : mine)
+        out.rows.push_back({{ProviderRow::Preset{p}},
+                            ProviderSection::Yours, false});
+    for (const auto* p : rest)
+        out.rows.push_back({{ProviderRow::Preset{p}},
+                            ProviderSection::More, true});
+
+    // Saved hosts are yours by definition — you typed the key in.
+    for (const auto& spec : saved_custom_hosts)
+        if (query.empty() || spec.find(canon) != std::string::npos)
+            out.rows.push_back({{ProviderRow::CustomHost{spec}},
+                                ProviderSection::Yours, false});
+
+    if (query.empty())
+        for (auto& agent : provider::enumerate_acp_agents())
+            out.rows.push_back({{ProviderRow::Acp{std::move(agent)}},
+                                ProviderSection::Yours, false});
+
+    if (!offer_host)
+        out.rows.push_back({{ProviderRow::NewCustomHost{}},
+                            ProviderSection::Add, false});
+    return out;
+}
+
 } // namespace agentty::ui

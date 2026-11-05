@@ -212,6 +212,15 @@ Element models_panel(const Model& m) {
                     if (rr.provider_id == picker->provider_scope
                         && !rr.label.empty()) { plabel = rr.label; break; }
                 others_label = plabel + " models";
+                // Multi-account providers: name the IDENTITY whose catalog
+                // this is. Entitlement is account-scoped, so "which account"
+                // is exactly what makes two otherwise identical lists differ.
+                // On the header, not the rows -- the account is not part of
+                // what a model IS (docs/IDENTITY_CAPABILITY_ENTITLEMENT.md),
+                // and repeating it per row would steal width from the name.
+                const auto* pa = m.d.auth.find(picker->provider_scope);
+                if (pa && pa->accounts.size() > 1 && !pa->active_account.empty())
+                    others_label += "  \xc2\xb7  " + pa->active_account;
             }
 
             // Uniform section divider — label + hue + right-pinned count. See

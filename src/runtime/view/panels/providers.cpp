@@ -33,7 +33,9 @@ Element providers_panel(const Model& m) {
     const auto& settings = m.d.persisted;
     const std::vector<std::string> saved_custom_hosts =
         provider::saved_custom_hosts(settings.provider_keys);
-    const auto rows = ui::build_provider_rows(saved_custom_hosts, picker->query);
+    const auto sectioned = ui::build_sectioned_provider_rows(
+        saved_custom_hosts, picker->query, settings, m.d.auth, active_id);
+    const auto& srows = sectioned.rows;
 
     // Live search header (mirrors the model picker). Backspace trims; typing
     // narrows. Hidden ACP/custom rows return the moment the query is cleared.
@@ -88,8 +90,50 @@ Element providers_panel(const Model& m) {
         return {want.empty() ? "\xe2\x9a\xa0 no key" : "\xe2\x9a\xa0 " + std::string{want}, warn};
     };
 
-    cfg.items.reserve(rows.size());
-    for (const auto& r : rows) {
+    cfg.items.reserve(srows.size() + 3);
+    std::optional<ui::ProviderSection> cur_section;
+    int visual_selected = 0;
+    // Per-section counts for the right-pinned stat on each divider.
+    int yours_count = 0, more_count = 0;
+    for (const auto& sr : srows) {
+        if (sr.section == ui::ProviderSection::Yours) ++yours_count;
+        else if (sr.section == ui::ProviderSection::More) ++more_count;
+    }
+    // Does any row actually carry the amber "no key" badge? Drives the footer
+    // legend, which must only explain what's on screen.
+    const bool any_unconfigured = more_count > 0;
+
+    for (std::size_t ri = 0; ri < srows.size(); ++ri) {
+        const auto& sr = srows[ri];
+        const auto& r  = sr.row;
+        const int   i  = static_cast<int>(ri);
+
+        // One divider per band. Only drawn when the band is non-empty, so a
+        // fresh install (nothing configured) never shows an empty "YOURS".
+        if (!cur_section || *cur_section != sr.section) {
+            cur_section = sr.section;
+            SectionHeader sh;
+            switch (sr.section) {
+                case ui::ProviderSection::Yours:
+                    sh.label = sectioned.searching ? "configured" : "yours";
+                    sh.hue   = accent;
+                    sh.count = yours_count;
+                    break;
+                case ui::ProviderSection::More:
+                    sh.label = "not configured";
+                    sh.hue   = muted;
+                    sh.count = more_count;
+                    break;
+                case ui::ProviderSection::Add:
+                    sh.label = "add";
+                    sh.hue   = muted;
+                    break;
+            }
+            cfg.items.push_back(section_header(std::move(sh)));
+        }
+        if (i == picker->index)
+            visual_selected = static_cast<int>(cfg.items.size());
+
         Panel::Item row;
 
         if (const auto* p = r.preset()) {
@@ -102,12 +146,21 @@ Element providers_panel(const Model& m) {
             // out inverts the hierarchy — it makes the whole list read as
             // unavailable while the trailing status chip out-shouts the name.
             // Bold + the ● marker is enough to find the active row.
-            row.leading_style  = active ? fg_bold(fg) : fg_of(fg);
+            //
+            // An OFFER row is the one exception: it's a provider you haven't
+            // set up, shown because you searched for it, so it reads dim and
+            // states its single action instead of warning about a key you
+            // never asked to have.
+            row.leading_style  = sr.offer ? fg_dim(muted)
+                                          : (active ? fg_bold(fg) : fg_of(fg));
             if (confirming) {
                 // Del/d armed on a preset that has a saved key — second press
                 // signs out (clears the key), the preset itself stays.
                 row.trailing       = "\xe2\x9c\x97 press again to sign out";
                 row.trailing_style = fg_of(warn);
+            } else if (sr.offer) {
+                row.trailing       = "Enter to set up";
+                row.trailing_style = fg_dim(muted);
             } else {
                 row.trailing       = note;
                 row.trailing_style = fg_of(note_color);
@@ -176,12 +229,28 @@ Element providers_panel(const Model& m) {
         cfg.items.push_back(std::move(row));
     }
 
+    // The discoverability contract. The unconfigured rows aren't gone, and a
+    // user who can't see them needs to be told the VERB, not just the count.
+    // Non-selectable: it's a signpost, not a destination.
+    if (!sectioned.searching && sectioned.n_hidden > 0) {
+        Panel::Item hint;
+        hint.leading = std::to_string(sectioned.n_hidden)
+                     + " more providers\xe2\x80\x82\xc2\xb7\xe2\x80\x82type to search";
+        hint.leading_style = fg_dim(muted);
+        cfg.items.push_back(std::move(hint));
+    }
+
+    cfg.selected = visual_selected;
+
     // Enter opens the accounts drill-down on an account-capable OAuth
     // provider, otherwise it switches. Read straight off the highlighted row.
     const bool row_has_accounts = [&] {
-        if (picker->index < 0 || picker->index >= static_cast<int>(rows.size()))
+        if (picker->index < 0 || picker->index >= static_cast<int>(srows.size()))
             return false;
-        const auto& row = rows[static_cast<std::size_t>(picker->index)];
+        const auto& sr = srows[static_cast<std::size_t>(picker->index)];
+        // An offer row's Enter starts sign-in, it doesn't drill into accounts.
+        if (sr.offer) return false;
+        const auto& row = sr.row;
         // Custom hosts hold multiple keys (accounts) — Enter drills in.
         if (const auto* spec = row.custom_host())
             return provider::credentials::add_method(*spec)
@@ -225,10 +294,18 @@ Element providers_panel(const Model& m) {
             text(" to use any OpenAI-compatible server", fg_dim(muted))
         ).build());
     } else {
-        cfg.footer.push_back(h(
-            text("\xe2\x9c\x93", fg_of(success)), text(" ready  ", fg_dim(muted)),
-            text("\xe2\x9a\xa0", fg_of(warn)),    text(" set the named key first  ", fg_dim(muted))
-        ).build());
+        // The legend explains the badges that are ACTUALLY on screen. In the
+        // browse view every row is usable, so the "set the named key first"
+        // half would be explaining a warning the user can't see.
+        if (any_unconfigured)
+            cfg.footer.push_back(h(
+                text("\xe2\x9c\x93", fg_of(success)), text(" ready  ", fg_dim(muted)),
+                text("\xe2\x9a\xa0", fg_of(warn)),    text(" set the named key first  ", fg_dim(muted))
+            ).build());
+        else
+            cfg.footer.push_back(h(
+                text("\xe2\x9c\x93", fg_of(success)), text(" ready  ", fg_dim(muted))
+            ).build());
     }
     cfg.footer.push_back(key_hints({
         {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓

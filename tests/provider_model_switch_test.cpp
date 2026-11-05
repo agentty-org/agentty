@@ -337,6 +337,63 @@ TEST_CASE("model picker ^E on family-gated model is a hinted no-op") {
     agentty::clear_reasoning_overrides();
 }
 
+TEST_CASE("provider filter: auth-aware browse hides unconfigured") {
+    namespace P = agentty::provider;
+    const auto ps = P::providers();
+
+    store::Settings st;
+    agentty::auth::AuthView view;
+
+    auto id_at = [&](int i) { return std::string{ps[static_cast<std::size_t>(i)].id}; };
+    auto has = [&](const std::vector<int>& v, std::string_view id) {
+        for (int i : v) if (id_at(i) == id) return true;
+        return false;
+    };
+
+    // Nothing configured: the browse view is EMPTY of hosted vendors, and
+    // every withheld row is counted so the UI can offer them. Local/no-auth
+    // backends are always usable, so they may legitimately show up.
+    {
+        auto r = P::filter_provider_indices("", st, view);
+        CHECK(!has(r.indices, "cerebras"), "unconfigured vendor is not browsed");
+        CHECK(!has(r.indices, "groq"));
+        CHECK(r.n_hidden > 0, "withheld rows are counted");
+        CHECK(r.n_configured == static_cast<int>(r.indices.size()));
+        CHECK(static_cast<std::size_t>(r.n_hidden) + r.indices.size()
+                  == ps.size(), "every registry row is either shown or counted");
+    }
+
+    // Configure one: it appears, the hidden count drops by exactly one.
+    {
+        auto before = P::filter_provider_indices("", st, view);
+        st.provider_keys["groq"] = "gsk_test";
+        auto after = P::filter_provider_indices("", st, view);
+        CHECK(has(after.indices, "groq"), "a keyed provider is mine");
+        CHECK(after.n_hidden == before.n_hidden - 1);
+        CHECK(!has(after.indices, "cerebras"), "others stay hidden");
+    }
+
+    // SEARCH still reaches the whole registry -- hiding is a browse-view
+    // decision, never a reachability one. This is the no-dead-end contract.
+    {
+        auto r = P::filter_provider_indices("cerebras", st, view);
+        CHECK(has(r.indices, "cerebras"), "unconfigured vendor still searchable");
+        CHECK(r.n_hidden == 0, "search withholds nothing");
+    }
+
+    // With a query, configured rows lead the unconfigured ones.
+    {
+        store::Settings s2;
+        s2.provider_keys["cerebras"] = "k";
+        auto r = P::filter_provider_indices("e", s2, view);
+        REQUIRE(r.n_configured >= 1);
+        for (int i = 0; i < r.n_configured; ++i)
+            CHECK(P::auth_source(ps[static_cast<std::size_t>(r.indices[static_cast<std::size_t>(i)])],
+                                 s2, view) != P::AuthSource::None,
+                  "the configured prefix really is configured");
+    }
+}
+
 TEST_CASE("provider filter: fuzzy narrows + ranks") {
     namespace P = agentty::provider;
 
@@ -1508,14 +1565,16 @@ TEST_CASE("provider picker: ^D signs out of a keyed preset (two-press)") {
     apply_fx(c1);
 
     // Point the cursor at the openrouter row deterministically by locating
-    // it in the built row list, then set the picker index.
+    // it in the built row list, then set the picker index. Must use the SAME
+    // builder the reducer does, or the index means a different row.
     auto* p = m1.ui.panel.get<pn::Providers>();
     REQUIRE(p != nullptr);
-    const auto rows = ui::build_provider_rows(
-        agentty::provider::saved_custom_hosts(g_settings.provider_keys), "");
+    const auto sectioned = ui::build_sectioned_provider_rows(
+        agentty::provider::saved_custom_hosts(g_settings.provider_keys), "",
+        g_settings, m1.d.auth, m1.d.selection.catalog_id());
     int or_idx = -1;
-    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
-        if (const auto* pr = rows[static_cast<std::size_t>(i)].preset();
+    for (int i = 0; i < static_cast<int>(sectioned.rows.size()); ++i)
+        if (const auto* pr = sectioned.rows[static_cast<std::size_t>(i)].row.preset();
             pr && std::string{pr->id} == "openrouter") { or_idx = i; break; }
     REQUIRE(or_idx >= 0);
     p->index = or_idx;
@@ -1550,11 +1609,12 @@ TEST_CASE("provider picker: ^D on the ACTIVE provider zeroes live auth") {
     apply_fx(c1);
     auto* p = m1.ui.panel.get<pn::Providers>();
     REQUIRE(p != nullptr);
-    const auto rows = ui::build_provider_rows(
-        agentty::provider::saved_custom_hosts(g_settings.provider_keys), "");
+    const auto sectioned = ui::build_sectioned_provider_rows(
+        agentty::provider::saved_custom_hosts(g_settings.provider_keys), "",
+        g_settings, m1.d.auth, m1.d.selection.catalog_id());
     int or_idx = -1;
-    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
-        if (const auto* pr = rows[static_cast<std::size_t>(i)].preset();
+    for (int i = 0; i < static_cast<int>(sectioned.rows.size()); ++i)
+        if (const auto* pr = sectioned.rows[static_cast<std::size_t>(i)].row.preset();
             pr && std::string{pr->id} == "openrouter") { or_idx = i; break; }
     REQUIRE(or_idx >= 0);
     p->index = or_idx;

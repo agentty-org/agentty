@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "agentty/provider/registry.hpp"
+#include "agentty/provider/auth_state.hpp"   // auth_source
 #include "agentty/domain/bundled_catalog.hpp"
 #include "agentty/provider/acp_agents.hpp"
 #include "agentty/provider/anthropic/transport.hpp"
@@ -429,6 +430,44 @@ std::vector<int> filter_provider_indices(std::string_view query) {
     std::stable_sort(scored.begin(), scored.end(),
         [](const Scored& a, const Scored& b) { return a.score > b.score; });
     for (const auto& s : scored) out.push_back(s.idx);
+    return out;
+}
+
+FilteredProviders filter_provider_indices(std::string_view query,
+                                          const store::Settings& settings,
+                                          const auth::AuthView& view) {
+    const auto ps = providers();
+    FilteredProviders out;
+
+    // A typed query searches the WHOLE registry: the same ranking as the
+    // query-only overload, unchanged. Configured rows still lead, so when you
+    // search "o" your own backends sort above ones you'd have to sign into,
+    // but every vendor stays reachable by name.
+    if (!query.empty()) {
+        auto ranked = filter_provider_indices(query);
+        std::vector<int> mine, rest;
+        for (int i : ranked) {
+            const auto& p = ps[static_cast<std::size_t>(i)];
+            (auth_source(p, settings, view) != AuthSource::None ? mine : rest)
+                .push_back(i);
+        }
+        out.n_configured = static_cast<int>(mine.size());
+        out.indices = std::move(mine);
+        out.indices.insert(out.indices.end(), rest.begin(), rest.end());
+        return out;
+    }
+
+    // Empty query = the ADMIN view: only what you've configured. The rest of
+    // the registry isn't gone, it's one keystroke away -- the caller renders
+    // n_hidden as a "N more providers, type to search" line.
+    for (int i = 0; i < static_cast<int>(ps.size()); ++i) {
+        const auto& p = ps[static_cast<std::size_t>(i)];
+        if (auth_source(p, settings, view) != AuthSource::None)
+            out.indices.push_back(i);
+        else
+            ++out.n_hidden;
+    }
+    out.n_configured = static_cast<int>(out.indices.size());
     return out;
 }
 

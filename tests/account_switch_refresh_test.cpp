@@ -175,6 +175,46 @@ TEST_CASE("account switch refreshes a stale token") {
     }
 }
 
+TEST_CASE("account switch invalidates the outgoing account's catalog") {
+    // Entitlement is ACCOUNT-scoped: a Pro and a Max subscription serve
+    // different model lists. The catalog in hand was fetched as the OUTGOING
+    // account, so after a switch it is wrong. Without invalidation the 60s
+    // freshness guard in the ^/ reducer skips the refetch and the picker
+    // browses the PREVIOUS account's models.
+    isolate_config_dir();
+    install_stub_deps();
+    {
+        provider::Selection sel;
+        sel.kind = provider::Kind::Anthropic;
+        provider::select(::agentty::IoAccess::grant(), sel);
+    }
+
+    Model m;
+    m.ui.login = setup_two_accounts("B");
+
+    // A catalog that was just fetched -- the exact state that defeats the
+    // TTL guard. The anim clock starts at 0 in tests, so stamp it explicitly;
+    // any nonzero value is "fetched" as far as the freshness check is
+    // concerned.
+    ProviderCatalog cat;
+    cat.provider_id  = "anthropic";
+    cat.label        = "Anthropic";
+    cat.state        = ProviderCatalog::State::Ready;
+    cat.loaded_at_ms = ::maya::anim_now_ms() + 1;
+    m.d.provider_catalogs.push_back(std::move(cat));
+    REQUIRE(m.d.provider_catalogs.front().loaded_at_ms != 0);
+
+    auto [m2, cmd] = app::update(std::move(m),
+                                 Msg{msg::LoginMsg{agentty::AccountSelect{}}});
+    agtest::fx::run_credentials(cmd);
+
+    REQUIRE(m2.d.provider_catalogs.size() == 1);
+    CHECK(m2.d.provider_catalogs.front().loaded_at_ms == 0,
+          "the switched-from catalog is marked stale so ^/ refetches it "
+          "for the account that is now active");
+    CHECK(acc::active_label(::agentty::IoAccess::grant(), "anthropic") == "B");
+}
+
 TEST_CASE("re-login reuses the derived-label slot, no proliferation") {
     isolate_config_dir();
     install_stub_deps();
