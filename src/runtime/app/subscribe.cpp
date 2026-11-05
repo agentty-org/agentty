@@ -552,8 +552,12 @@ std::optional<Msg> on_provider_picker(const KeyEvent& ev) {
             return Msg{OpenModels{}};                       // cross-hop
         if (v->ctrl && (v->c == U'd' || v->c == U'D'))
             return Msg{ProvidersDelete{}};
-        // ^A — reveal/hide the providers you haven't configured.
-        if (v->ctrl && (v->c == U'a' || v->c == U'A'))
+        // ^E (Expand) — reveal/hide the providers you haven't configured.
+        //
+        // NOT ^A: that is tmux's default prefix (and ^B is screen's), so the
+        // first press never reaches the app — the binding looks like it
+        // needs pressing twice. nav.hpp warns about exactly this.
+        if (v->ctrl && (v->c == U'e' || v->c == U'E'))
             return Msg{ProvidersToggleAll{}};
         return std::nullopt;
     };

@@ -149,7 +149,7 @@ Element providers_panel(const Model& m) {
             row.leading = "Show " + std::to_string(sectioned.n_hidden)
                         + " more providers";
             row.leading_style  = fg_dim(muted);
-            row.trailing       = "Enter  \xc2\xb7  ^A";
+            row.trailing       = "Enter  \xc2\xb7  ^E";
             row.trailing_style = fg_dim(muted);
             row.trailing_secondary = true;
             cfg.items.push_back(std::move(row));
@@ -324,10 +324,10 @@ Element providers_panel(const Model& m) {
         {"Enter", host_shaped ? "connect"
                               : (row_has_accounts ? "accounts" : "switch"), 5},
     };
-    // Only advertise ^A when it would do something: while searching, every
+    // Only advertise ^E when it would do something: while searching, every
     // row is already shown.
     if (!sectioned.searching && (sectioned.n_hidden > 0 || picker->show_all))
-        hints.push_back({"^A", picker->show_all ? "fewer" : "all", 3});
+        hints.push_back({"^E", picker->show_all ? "fewer" : "all", 3});
     hints.push_back({"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 2});
     hints.push_back({"^/", "models", 3});           // cross-hint: model picker
     hints.push_back({"Esc", "close", 4});

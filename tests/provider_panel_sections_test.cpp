@@ -88,7 +88,7 @@ TEST_CASE("provider picker: browse hides unconfigured behind one signpost") {
     CHECK(has(screen, "ADD"));
 }
 
-TEST_CASE("provider picker: ^A expands the withheld providers in place") {
+TEST_CASE("provider picker: ^E expands the withheld providers in place") {
     // The signpost must be ACTIONABLE, not just informative. Expanding keeps
     // the picker open and reveals the rows it was standing in for.
     Model m = picker_model();
@@ -151,8 +151,8 @@ TEST_CASE("provider picker: Enter on the signpost expands, doesn't close") {
 // app::on_key so a binding that never reaches the reducer is caught here
 // rather than by hand in the terminal.
 
-TEST_CASE("provider picker: ^A toggles through the real key path") {
-    // A terminal sends ^A as the bare control byte 0x01 with no ctrl flag;
+TEST_CASE("provider picker: ^E toggles through the real key path") {
+    // A terminal sends ^E as the bare control byte 0x05 with no ctrl flag;
     // some send the letter with mods.ctrl. BOTH must work -- char_view folds
     // 0x01..0x1A to a letter and synthesises ctrl, and if either encoding
     // missed the binding the key would look flaky rather than broken.
@@ -167,15 +167,15 @@ TEST_CASE("provider picker: ^A toggles through the real key path") {
         return mm;
     };
 
-    {   // raw 0x01, no modifier flag
-        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x01)}, {}, {}};
+    {   // raw 0x05, no modifier flag
+        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x05)}, {}, {}};
         Model m2 = press(fresh(), ev);
         auto* p = m2.ui.panel.get<pn::Providers>();
         REQUIRE(p != nullptr);
         CHECK(p->show_all);
     }
-    {   // 'a' with ctrl set
-        maya::KeyEvent ev{maya::CharKey{U'a'}, {}, {}};
+    {   // 'e' with ctrl set
+        maya::KeyEvent ev{maya::CharKey{U'e'}, {}, {}};
         ev.mods.ctrl = true;
         Model m2 = press(fresh(), ev);
         auto* p = m2.ui.panel.get<pn::Providers>();
@@ -183,11 +183,35 @@ TEST_CASE("provider picker: ^A toggles through the real key path") {
         CHECK(p->show_all);
     }
     {   // and it TOGGLES -- two presses return to collapsed
-        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x01)}, {}, {}};
+        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x05)}, {}, {}};
         Model m2 = press(press(fresh(), ev), ev);
         auto* p = m2.ui.panel.get<pn::Providers>();
         REQUIRE(p != nullptr);
         CHECK_FALSE(p->show_all);
+    }
+}
+
+TEST_CASE("provider picker: no binding on a multiplexer prefix chord") {
+    // ^A is tmux's default prefix and ^B is screen's: under a multiplexer
+    // the FIRST press is eaten and never reaches us, so a binding there
+    // looks like it needs pressing twice. nav.hpp warns about this; the
+    // rule only holds if something checks it.
+    auto fresh = [] {
+        Model mm;
+        mm.ui.panel.descend(pn::Providers{});
+        return mm;
+    };
+    for (char32_t c : {U'a', U'b'}) {
+        Model m = fresh();
+        maya::KeyEvent ev{maya::CharKey{c}, {}, {}};
+        ev.mods.ctrl = true;
+        const auto msg = app::on_key(m, ev);
+        // Either nothing, or at least NOT the expand toggle.
+        if (msg) {
+            const auto* pm = std::get_if<msg::ProvidersMsg>(&*msg);
+            if (pm)
+                CHECK(!std::holds_alternative<ProvidersToggleAll>(*pm));
+        }
     }
 }
 
@@ -208,7 +232,7 @@ TEST_CASE("provider picker: typing stays typing, ^A is not swallowed") {
 TEST_CASE("provider picker: the row list is never a stale snapshot") {
     // THE bug that read as a flaky key. providers_update used to build the
     // row list ONCE on entry, so any arm running after a mutation saw the
-    // PREVIOUS state: after ^A expanded the list, `n` was still the
+    // PREVIOUS state: after ^E expanded the list, `n` was still the
     // collapsed length, ProvidersMove clamped the cursor to it, and Enter
     // or ^D on a revealed row did nothing. Single-threaded, fully
     // deterministic -- but it looked like a race because it depended on
@@ -249,7 +273,7 @@ TEST_CASE("provider picker: the row list is never a stale snapshot") {
 }
 
 TEST_CASE("provider picker: collapsing never strands the cursor") {
-    // The mirror case: ^A while parked on a revealed row must pull the
+    // The mirror case: ^E while parked on a revealed row must pull the
     // cursor back inside the shorter list, not leave it pointing past the
     // end where Enter would silently do nothing.
     auto press = [](Model&& mm, Msg msg) {
