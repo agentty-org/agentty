@@ -224,6 +224,59 @@ TEST_CASE("panel nav: the three moves are distinguishable") {
     }
 }
 
+// ── Pager grammar ────────────────────────────────────────────────────────
+//
+// Home/End/PageUp/PageDown are part of the SHARED grammar, but only some
+// overlays bind a `jump` factory. The rest fall through to move(±1000000)
+// and move(±page_step), which only reaches the ends because ui::step clamps
+// a multi-row delta instead of wrapping it. That is a two-part contract
+// across two files, so it gets a test rather than a comment.
+
+TEST_CASE("panel nav: step wraps on single rows, clamps on jumps") {
+    // Single steps WRAP: down from the last row lands on the first.
+    CHECK(agentty::ui::step(4, +1, 5) == 0);
+    CHECK(agentty::ui::step(0, -1, 5) == 4);
+    // Page-sized steps CLAMP -- jumping past the bottom back to the top
+    // loses your place.
+    CHECK(agentty::ui::step(0, +10, 5) == 4);
+    CHECK(agentty::ui::step(4, -10, 5) == 0);
+    // The Home/End fallback for overlays with no `jump` factory. If step
+    // ever wrapped these, End would land on row 0 and Home on the last row
+    // -- exactly backwards, and silent.
+    CHECK(agentty::ui::step(2, +1000000, 5) == 4);
+    CHECK(agentty::ui::step(2, -1000000, 5) == 0);
+    // Degenerate lists must not index out of range.
+    CHECK(agentty::ui::step(0, +1, 0) == 0);
+    CHECK(agentty::ui::step(0, +1000000, 1) == 0);
+}
+
+TEST_CASE("panel nav: Home/End reach the ends in a jump-less picker") {
+    install_stub_deps();
+    // The checkpoint picker binds `move` and `page_step` but no `jump`, so
+    // its Home/End arrive as a huge Move. End-to-end through the reducer,
+    // because the clamp lives in step() and the binding lives in nav.hpp.
+    Model m;
+    std::vector<agentty::checkpoints::Entry> entries;
+    for (int i = 0; i < 7; ++i) {
+        agentty::checkpoints::Entry e;
+        e.turn    = i + 1;
+        e.preview = "turn " + std::to_string(i + 1);
+        entries.push_back(std::move(e));
+    }
+    m.ui.panel.descend(pn::Checkpoints{{std::move(entries), 3}});
+    REQUIRE(m.ui.panel.get<pn::Checkpoints>()->index == 3);
+
+    m = step(std::move(m), Msg{agentty::CheckpointsMove{+1000000}});
+    CHECK(m.ui.panel.get<pn::Checkpoints>()->index == 6);   // End
+
+    m = step(std::move(m), Msg{agentty::CheckpointsMove{-1000000}});
+    CHECK(m.ui.panel.get<pn::Checkpoints>()->index == 0);   // Home
+
+    // And a single step from row 0 still WRAPS to the last row.
+    m = step(std::move(m), Msg{agentty::CheckpointsMove{-1}});
+    CHECK(m.ui.panel.get<pn::Checkpoints>()->index == 6);
+}
+
 TEST_CASE("panel nav: opening is spelled, never implied") {
     // The syntactic half. Assignment used to be a third way in that silently
     // dropped the chain; it is deleted, so a call site has to name which of
