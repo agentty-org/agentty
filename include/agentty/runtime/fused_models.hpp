@@ -268,42 +268,17 @@ find_catalog(const std::vector<ProviderCatalog>& cats, std::string_view pid) {
         push_recent(r);
     }
 
-    // Browsing: "recent" section is alphabetical, active provider's recents
-    // first, then the rest. Filtering: keep MRU order.
+    // RECENT is emitted in MRU order: active model first (push_recent(
+    // in.active) ran before any MRU entry), then newest-first. That IS the
+    // section's meaning, so there is nothing to sort.
     //
-    // THE ACTIVE ROW IS NOT SORTED. It is emitted first by construction
-    // (the push_recent(in.active) above, before any MRU entry), and browse
-    // ordering applies only to what follows it.
-    //
-    // Expressing the pin as a RANGE rather than as a sort key is the whole
-    // point. "● always leads" used to be re-derived inside the comparator,
-    // and a comparator that forgets one clause fails silently: an
-    // alphabetical sort with no `active` term displaced the active model
-    // behind any earlier-sorting recent from the same provider (Haiku above
-    // an active Opus), which is a regression no reviewer sees and no
-    // single-recent test can catch. A range the sort never receives cannot
-    // be reordered by a future comparator at all — the invariant holds by
-    // construction instead of by remembering.
-    const std::size_t pinned =
-        (!recent_rows.empty() && recent_rows.front().active) ? 1u : 0u;
-    if (no_query) {
-        const std::string& ap = in.active.provider_id;
-        std::vector<FusedRow*> active_rec, other_rec;
-        for (std::size_t i = pinned; i < recent_rows.size(); ++i) {
-            auto& r = recent_rows[i];
-            (r.provider_id == ap ? active_rec : other_rec).push_back(&r);
-        }
-        auto by_label = [](const FusedRow* x, const FusedRow* y) {
-            return capkey::norm_row_id(x->model_label)
-                 < capkey::norm_row_id(y->model_label); };
-        std::stable_sort(active_rec.begin(), active_rec.end(), by_label);
-        std::stable_sort(other_rec.begin(), other_rec.end(), by_label);
-        if (pinned) out.push_back(std::move(recent_rows.front()));
-        for (auto* p : active_rec) out.push_back(std::move(*p));
-        for (auto* p : other_rec) out.push_back(std::move(*p));
-    } else {
-        for (auto& r : recent_rows) out.push_back(std::move(r));
-    }
+    // It used to be alphabetised while browsing, active provider's recents
+    // first. That put the model you picked ten seconds ago below one you
+    // last touched a week back, which makes the list you reach for most
+    // read as arbitrary -- the section says "recent" and didn't order by
+    // recency. Ordering by construction also means no future comparator can
+    // displace the active row: a sort it never receives can't reorder it.
+    for (auto& r : recent_rows) out.push_back(std::move(r));
 
     // ── Section 2: all providers, fuzzy-ranked ───────────────────────
     // HOT LOOP — runs per keystroke over every model of every catalog (an

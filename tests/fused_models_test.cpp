@@ -92,6 +92,44 @@ TEST_CASE("fused: query spans providers, ranks by match") {
     }
 }
 
+TEST_CASE("fused: RECENT holds MRU order while browsing, not alphabetical") {
+    // The section says "recent", so it must order by recency. Browsing used
+    // to alphabetise it, which put the model you picked ten seconds ago
+    // below one you last touched a week back.
+    //
+    // Labels are chosen so the two orders DISAGREE: alphabetically Alpha <
+    // Mid < Zeta, but the MRU is Zeta (newest) then Alpha then Mid.
+    std::vector<ProviderCatalog> cats = {
+        cat("anthropic", "Anthropic",
+            {mk("m-active", "Active Model", "anthropic"),
+             mk("m-zeta",   "Zeta",  "anthropic"),
+             mk("m-alpha",  "Alpha", "anthropic"),
+             mk("m-mid",    "Mid",   "anthropic")}),
+    };
+    std::vector<ModelRef> recents = {
+        {"anthropic", "m-zeta"},     // most recently used
+        {"anthropic", "m-alpha"},
+        {"anthropic", "m-mid"},      // least recent
+    };
+    FusedInputs in;
+    in.catalogs = &cats;
+    in.recents  = &recents;
+    in.active   = ModelRef{"anthropic", "m-active"};
+
+    const auto rows = build_fused_rows(in);   // no query = browse
+    REQUIRE(rows.size() >= 4);
+
+    // Active still leads by construction.
+    CHECK(rows[0].model.id.value == "m-active");
+    CHECK(rows[0].active);
+    // Then MRU order, NOT alphabetical (which would be alpha, mid, zeta).
+    CHECK(rows[1].model.id.value == "m-zeta");
+    CHECK(rows[2].model.id.value == "m-alpha");
+    CHECK(rows[3].model.id.value == "m-mid");
+    for (int i = 0; i < 4; ++i)
+        CHECK(rows[static_cast<std::size_t>(i)].recent);
+}
+
 TEST_CASE("fused: MRU section then all-providers, deduped") {
     std::vector<ProviderCatalog> cats = {
         cat("anthropic", "Anthropic",
@@ -113,19 +151,19 @@ TEST_CASE("fused: MRU section then all-providers, deduped") {
     int recent_rows = 0;
     for (auto& r : rows) if (r.recent) ++recent_rows;
     CHECK(recent_rows == 3);
-    // ● LEADS, ALWAYS. The active model is pinned to row 0 by construction,
-    // ahead of the alphabetical browse order — "Claude Opus 4" sorts before
-    // "Claude Sonnet 4.6", but Sonnet is active, so Sonnet leads and Opus
-    // follows it. (This assertion was briefly inverted to expect Opus first,
-    // which encoded a regression as the contract: the picker pre-selects
-    // row 0, so a displaced ● means opening the menu no longer highlights
-    // the model you are actually using.)
+    // ● LEADS, ALWAYS. The active model is pinned to row 0 by construction.
+    // (This assertion was briefly inverted to expect Opus first, which
+    // encoded a regression as the contract: the picker pre-selects row 0,
+    // so a displaced ● means opening the menu no longer highlights the
+    // model you are actually using.)
     CHECK(rows[0].model.id.value == "claude-sonnet-4-6");
     CHECK(rows[0].active);                     // active pinned first
-    // Behind the pin, the active provider's remaining recents lead the
-    // section, alphabetical within, and the openai recent follows.
-    CHECK(rows[1].model.id.value == "claude-opus-4");
-    CHECK(rows[2].model.id.value == "gpt-4o");
+    // Behind the pin, recents follow in MRU order -- the order `recents`
+    // itself is in. gpt-4o is listed first there, so it leads opus here.
+    // (It used to read opus-first because browse alphabetised the section,
+    // which is exactly the recency bug that ordering removed.)
+    CHECK(rows[1].model.id.value == "gpt-4o");
+    CHECK(rows[2].model.id.value == "claude-opus-4");
     // Total distinct models = 3 (no dupes between RECENT and all-providers).
     CHECK(rows.size() == 3);
 }
