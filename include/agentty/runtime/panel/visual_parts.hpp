@@ -227,7 +227,8 @@ static_assert(visual::parts_cover_all<Models>);
 
 inline auto visual_parts(const Providers& p) {
     return std::make_tuple(visual::ref(static_cast<const pick::OpenAt&>(p)),
-                           visual::ref(static_cast<const WithFrom&>(p)));
+                           visual::ref(static_cast<const WithFrom&>(p)),
+                           p.show_all);
 }
 static_assert(visual::parts_cover_all<Providers>);
 

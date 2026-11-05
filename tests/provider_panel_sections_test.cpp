@@ -14,6 +14,8 @@
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/provider_rows.hpp"
 #include "agentty/runtime/fused_models.hpp"
+#include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/view/panels.hpp"
 
 #include <maya/render/canvas.hpp>
@@ -75,7 +77,7 @@ TEST_CASE("provider picker: browse hides unconfigured behind one signpost") {
 
     // The signpost is present and names the VERB, not just a count.
     CHECK(has(screen, "more providers"));
-    CHECK(has(screen, "type to search"));
+    CHECK(has(screen, "Show"));
 
     // Providers you haven't set up are not in the browse list.
     CHECK_FALSE(has(screen, "Cerebras"));
@@ -83,6 +85,59 @@ TEST_CASE("provider picker: browse hides unconfigured behind one signpost") {
 
     // "Custom host…" stays reachable: it's the one row that always applies.
     CHECK(has(screen, "ADD"));
+}
+
+TEST_CASE("provider picker: ^A expands the withheld providers in place") {
+    // The signpost must be ACTIONABLE, not just informative. Expanding keeps
+    // the picker open and reveals the rows it was standing in for.
+    Model m = picker_model();
+    auto* p = m.ui.panel.get<pn::Providers>();
+    REQUIRE(p != nullptr);
+    p->show_all = true;
+
+    const std::string screen = render_panel(m, 110, 400);
+    INFO(screen);
+
+    CHECK(has(screen, "Cerebras"));
+    CHECK(has(screen, "DeepSeek"));
+    CHECK(has(screen, "NOT CONFIGURED"));
+    // Nothing is withheld any more, so the signpost retires.
+    CHECK_FALSE(has(screen, "more providers"));
+    // The footer offers the way back.
+    CHECK(has(screen, "fewer"));
+}
+
+TEST_CASE("provider picker: Enter on the signpost expands, doesn't close") {
+    // The signpost shares the NewCustomHost payload with the "Custom host..."
+    // sentinel, so Enter on it must be intercepted BEFORE the close/switch
+    // path or it would open the host prompt instead of expanding.
+    namespace P = agentty::provider;
+    Model m;
+    m.ui.panel.descend(pn::Providers{});
+
+    const auto rows = ui::build_sectioned_provider_rows(
+        {}, "", m.d.persisted, m.d.auth, "", false);
+    int sign_idx = -1;
+    for (int i = 0; i < static_cast<int>(rows.rows.size()); ++i)
+        if (rows.rows[static_cast<std::size_t>(i)].more_signpost) {
+            sign_idx = i;
+            break;
+        }
+    REQUIRE(sign_idx >= 0);
+    REQUIRE(rows.n_hidden > 0);
+
+    m.ui.panel.get<pn::Providers>()->index = sign_idx;
+    auto [m2, cmd] = app::update(std::move(m), Msg{ProvidersSelect{}});
+
+    auto* p2 = m2.ui.panel.get<pn::Providers>();
+    REQUIRE(p2 != nullptr);              // still open -- not a destination
+    CHECK(p2->show_all);
+    // The cursor parked on the first revealed row, so the payoff is under it.
+    const auto after = ui::build_sectioned_provider_rows(
+        {}, "", m2.d.persisted, m2.d.auth, "", true);
+    REQUIRE(p2->index < static_cast<int>(after.rows.size()));
+    CHECK(after.rows[static_cast<std::size_t>(p2->index)].section
+              == ui::ProviderSection::More);
 }
 
 TEST_CASE("provider picker: a configured provider is promoted into YOURS") {

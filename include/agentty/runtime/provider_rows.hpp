@@ -27,6 +27,7 @@
 #include "agentty/provider/registry.hpp"      // ProviderPreset, providers()
 #include "agentty/provider/acp_agents.hpp"     // AcpAgentSpec, enumerate_acp_agents()
 #include "agentty/provider/selection.hpp"      // filter_provider_indices, saved_custom_hosts
+#include "agentty/provider/auth_state.hpp"      // auth_source, AuthSource
 
 namespace agentty::ui {
 
@@ -223,7 +224,7 @@ struct ProviderRow {
 // searches everything, so a provider you haven't configured is one keystroke
 // away rather than gone (the same no-dead-end contract the model picker's
 // sign-in offers hold).
-enum class ProviderSection { Yours, More, Add };
+enum class ProviderSection { Yours, More, Signpost, Add };
 
 struct SectionedProviderRow {
     ProviderRow     row;
@@ -231,6 +232,9 @@ struct SectionedProviderRow {
     // A registry row you have NOT configured, surfaced because the query
     // named it. Renders dim, as an offer: Enter starts its sign-in.
     bool            offer   = false;
+    // The "N more providers" signpost. A real, selectable row so expanding
+    // is reachable by Enter and not only by a key you have to know.
+    bool            more_signpost = false;
 };
 
 struct SectionedProviderRows {
@@ -244,7 +248,8 @@ struct SectionedProviderRows {
     std::string_view query,
     const store::Settings& settings,
     const auth::AuthView& view,
-    std::string_view active_id = {}) {
+    std::string_view active_id = {},
+    bool show_all = false) {
     SectionedProviderRows out;
     out.searching = !query.empty();
 
@@ -259,10 +264,29 @@ struct SectionedProviderRows {
     // could mean, and it's the one row that acts on the literal text.
     if (offer_host)
         out.rows.push_back({{ProviderRow::NewCustomHost{canon}},
-                            ProviderSection::Yours, false});
+                            ProviderSection::Yours, false, false});
 
-    const auto filtered =
-        provider::filter_provider_indices(query, settings, view);
+    // Browsing withholds the unconfigured rows behind the signpost;
+    // expanding (^A) or searching asks for the WHOLE registry.
+    const bool want_all = show_all || !query.empty();
+    auto filtered = provider::filter_provider_indices(query, settings, view);
+    if (want_all && query.empty()) {
+        // Re-admit the withheld rows, configured ones still first so the
+        // two bands stay in order.
+        filtered.indices.clear();
+        for (int k = 0; k < static_cast<int>(presets.size()); ++k)
+            if (provider::auth_source(presets[static_cast<std::size_t>(k)],
+                                      settings, view)
+                != provider::AuthSource::None)
+                filtered.indices.push_back(k);
+        filtered.n_configured = static_cast<int>(filtered.indices.size());
+        for (int k = 0; k < static_cast<int>(presets.size()); ++k)
+            if (provider::auth_source(presets[static_cast<std::size_t>(k)],
+                                      settings, view)
+                == provider::AuthSource::None)
+                filtered.indices.push_back(k);
+        filtered.n_hidden = 0;           // nothing is hidden any more
+    }
     out.n_hidden = filtered.n_hidden;
 
     // Partition into the two bands first, so the active row joins YOURS in
@@ -290,25 +314,32 @@ struct SectionedProviderRows {
             }
     for (const auto* p : mine)
         out.rows.push_back({{ProviderRow::Preset{p}},
-                            ProviderSection::Yours, false});
+                            ProviderSection::Yours, false, false});
     for (const auto* p : rest)
         out.rows.push_back({{ProviderRow::Preset{p}},
-                            ProviderSection::More, true});
+                            ProviderSection::More, true, false});
 
     // Saved hosts are yours by definition — you typed the key in.
     for (const auto& spec : saved_custom_hosts)
         if (query.empty() || spec.find(canon) != std::string::npos)
             out.rows.push_back({{ProviderRow::CustomHost{spec}},
-                                ProviderSection::Yours, false});
+                                ProviderSection::Yours, false, false});
 
     if (query.empty())
         for (auto& agent : provider::enumerate_acp_agents())
             out.rows.push_back({{ProviderRow::Acp{std::move(agent)}},
-                                ProviderSection::Yours, false});
+                                ProviderSection::Yours, false, false});
+
+    // The signpost is a REAL row: Enter on it expands. Its own band, with no
+    // header -- "NOT CONFIGURED" over a single "show more" line labels a
+    // group that isn't there yet.
+    if (out.n_hidden > 0 && query.empty())
+        out.rows.push_back({{ProviderRow::NewCustomHost{}},
+                            ProviderSection::Signpost, false, true});
 
     if (!offer_host)
         out.rows.push_back({{ProviderRow::NewCustomHost{}},
-                            ProviderSection::Add, false});
+                            ProviderSection::Add, false, false});
     return out;
 }
 

@@ -34,7 +34,8 @@ Element providers_panel(const Model& m) {
     const std::vector<std::string> saved_custom_hosts =
         provider::saved_custom_hosts(settings.provider_keys);
     const auto sectioned = ui::build_sectioned_provider_rows(
-        saved_custom_hosts, picker->query, settings, m.d.auth, active_id);
+        saved_custom_hosts, picker->query, settings, m.d.auth, active_id,
+        picker->show_all);
     const auto& srows = sectioned.rows;
 
     // Live search header (mirrors the model picker). Backspace trims; typing
@@ -100,7 +101,8 @@ Element providers_panel(const Model& m) {
         else if (sr.section == ui::ProviderSection::More) ++more_count;
     }
     // Does any row actually carry the amber "no key" badge? Drives the footer
-    // legend, which must only explain what's on screen.
+    // legend, which must only explain what's on screen. The signpost isn't
+    // one: it's a dim action row, not a warning.
     const bool any_unconfigured = more_count > 0;
 
     for (std::size_t ri = 0; ri < srows.size(); ++ri) {
@@ -110,8 +112,10 @@ Element providers_panel(const Model& m) {
 
         // One divider per band. Only drawn when the band is non-empty, so a
         // fresh install (nothing configured) never shows an empty "YOURS".
-        if (!cur_section || *cur_section != sr.section) {
-            cur_section = sr.section;
+        // The signpost stands alone -- no divider above a single row that is
+        // itself a label.
+        if ((!cur_section || *cur_section != sr.section)
+            && sr.section != ui::ProviderSection::Signpost) {
             SectionHeader sh;
             switch (sr.section) {
                 case ui::ProviderSection::Yours:
@@ -124,6 +128,8 @@ Element providers_panel(const Model& m) {
                     sh.hue   = muted;
                     sh.count = more_count;
                     break;
+                case ui::ProviderSection::Signpost:
+                    break;                       // unreachable, guarded above
                 case ui::ProviderSection::Add:
                     sh.label = "add";
                     sh.hue   = muted;
@@ -131,10 +137,24 @@ Element providers_panel(const Model& m) {
             }
             cfg.items.push_back(section_header(std::move(sh)));
         }
+        cur_section = sr.section;
         if (i == picker->index)
             visual_selected = static_cast<int>(cfg.items.size());
 
         Panel::Item row;
+
+        // The "N more providers" signpost, rendered as a real row so Enter
+        // reaches it. Dim and stated as an action, not a status.
+        if (sr.more_signpost) {
+            row.leading = "Show " + std::to_string(sectioned.n_hidden)
+                        + " more providers";
+            row.leading_style  = fg_dim(muted);
+            row.trailing       = "Enter  \xc2\xb7  ^A";
+            row.trailing_style = fg_dim(muted);
+            row.trailing_secondary = true;
+            cfg.items.push_back(std::move(row));
+            continue;
+        }
 
         if (const auto* p = r.preset()) {
             const bool active = (p->id == active_id);
@@ -229,17 +249,6 @@ Element providers_panel(const Model& m) {
         cfg.items.push_back(std::move(row));
     }
 
-    // The discoverability contract. The unconfigured rows aren't gone, and a
-    // user who can't see them needs to be told the VERB, not just the count.
-    // Non-selectable: it's a signpost, not a destination.
-    if (!sectioned.searching && sectioned.n_hidden > 0) {
-        Panel::Item hint;
-        hint.leading = std::to_string(sectioned.n_hidden)
-                     + " more providers\xe2\x80\x82\xc2\xb7\xe2\x80\x82type to search";
-        hint.leading_style = fg_dim(muted);
-        cfg.items.push_back(std::move(hint));
-    }
-
     cfg.selected = visual_selected;
 
     // Enter opens the accounts drill-down on an account-capable OAuth
@@ -307,15 +316,20 @@ Element providers_panel(const Model& m) {
                 text("\xe2\x9c\x93", fg_of(success)), text(" ready  ", fg_dim(muted))
             ).build());
     }
-    cfg.footer.push_back(key_hints({
+    std::vector<Hint> hints{
         {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓
         {"type", host_shaped ? "endpoint" : "filter", 4},
         {"Enter", host_shaped ? "connect"
                               : (row_has_accounts ? "accounts" : "switch"), 5},
-        {"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 2},
-        {"^/", "models", 3},                       // cross-hint: model picker
-        {"Esc", "close", 4},
-    }));
+    };
+    // Only advertise ^A when it would do something: while searching, every
+    // row is already shown.
+    if (!sectioned.searching && (sectioned.n_hidden > 0 || picker->show_all))
+        hints.push_back({"^A", picker->show_all ? "fewer" : "all", 3});
+    hints.push_back({"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 2});
+    hints.push_back({"^/", "models", 3});           // cross-hint: model picker
+    hints.push_back({"Esc", "close", 4});
+    cfg.footer.push_back(key_hints(std::move(hints)));
 
     return Panel{std::move(cfg)}.build();
 }

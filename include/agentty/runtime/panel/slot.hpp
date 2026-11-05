@@ -133,7 +133,10 @@ struct Models     : pick::OpenAt, WithFrom {
     // form, advanced flag and nested chain — nothing else to park).
     std::optional<smart::ModelRole> assign_slot;
 };
-struct Providers  : pick::OpenAt, WithFrom {};
+// The provider picker. `show_all` reveals the providers you have NOT
+// configured, which browse collapses into a single "N more" signpost. A
+// view-only flag: it widens the row list, nothing else.
+struct Providers  : pick::OpenAt, WithFrom { bool show_all = false; };
 // The thread picker, plus the ^R title editor. `renaming` holds the id of
 // the thread being retitled (empty = browsing): an id, not a row, so an
 // async list refresh that reorders rows can't move the edit to another

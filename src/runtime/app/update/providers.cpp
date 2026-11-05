@@ -70,7 +70,9 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
         provider::saved_custom_hosts(settings.provider_keys);
     const auto sectioned = ui::build_sectioned_provider_rows(
         saved_custom_hosts, query, settings, m.d.auth,
-        m.d.selection.catalog_id());
+        m.d.selection.catalog_id(),
+        [&] { const auto* p = m.ui.panel.get<pn::Providers>();
+              return p && p->show_all; }());
     // The reducer selects from the SAME list the view renders; section
     // headers are decoration the view adds, so indices still line up.
     std::vector<ui::ProviderRow> rows;
@@ -194,6 +196,31 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             p->index = 0;
             return Cmd::none();
         },
+        [&](ProvidersToggleAll) -> Cmd {
+            auto* p = m.ui.panel.get<pn::Providers>();
+            if (!p) return Cmd::none();
+            const bool expanding = !p->show_all;
+            p->show_all = expanding;
+            if (expanding) {
+                // Park the cursor on the FIRST revealed row: you asked to
+                // see them, so the payoff belongs under the cursor rather
+                // than wherever you happened to be standing.
+                const auto next = ui::build_sectioned_provider_rows(
+                    saved_custom_hosts, p->query, settings, m.d.auth,
+                    m.d.selection.catalog_id(), true);
+                for (int i = 0; i < static_cast<int>(next.rows.size()); ++i)
+                    if (next.rows[static_cast<std::size_t>(i)].section
+                        == ui::ProviderSection::More) { p->index = i; break; }
+            } else {
+                // Collapsing can strand the cursor past the end.
+                const auto next = ui::build_sectioned_provider_rows(
+                    saved_custom_hosts, p->query, settings, m.d.auth,
+                    m.d.selection.catalog_id(), false);
+                const int last = static_cast<int>(next.rows.size()) - 1;
+                if (p->index > last) p->index = last < 0 ? 0 : last;
+            }
+            return Cmd::none();
+        },
         [&](ProvidersDelete) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
             if (!p || p->index < 0 || p->index >= n)
@@ -285,6 +312,15 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             // OpenAt alternative, so keeping a pointer into it would dangle.
             const auto* p = m.ui.panel.get<pn::Providers>();
             const int selected = p ? p->index : -1;
+
+            // Enter on the "N more providers" signpost EXPANDS in place --
+            // the picker stays open, it is not a destination. Checked before
+            // the close below because it shares the NewCustomHost payload
+            // with the "Custom host..." sentinel.
+            if (selected >= 0 && selected < static_cast<int>(sectioned.rows.size())
+                && sectioned.rows[static_cast<std::size_t>(selected)].more_signpost)
+                return providers_update(m, ProvidersToggleAll{});
+
             m.ui.panel.close<pn::Providers>();
             if (selected < 0 || selected >= n) return Cmd::none();
             const ui::ProviderRow& chosen = rows[static_cast<std::size_t>(selected)];

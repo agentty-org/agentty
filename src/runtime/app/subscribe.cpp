@@ -552,6 +552,9 @@ std::optional<Msg> on_provider_picker(const KeyEvent& ev) {
             return Msg{OpenModels{}};                       // cross-hop
         if (v->ctrl && (v->c == U'd' || v->c == U'D'))
             return Msg{ProvidersDelete{}};
+        // ^A — reveal/hide the providers you haven't configured.
+        if (v->ctrl && (v->c == U'a' || v->c == U'A'))
+            return Msg{ProvidersToggleAll{}};
         return std::nullopt;
     };
     return nav::translate(s, ev);

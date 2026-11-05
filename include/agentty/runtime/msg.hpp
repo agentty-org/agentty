@@ -579,6 +579,11 @@ struct ProvidersFilterBackspace {};
 // (clears the key; the built-in preset stays). Mirrors ThreadListDelete /
 // AccountRemove. No-op on presets with no saved key, ACP, and the sentinel.
 struct ProvidersDelete {};
+// ^A, or Enter on the "N more providers" signpost — reveals the providers
+// you have NOT configured, which the browse view collapses. Expanding parks
+// the cursor on the first revealed row: you asked to see them, so the payoff
+// should be under the cursor rather than wherever you happened to be.
+struct ProvidersToggleAll {};
 
 // ── Thread list ──────────────────────────────────────────────────────────
 struct OpenThreadList {};
@@ -1455,7 +1460,7 @@ using ProvidersMsg = std::variant<
     OpenProviders, CloseProviders, ProvidersMove,
     ProvidersJump, ProvidersSelect,
     ProvidersFilterInput, ProvidersFilterBackspace,
-    ProvidersDelete>;
+    ProvidersDelete, ProvidersToggleAll>;
 
 // The ONE model surface: browse/filter every provider's models, tune effort,
 // and (in Smart Mode slot-assign mode) pin a role→model. `ModelsLoaded` is
