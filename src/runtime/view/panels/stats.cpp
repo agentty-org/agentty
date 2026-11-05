@@ -751,8 +751,16 @@ Element stats_panel(const Model& m) {
     // the reader pressed tab.
     cfg.fixed_viewport = true;
 
-    cfg.note = visible.size() > 1 ? "tab  switch view   \xe2\x86\x91\xe2\x86\x93  scroll   esc  close"
-                                  : "\xe2\x86\x91\xe2\x86\x93  scroll   esc  close";
+    // Keys go through the shared key_hints helper, not a hand-spelled
+    // string in `note`: note is plain text below the body, so it cannot
+    // shed keys under width pressure and its spacing drifted from every
+    // other panel's footer. `tab` only appears when there IS another view
+    // to switch to.
+    std::vector<Hint> keys;
+    if (visible.size() > 1) keys.push_back({"tab", "switch view", 3});
+    keys.push_back({"\xe2\x86\x91\xe2\x86\x93", "scroll", 5});   // ↑↓
+    keys.push_back({"esc", "close", 4});
+    cfg.footer.push_back(key_hints(std::move(keys)));
     return maya::Panel{std::move(cfg)}.build();
 }
 

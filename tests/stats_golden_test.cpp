@@ -441,7 +441,12 @@ TEST_CASE("stats_golden: every tab renders byte-identically") {
     //
     // Set to 0 to bootstrap: the run prints the hash to stderr, paste it
     // back IN THE SAME COMMIT as the change that moved it.
-    const std::uint64_t kGoldenHash = 0x4b12a4c4d935549cull;
+    // Moved 2026-11: the footer key strip went from a hand-spelled
+    // cfg.note to the shared key_hints helper, so it now sheds keys under
+    // width pressure like every other panel. Only the footer line changed;
+    // the clip scan, the overrun check and every feature assertion stayed
+    // green across the sweep.
+    const std::uint64_t kGoldenHash = 0x024089ffde43e434ull;
     const std::uint64_t got = fnv1a(out);
 
     if (kGoldenHash == 0) {

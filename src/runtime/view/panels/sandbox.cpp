@@ -197,22 +197,14 @@ maya::Element sandbox_panel(const Model& m) {
         form.note = hand + "\n" + form.note;
 
     // The one thing this pane must never leave unsaid: a save here does NOT
-    // change the running sandbox.
+    // change the running sandbox -- AND whether the next launch will actually
+    // deliver what the rows describe.
     //
     // The policy is sealed when the process starts (tool/util/sandbox.hpp),
     // so edits land on disk and take effect next launch. Everywhere else in
     // agentty saving means "in force now", so the exception has to be stated
     // rather than assumed -- a user who tightens the syscall filter and keeps
-    // working would otherwise trust a wall that is not up yet. That is the
-    // same class of lie as "sandbox: active" on a host that cannot sandbox,
-    // only pointed at the future.
-    //
-    // Rendered FIRST in the note and marked as replacing the shared grammar,
-    // because it outranks the wall report: the walls describe what WOULD be
-    // enforced, and this says when.
-    // The one thing this pane must never leave unsaid: a save here does NOT
-    // change the running sandbox -- AND whether the next launch will actually
-    // deliver what the rows describe.
+    // working would otherwise trust a wall that is not up yet.
     //
     // The second half was missing. The footer promised "applies on restart"
     // with nothing checking that claim, while the preview already knew three
