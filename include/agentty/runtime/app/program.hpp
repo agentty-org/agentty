@@ -37,7 +37,16 @@ namespace pn = agentty::ui::panel;   // the exclusive overlay slot's alternative
 // frame. Free when fast: one clock read and a compare. Lands in agentty.log
 // as `ui loop.slow: <what> <ms>`, so a user's "it lags when I open X"
 // becomes a line naming the arm instead of a guess.
-void note_slow(const char* what, std::chrono::steady_clock::time_point t0) noexcept;
+void note_slow(const char* what, std::chrono::steady_clock::time_point t0,
+               int alt = -1) noexcept;
+
+// Which alternative of a domain Msg variant this is (-1 when not a variant),
+// so loop.slow can say `ComposerMsg#7` instead of just the family.
+template <class D>
+[[nodiscard]] int alt_index(const D& d) noexcept {
+    if constexpr (requires { d.index(); }) return static_cast<int>(d.index());
+    else return -1;
+}
 
 struct AgenttyApp {
     using Model = ::agentty::Model;
@@ -88,9 +97,10 @@ struct AgenttyApp {
     static Cmd update(Model& m, msg::DomainMsg d, Clock::time_point now) { \
         m.now = now;   /* the fold's time: see Model::now */             \
         const auto t0 = std::chrono::steady_clock::now();                \
+        const auto alt = ::agentty::app::alt_index(d);                   \
         auto c = ::agentty::app::update(m, std::move(d));                \
         auto out = ::agentty::app::publish_derived(m, std::move(c));      \
-        ::agentty::app::note_slow(#DomainMsg, t0);                       \
+        ::agentty::app::note_slow(#DomainMsg, t0, alt);                  \
         return out;                                                       \
     }
 

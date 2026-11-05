@@ -9,13 +9,15 @@
 
 namespace agentty::app {
 
-void note_slow(const char* what, std::chrono::steady_clock::time_point t0) noexcept {
+void note_slow(const char* what, std::chrono::steady_clock::time_point t0,
+               int alt) noexcept {
     // One frame at 60 Hz. Anything slower is visible as input lag.
     constexpr auto kFrame = std::chrono::milliseconds(16);
     const auto dt = std::chrono::steady_clock::now() - t0;
     if (dt < kFrame) return;
     const double ms = std::chrono::duration<double, std::milli>(dt).count();
-    AGT_LOG(Ui, Warn, "loop.slow", "{} {:.1f} ms", what, ms);
+    if (alt >= 0) AGT_LOG(Ui, Warn, "loop.slow", "{}#{} {:.1f} ms", what, alt, ms);
+    else          AGT_LOG(Ui, Warn, "loop.slow", "{} {:.1f} ms", what, ms);
 }
 
 }  // namespace agentty::app

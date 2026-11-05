@@ -914,6 +914,36 @@ int main() {
         auto st = run("git_status", {{"path", root.string()}});
         check(has(st, "hello.txt"), "git_status: sees the modified file");
 
+        // git_status only scans submodules when a changed row IS one. A dirty
+        // submodule must still be named; a clean one must cost nothing.
+        {
+            const auto inner = root.parent_path()
+                / (root.filename().string() + "_inner");
+            std::string mk =
+                "rm -rf " + q + inner.string() + q + " && git init -q " + q + inner.string() + q
+                + " && cd " + q + inner.string() + q
+                + " && git -c user.email=e@t -c user.name=e commit -q --allow-empty -m i"
+                + " && echo a > f && git add f"
+                + " && git -c user.email=e@t -c user.name=e commit -qm f"
+                + " && cd " + q + root.string() + q
+                + " && git -c protocol.file.allow=always submodule add -q " + q + inner.string() + q + " sub"
+                + " && git commit -qm sub";
+            if (std::system(mk.c_str()) == 0) {
+                auto clean = run("git_status", {{"path", root.string()}});
+                check(clean && !has(clean, "submodules with uncommitted"),
+                      "git_status: a clean submodule is not reported");
+                write_file(root / "sub" / "f", "dirty\n");
+                auto dirty = run("git_status", {{"path", root.string()}});
+                check(has(dirty, "submodules with uncommitted"),
+                      "git_status: names a dirty submodule");
+                std::string undo = "cd " + q + root.string() + q
+                    + " && git submodule --quiet deinit -f sub && git rm -qf sub"
+                    + " && rm -rf .git/modules/sub && git commit -qm unsub"
+                    + " && rm -rf " + q + inner.string() + q;
+                (void)std::system(undo.c_str());
+            }
+        }
+
         auto df = run("git_diff", {{"path", root.string()}});
         check(has(df, "changed content"), "git_diff: shows the hunk");
 
