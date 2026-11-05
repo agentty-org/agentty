@@ -304,12 +304,14 @@ Element providers_panel(const Model& m) {
         ).build());
     } else {
         // The legend explains the badges that are ACTUALLY on screen. In the
-        // browse view every row is usable, so the "set the named key first"
-        // half would be explaining a warning the user can't see.
+        // browse view every row is usable, so there is nothing to explain;
+        // expanded, the unconfigured rows say "Enter to set up" rather than
+        // naming an env var, so the legend must say the same thing.
         if (any_unconfigured)
             cfg.footer.push_back(h(
                 text("\xe2\x9c\x93", fg_of(success)), text(" ready  ", fg_dim(muted)),
-                text("\xe2\x9a\xa0", fg_of(warn)),    text(" set the named key first  ", fg_dim(muted))
+                text("\xc2\xb7", fg_dim(muted)),
+                text("  Enter on a dim row adds it", fg_dim(muted))
             ).build());
         else
             cfg.footer.push_back(h(

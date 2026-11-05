@@ -115,8 +115,12 @@ TEST_CASE("provider picker: Enter on the signpost expands, doesn't close") {
     Model m;
     m.ui.panel.descend(pn::Providers{});
 
+    // Must mirror the reducer's own build exactly -- it passes the active
+    // provider id, which can re-order rows, so an index derived without it
+    // would point at a different row.
+    const auto active = m.d.selection.catalog_id();
     const auto rows = ui::build_sectioned_provider_rows(
-        {}, "", m.d.persisted, m.d.auth, "", false);
+        {}, "", m.d.persisted, m.d.auth, active, false);
     int sign_idx = -1;
     for (int i = 0; i < static_cast<int>(rows.rows.size()); ++i)
         if (rows.rows[static_cast<std::size_t>(i)].more_signpost) {
@@ -134,10 +138,68 @@ TEST_CASE("provider picker: Enter on the signpost expands, doesn't close") {
     CHECK(p2->show_all);
     // The cursor parked on the first revealed row, so the payoff is under it.
     const auto after = ui::build_sectioned_provider_rows(
-        {}, "", m2.d.persisted, m2.d.auth, "", true);
+        {}, "", m2.d.persisted, m2.d.auth, active, true);
     REQUIRE(p2->index < static_cast<int>(after.rows.size()));
     CHECK(after.rows[static_cast<std::size_t>(p2->index)].section
               == ui::ProviderSection::More);
+}
+
+TEST_CASE("provider picker: each section header appears at most once") {
+    // Rows must be emitted in SECTION order. Saved hosts and ACP agents are
+    // tagged YOURS but were once appended AFTER the not-configured band,
+    // which made the YOURS divider render a second time mid-list.
+    auto count_of = [](const std::string& s, const std::string& needle) {
+        int n = 0;
+        for (std::size_t at = 0; (at = s.find(needle, at)) != std::string::npos; ++at)
+            ++n;
+        return n;
+    };
+
+    // Collapsed, expanded, and searching -- all three assemble the list.
+    {
+        Model m = picker_model();
+        m.d.persisted.provider_keys["my-box:8080"] = "k";
+        const std::string s = render_panel(m, 110, 400);
+        INFO(s);
+        CHECK(count_of(s, "YOURS") == 1);
+        // The saved custom host is in YOURS, above any later band.
+        const auto host = s.find("my-box");
+        if (host != std::string::npos) {
+            const auto add = s.find("ADD");
+            if (add != std::string::npos) CHECK(host < add);
+        }
+    }
+    {
+        Model m = picker_model();
+        m.d.persisted.provider_keys["my-box:8080"] = "k";
+        m.ui.panel.get<pn::Providers>()->show_all = true;
+        const std::string s = render_panel(m, 110, 600);
+        INFO(s);
+        CHECK(count_of(s, "YOURS") == 1);
+        CHECK(count_of(s, "NOT CONFIGURED") == 1);
+        // Every YOURS row precedes the not-configured divider.
+        const auto host = s.find("my-box");
+        const auto notc = s.find("NOT CONFIGURED");
+        REQUIRE(host != std::string::npos);
+        REQUIRE(notc != std::string::npos);
+        CHECK(host < notc);
+    }
+}
+
+TEST_CASE("provider picker: the active provider leads YOURS even unauthed") {
+    // You are running on it, so the ● marker belongs in YOURS -- but the
+    // badge must still tell the truth about the missing credential, and it
+    // must not render as a dim "Enter to set up" offer.
+    Model m = picker_model();
+    const auto rows = ui::build_sectioned_provider_rows(
+        {}, "", m.d.persisted, m.d.auth, "anthropic", false);
+    REQUIRE(!rows.rows.empty());
+    const auto& first = rows.rows.front();
+    const auto* p = first.row.preset();
+    REQUIRE(p != nullptr);
+    CHECK(std::string{p->id} == "anthropic");
+    CHECK(first.section == ui::ProviderSection::Yours);
+    CHECK_FALSE(first.offer);          // never "Enter to set up"
 }
 
 TEST_CASE("provider picker: a configured provider is promoted into YOURS") {

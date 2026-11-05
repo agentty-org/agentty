@@ -269,77 +269,88 @@ struct SectionedProviderRows {
     // Browsing withholds the unconfigured rows behind the signpost;
     // expanding (^A) or searching asks for the WHOLE registry.
     const bool want_all = show_all || !query.empty();
-    auto filtered = provider::filter_provider_indices(query, settings, view);
-    if (want_all && query.empty()) {
-        // Re-admit the withheld rows, configured ones still first so the
-        // two bands stay in order.
-        filtered.indices.clear();
-        for (int k = 0; k < static_cast<int>(presets.size()); ++k)
-            if (provider::auth_source(presets[static_cast<std::size_t>(k)],
-                                      settings, view)
-                != provider::AuthSource::None)
-                filtered.indices.push_back(k);
-        filtered.n_configured = static_cast<int>(filtered.indices.size());
-        for (int k = 0; k < static_cast<int>(presets.size()); ++k)
-            if (provider::auth_source(presets[static_cast<std::size_t>(k)],
-                                      settings, view)
-                == provider::AuthSource::None)
-                filtered.indices.push_back(k);
-        filtered.n_hidden = 0;           // nothing is hidden any more
-    }
-    out.n_hidden = filtered.n_hidden;
+    const auto filtered = provider::filter_provider_indices(query, settings, view);
 
-    // Partition into the two bands first, so the active row joins YOURS in
-    // ORDER and not just in label.
+    // Partition the registry into the two bands. `configured` is the single
+    // rule both bands and the signpost count agree on, so they cannot drift.
     std::vector<const provider::ProviderDescriptor*> mine, rest;
-    int i = 0;
-    for (int idx : filtered.indices) {
-        const auto* p = &presets[static_cast<std::size_t>(idx)];
-        // The ACTIVE provider is always yours, even if its credential has
-        // gone (expired token, unset env var). Showing the row you're
-        // currently running on under "not configured" reads as a bug, and
-        // the ● marker would sit in the wrong band.
-        const bool configured =
-            i < filtered.n_configured || std::string{p->id} == active_id;
-        (configured ? mine : rest).push_back(p);
-        ++i;
+    {
+        int i = 0;
+        for (int idx : filtered.indices) {
+            const auto* p = &presets[static_cast<std::size_t>(idx)];
+            (i < filtered.n_configured ? mine : rest).push_back(p);
+            ++i;
+        }
+        // Browse hid these; ^A re-admits them. Searching already returned
+        // the whole registry, so there is nothing to re-admit.
+        if (want_all && query.empty())
+            for (const auto& p : presets)
+                if (provider::auth_source(p, settings, view)
+                    == provider::AuthSource::None)
+                    rest.push_back(&p);
     }
-    if (!active_id.empty())
-        for (std::size_t k = 0; k < mine.size(); ++k)
-            if (std::string{mine[k]->id} == active_id) {
-                // Active first within YOURS: it's the row you're on.
-                std::rotate(mine.begin(), mine.begin() + static_cast<long>(k),
-                            mine.begin() + static_cast<long>(k) + 1);
-                break;
-            }
-    for (const auto* p : mine)
-        out.rows.push_back({{ProviderRow::Preset{p}},
-                            ProviderSection::Yours, false, false});
-    for (const auto* p : rest)
-        out.rows.push_back({{ProviderRow::Preset{p}},
-                            ProviderSection::More, true, false});
+    // Hidden only counts what is actually withheld RIGHT NOW.
+    out.n_hidden = want_all ? 0 : filtered.n_hidden;
 
-    // Saved hosts are yours by definition — you typed the key in.
+    // The ACTIVE provider always leads YOURS, even mid-sign-in: it is the row
+    // you are running on, and the ● marker must not sit in another band.
+    // Its badge still tells the truth about the credential.
+    //
+    // Collapsed browse withholds unconfigured rows, so an active provider
+    // whose credential is missing (first run, expired token, unset env var)
+    // is in NEITHER list -- pull it straight off the registry, and don't
+    // count it as hidden.
+    if (!active_id.empty()) {
+        auto by_id = [&](const auto* p) { return std::string{p->id} == active_id; };
+        if (auto it = std::find_if(rest.begin(), rest.end(), by_id);
+            it != rest.end()) {
+            mine.insert(mine.begin(), *it);
+            rest.erase(it);
+        } else if (auto m2 = std::find_if(mine.begin(), mine.end(), by_id);
+                   m2 != mine.end()) {
+            std::rotate(mine.begin(), m2, m2 + 1);
+        } else {
+            for (const auto& p : presets)
+                if (std::string{p.id} == active_id) {
+                    mine.insert(mine.begin(), &p);
+                    if (out.n_hidden > 0) --out.n_hidden;
+                    break;
+                }
+        }
+    }
+
+    // ── Assemble, one band at a time ────────────────────────────────────
+    // Rows are emitted in SECTION order so each divider is drawn once. The
+    // view just walks the list; grouping is this function's job.
+    auto emit = [&](ProviderRow r, ProviderSection s, bool offer, bool sign) {
+        out.rows.push_back({std::move(r), s, offer, sign});
+    };
+
+    // YOURS: active first, then the rest of your presets, then saved hosts
+    // and ACP agents (yours by definition -- you configured them).
+    for (const auto* p : mine) emit({ProviderRow::Preset{p}},
+                                    ProviderSection::Yours, false, false);
     for (const auto& spec : saved_custom_hosts)
         if (query.empty() || spec.find(canon) != std::string::npos)
-            out.rows.push_back({{ProviderRow::CustomHost{spec}},
-                                ProviderSection::Yours, false, false});
-
+            emit({ProviderRow::CustomHost{spec}},
+                 ProviderSection::Yours, false, false);
     if (query.empty())
         for (auto& agent : provider::enumerate_acp_agents())
-            out.rows.push_back({{ProviderRow::Acp{std::move(agent)}},
-                                ProviderSection::Yours, false, false});
+            emit({ProviderRow::Acp{std::move(agent)}},
+                 ProviderSection::Yours, false, false);
 
-    // The signpost is a REAL row: Enter on it expands. Its own band, with no
-    // header -- "NOT CONFIGURED" over a single "show more" line labels a
-    // group that isn't there yet.
-    if (out.n_hidden > 0 && query.empty())
-        out.rows.push_back({{ProviderRow::NewCustomHost{}},
-                            ProviderSection::Signpost, false, true});
+    // NOT CONFIGURED: offers, each one action away from being usable.
+    for (const auto* p : rest) emit({ProviderRow::Preset{p}},
+                                    ProviderSection::More, true, false);
+
+    // The signpost standing in for the band above when it is collapsed.
+    if (out.n_hidden > 0)
+        emit({ProviderRow::NewCustomHost{}},
+             ProviderSection::Signpost, false, true);
 
     if (!offer_host)
-        out.rows.push_back({{ProviderRow::NewCustomHost{}},
-                            ProviderSection::Add, false, false});
+        emit({ProviderRow::NewCustomHost{}},
+             ProviderSection::Add, false, false);
     return out;
 }
 
