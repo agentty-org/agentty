@@ -154,11 +154,22 @@ maya::Element model_badge_config(const Model& m) {
     }
 
     if (model.empty() || name.name.empty()) {
-        // No model yet (e.g. an ACP agent that picks its own): show just the
-        // provider chip so the slot is never blank. Same band as the normal
-        // path — the chip should not change colour just because the model
-        // is still unknown.
-        return text(" " + prov + " ", prov_style);
+        // No model id yet. Two different situations, and the badge used to
+        // render both as a bare provider chip -- which reads as "the
+        // provider changed but the model didn't", the exact complaint from
+        // entering a local host: the chip said Ollama with nothing after it.
+        //
+        // An ACP agent picks its own model and never reports one, so a bare
+        // chip is the whole truth there. A hosted/local backend mid-fetch is
+        // DIFFERENT: a model is coming, and saying so turns a blank that
+        // looks broken into a state that looks in progress.
+        if (active_sel.kind == provider::Kind::ExternalAcp)
+            return text(" " + prov + " ", prov_style);
+        return h(text(" " + prov + " ", prov_style),
+                 text(" "),
+                 text(m.s.models_loading ? "loading models\xe2\x80\xa6"
+                                         : "no model \xc2\xb7 ^/ to pick",
+                      fg_dim(muted))).build();
     }
 
     // Update chip: when a newer release is known (background check), a

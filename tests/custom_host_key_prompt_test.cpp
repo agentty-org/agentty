@@ -166,6 +166,70 @@ TEST_CASE("setting up a provider does not switch to it") {
     }
 }
 
+TEST_CASE("first-run host adopt leaves provider and model agreeing") {
+    // The reported half-switch: entering a local host changed the provider
+    // chip but left the model chip empty, and dismissing the auto-opened
+    // picker stranded you there. A switch that cannot name a model must not
+    // commit the provider half on its own.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-halfswitch-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    agentty::store::Settings s;          // nothing configured: first run
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;
+    m.ui.login = login::HostProbing{.spec = "localhost:11434",
+                                    .attempt_id = 1};
+
+    agentty::HostProbed r;
+    r.attempt_id = 1;
+    r.spec = "localhost:11434";
+    r.ok = true;
+    r.model_count = 4;
+    r.latency_ms = 10;
+    auto [m2, cmd] = ::agentty::app::detail::step(
+        ::agentty::app::detail::login_update, std::move(m),
+        msg::LoginMsg{std::move(r)});
+
+    // First run adopts, so the provider SHOULD have moved.
+    check(m2.d.selection.kind == agentty::provider::Kind::OpenAI,
+          "first run adopts the host");
+    // The catalog has not landed yet, so model_id is deliberately empty --
+    // carrying the outgoing provider's model would file it under the new
+    // provider's recall. That is fine as a TRANSIENT, but it must resolve
+    // the moment the catalog arrives, not wait for the user to pick.
+    check(m2.d.model_id.empty(),
+          "model is empty until the catalog lands (not the outgoing one)");
+    check(m2.s.models_loading,
+          "and the badge can say so: a fetch is in flight");
+
+    // The catalog arrives. Even if the user dismissed the auto-opened
+    // picker without choosing, this must fill the model in -- otherwise
+    // the provider chip names a backend with no model behind it.
+    agentty::ModelsLoaded loaded;
+    loaded.provider_id = m2.d.selection.catalog_id();
+    for (const char* id : {"qwen3:30b-a3b", "qwen3:8b"}) {
+        agentty::ModelInfo mi;
+        mi.id = agentty::ModelId{id};
+        mi.display_name = id;
+        mi.context_window = 32768;
+        loaded.models.push_back(std::move(mi));
+    }
+    auto [m3, cmd3] = ::agentty::app::detail::step(
+        ::agentty::app::detail::models_update, std::move(m2),
+        msg::ModelsMsg{std::move(loaded)});
+
+    check(!m3.d.model_id.empty(),
+          "the catalog landing resolves the model without a user pick");
+    check(!m3.s.models_loading, "and the fetch is no longer in flight");
+}
+
 TEST_CASE("custom host key prompt transitions") {
 
     // Redirect XDG_CONFIG_HOME to a temp dir with no agentty/ subdir so
