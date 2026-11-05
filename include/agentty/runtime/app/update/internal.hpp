@@ -224,6 +224,31 @@ commit_provider_switch(Model& m, std::string_view spec,
                        std::string_view desired_model = {},
                        bool open_panel = true);
 
+// AUTHENTICATING IS NOT SELECTING.
+//
+// Setting up a provider — pasting an API key, adding a custom host, an OAuth
+// sign-in — used to end in commit_provider_switch like a picker Enter does.
+// So registering a backup Groq key while mid-task on Claude moved the active
+// backend AND (because a switch must pick a model for the new provider)
+// silently changed the model out from under you. The common reason to add a
+// provider is "have it available", not "use it right now".
+//
+// This is the credential-path ending: the key is saved and the auth view
+// reloaded, the active selection and model are left exactly as they were,
+// and the toast says how to switch if that is what you wanted.
+//
+// `label` names the provider in the toast. Returns the toast Cmd; callers
+// batch it with their own save/AddKey effects.
+[[nodiscard]] Cmd
+provider_ready_without_switch(Model& m, std::string_view label,
+                              std::string_view detail = {});
+
+// True when NOTHING is configured yet — no credential for any provider, in
+// settings or env. On that path a sign-in SHOULD switch: there is no active
+// backend to preserve, and leaving a first-run user unconfigured after they
+// just signed in would be worse than the surprise this avoids.
+[[nodiscard]] bool no_provider_configured(const Model& m);
+
 // ── Frozen-scrollback prefix helpers (frozen.cpp) ────────────────────────
 //
 // freeze_through_prior_turn: walk m.d.current.messages[frozen_through..end)

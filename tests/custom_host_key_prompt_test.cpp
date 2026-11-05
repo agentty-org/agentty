@@ -52,6 +52,120 @@ static void install_stub_deps(agentty::store::Settings& s) {
     });
 }
 
+TEST_CASE("setting up a provider does not switch to it") {
+    // AUTHENTICATING IS NOT SELECTING. Adding a host or pasting a key used
+    // to end in commit_provider_switch, which moves the active provider AND
+    // picks a model for it -- so registering a backup key while mid-task
+    // silently changed the model out from under you.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-noswitch-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    // ── A host added while ALREADY configured leaves the session alone ──
+    {
+        agentty::store::Settings s;
+        s.provider_keys["anthropic"] = "sk-ant-existing";   // already set up
+        install_stub_deps(s);
+
+        agentty::Model m;
+        m.d.persisted = s;
+        m.d.auth.loaded = true;
+        m.d.auth.providers["anthropic"] =
+            agentty::auth::ProviderAuth{.stored = true};
+        m.d.model_id = agentty::ModelId{"claude-opus-4-5"};
+        const auto before_model = m.d.model_id;
+        const auto before_kind  = m.d.selection.kind;
+        // host_probed drops a result whose attempt id doesn't match the
+        // live HostProbing state, so the picker has to actually be there.
+        m.ui.login = login::HostProbing{.spec = "localhost:11434",
+                                        .attempt_id = 1};
+
+        agentty::HostProbed r;
+        r.attempt_id = 1;
+        r.spec = "localhost:11434";
+        r.ok = true;
+        r.model_count = 7;
+        r.latency_ms = 12;
+        auto [m2, cmd] = ::agentty::app::detail::step(
+            ::agentty::app::detail::login_update, std::move(m),
+            msg::LoginMsg{std::move(r)});
+
+        check(m2.d.model_id == before_model,
+              "adding a host must not change the active model");
+        check(m2.d.selection.kind == before_kind,
+              "adding a host must not change the active provider");
+        // But it IS saved, so the picker can offer it.
+        check(m2.d.persisted.provider_keys.count("localhost:11434") == 1,
+              "the host is still registered");
+        check(m2.s.status.find("^P") != std::string::npos,
+              "the toast names how to switch");
+    }
+
+    // ── First run: nothing configured, so adopting IS the right move ──
+    {
+        agentty::store::Settings s;   // empty: no keys anywhere
+        install_stub_deps(s);
+
+        agentty::Model m;
+        m.d.persisted = s;
+        m.d.auth.loaded = true;
+        m.ui.login = login::HostProbing{.spec = "localhost:11434",
+                                        .attempt_id = 1};
+
+        agentty::HostProbed r;
+        r.attempt_id = 1;
+        r.spec = "localhost:11434";
+        r.ok = true;
+        r.model_count = 3;
+        r.latency_ms = 9;
+        auto [m2, cmd] = ::agentty::app::detail::step(
+            ::agentty::app::detail::login_update, std::move(m),
+            msg::LoginMsg{std::move(r)});
+
+        check(m2.d.selection.kind == agentty::provider::Kind::OpenAI,
+              "first run adopts the host -- there is no session to protect");
+        check(m2.s.status.find("^P") == std::string::npos,
+              "and does not tell you to switch to what you are already on");
+    }
+    // ── Pasting an API KEY for another provider also leaves you put ──
+    {
+        agentty::store::Settings s;
+        s.provider_keys["anthropic"] = "sk-ant-existing";
+        install_stub_deps(s);
+
+        agentty::Model m;
+        m.d.persisted = s;
+        m.d.auth.loaded = true;
+        m.d.auth.providers["anthropic"] =
+            agentty::auth::ProviderAuth{.stored = true};
+        m.d.model_id = agentty::ModelId{"claude-opus-4-5"};
+        const auto before_model = m.d.model_id;
+        const auto before_kind  = m.d.selection.kind;
+
+        login::ApiKeyInput api;
+        api.provider       = "groq";
+        api.provider_label = "Groq";
+        api.key_input      = "gsk_testkey";
+        m.ui.login = std::move(api);
+
+        auto [m2, cmd] = ::agentty::app::detail::step(
+            ::agentty::app::detail::login_update, std::move(m),
+            msg::LoginMsg{agentty::LoginSubmit{}});
+
+        check(m2.d.model_id == before_model,
+              "pasting a Groq key must not change the model you are on");
+        check(m2.d.selection.kind == before_kind,
+              "nor the active provider");
+        check(m2.d.persisted.provider_keys.count("groq") == 1,
+              "the key is saved — Groq is ready when you want it");
+        check(m2.d.persisted.provider != "groq",
+              "and the persisted active provider is untouched");
+    }
+}
+
 TEST_CASE("custom host key prompt transitions") {
 
     // Redirect XDG_CONFIG_HOME to a temp dir with no agentty/ subdir so

@@ -208,6 +208,9 @@ Cmd host_probed(Model& m, HostProbed r) {
     }
 
     const std::string spec = std::move(r.spec);
+    // Decide BEFORE persisting: no_provider_configured reads provider_keys,
+    // and the insert below would make it see this host and never adopt.
+    const bool adopt = no_provider_configured(m);
     // PERSIST the keyless host (empty key) so it has a picker row next
     // session — saved_custom_hosts() derives rows from provider_keys.
     Cmd save = Cmd::none();
@@ -219,9 +222,23 @@ Cmd host_probed(Model& m, HostProbed r) {
         }
     }
     m.ui.login = login::Closed{};
-    auto switch_cmd = commit_provider_switch(m, spec,
+    // SETTING UP A HOST IS NOT SWITCHING TO IT. This used to end in
+    // commit_provider_switch, so adding a llama.cpp box you meant to use
+    // later moved the active backend off whatever you were working on AND
+    // changed the model (a switch must pick one for the new provider).
+    // First run is the exception: with nothing configured there is no
+    // session to protect, and leaving the user unconfigured right after
+    // they added a host would be worse.
+    Cmd switch_cmd = Cmd::none();
+    if (adopt)
+        switch_cmd = commit_provider_switch(m, spec,
                                        provider::provider_display_name(
                                            provider::parse_selection(spec)));
+    else
+        // commit_provider_switch would have refreshed this. The picker
+        // reads AuthView to decide which rows are "yours", so without it
+        // the host you just added sits under NOT CONFIGURED until restart.
+        switch_cmd = Cmd(LoadAuthView{});
     // Enrich the switch toast with what the probe FOUND — the "it just
     // works" moment: dialect, model count, latency.
     //
@@ -290,13 +307,22 @@ Cmd host_probed(Model& m, HostProbed r) {
             provider::openai::install_probe_hosts(m.d.persisted.probe_hosts);
         }
     }
-    auto found = set_status_toast(m,
+    // What the probe FOUND, either way: dialect, model count, latency, ctx.
+    // When we did NOT switch, the same line also has to say the host is
+    // merely ready and name the way to start using it -- otherwise "added a
+    // host, nothing happened" is indistinguishable from a silent failure.
+    std::string detail =
         std::string{"\xe2\x9c\x93 "} + std::to_string(r.model_count)
         + (r.model_count == 1 ? " model" : " models") + " \xc2\xb7 "
         + (r.native_api ? "ollama native" : "openai-compatible") + " \xc2\xb7 "
-        + std::to_string(r.latency_ms) + "ms" + ctx,
-        // A remedy needs longer to read than a success.
-        std::chrono::seconds{r.probe_skipped ? 12 : 6});
+        + std::to_string(r.latency_ms) + "ms" + ctx;
+    auto found = adopt
+        ? set_status_toast(m, std::move(detail),
+                           std::chrono::seconds{r.probe_skipped ? 12 : 6})
+        : set_status_toast(m,
+              spec + " added \xc2\xb7 " + std::move(detail)
+                  + "  \xc2\xb7  ^P to switch",
+              std::chrono::seconds{r.probe_skipped ? 12 : 8});
     return Cmd::batch(std::move(save), std::move(probe_save),
                       std::move(switch_cmd), std::move(found));
 }
@@ -1025,22 +1051,32 @@ Cmd login_submit(Model& m) {
         // commit the live provider switch the picker deferred. The Anthropic
         // path (empty provider) keeps using credentials.json below.
         if (!provider.empty()) {
+            // Decide BEFORE inserting the key: no_provider_configured reads
+            // provider_keys, so asking after the insert would always see
+            // this key and never adopt -- first run would land signed in
+            // but still pointed at the provider it couldn't use.
+            const bool adopt = no_provider_configured(m);
             // Persist the pasted key as this provider's active account (snapshots
-            // any prior key first, so it ADDS, not replaces), and mark the
-            // provider active. add_key is the single implementation of the
-            // "paste a key" flow, shared with credentials::.
-            // The key goes in the record now (the switch below and its
-            // save need it); AddKey does the registry snapshot on the host,
-            // and LoadAuthView brings the vault back as it then stands.
+            // any prior key first, so it ADDS, not replaces).
+            // The key goes in the record now; AddKey does the registry
+            // snapshot on the host, and LoadAuthView brings the vault back
+            // as it then stands.
             m.d.persisted.provider_keys[provider] = key;
-            m.d.persisted.provider = provider;
             Cmd add = Cmd::batch(
                 Cmd(AccountOp{.kind = AccountOp::Kind::AddKey,
                               .provider = provider, .key = key}),
                 Cmd(LoadAuthView{}));
             m.ui.login = login::Closed{};
-            // Commit through the ONE shared switch path like every other entry;
-            // commit_provider_switch opens the model picker for us.
+            // PASTING A KEY IS NOT SWITCHING. Registering a Groq key while
+            // mid-task on Claude used to move the active backend and, with
+            // it, the model -- a switch has to pick one for the new
+            // provider. Only adopt when nothing was configured yet, where
+            // there is no session to protect.
+            if (!adopt)
+                return Cmd::batch(
+                    std::move(add), save_record(m),
+                    provider_ready_without_switch(m, provider_label));
+            m.d.persisted.provider = provider;
             return Cmd::batch(
                 std::move(add), save_record(m),
                 commit_provider_switch(m, provider, provider_label));

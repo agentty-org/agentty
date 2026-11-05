@@ -28,6 +28,7 @@
 #include "agentty/provider/copilot/provider.hpp"
 #include "agentty/provider/registry.hpp"
 #include "agentty/provider/selection.hpp"
+#include "agentty/provider/auth_state.hpp"   // auth_source, AuthSource
 #include "agentty/store/store.hpp"
 #include "agentty/tool/mcp_tools_backends.hpp"
 #include "agentty/tool/skills.hpp"
@@ -1011,6 +1012,34 @@ commit_provider_switch(Model& m, std::string_view spec,
     return Cmd::batch(std::move(recall_save), std::move(settings_save),
                       std::move(prewarm), std::move(toast), cmd::fetch_models(m),
                       std::move(refresh_cmd), std::move(install));
+}
+
+bool no_provider_configured(const Model& m) {
+    // Same question init() asks on first run: does ANY provider have a
+    // credential, in settings or the environment? Local/no-auth backends
+    // report Local and don't count -- Ollama being installed doesn't mean
+    // the user has set agentty up.
+    for (const auto& p : provider::providers()) {
+        const auto src = provider::auth_source(p, m.d.persisted, m.d.auth);
+        if (src == provider::AuthSource::Saved
+            || src == provider::AuthSource::Env)
+            return false;
+    }
+    return m.d.persisted.provider_keys.empty();
+}
+
+Cmd provider_ready_without_switch(Model& m, std::string_view label,
+                                  std::string_view detail) {
+    // The credential is on disk and the auth view will be reloaded by the
+    // caller's effect. Deliberately absent: the Selection, the model, the
+    // effort clamp, the catalog wipe -- everything commit_provider_switch
+    // does to make a provider ACTIVE. The user asked to set one up.
+    std::string text = std::string{label} + " is ready";
+    if (!detail.empty()) text += "  \xc2\xb7  " + std::string{detail};
+    // Name the way to switch, since not switching is the surprising half
+    // for anyone used to the old behaviour.
+    text += "  \xc2\xb7  ^P to switch";
+    return set_status_toast(m, std::move(text), std::chrono::seconds{6});
 }
 
 Cmd set_status_toast(Model& m, std::string text,
