@@ -15,6 +15,7 @@
 #include "agentty/runtime/provider_rows.hpp"
 #include "agentty/runtime/fused_models.hpp"
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/view/panels.hpp"
 
@@ -142,6 +143,134 @@ TEST_CASE("provider picker: Enter on the signpost expands, doesn't close") {
     REQUIRE(p2->index < static_cast<int>(after.rows.size()));
     CHECK(after.rows[static_cast<std::size_t>(p2->index)].section
               == ui::ProviderSection::More);
+}
+
+// ── Key path ─────────────────────────────────────────────────────────────
+//
+// The rows above are built by a pure function; these press REAL keys through
+// app::on_key so a binding that never reaches the reducer is caught here
+// rather than by hand in the terminal.
+
+TEST_CASE("provider picker: ^A toggles through the real key path") {
+    // A terminal sends ^A as the bare control byte 0x01 with no ctrl flag;
+    // some send the letter with mods.ctrl. BOTH must work -- char_view folds
+    // 0x01..0x1A to a letter and synthesises ctrl, and if either encoding
+    // missed the binding the key would look flaky rather than broken.
+    auto press = [](Model&& mm, maya::KeyEvent ev) {
+        if (auto msg = app::on_key(mm, ev))
+            mm = app::update(std::move(mm), std::move(*msg)).first;
+        return std::move(mm);
+    };
+    auto fresh = [] {
+        Model mm;
+        mm.ui.panel.descend(pn::Providers{});
+        return mm;
+    };
+
+    {   // raw 0x01, no modifier flag
+        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x01)}, {}, {}};
+        Model m2 = press(fresh(), ev);
+        auto* p = m2.ui.panel.get<pn::Providers>();
+        REQUIRE(p != nullptr);
+        CHECK(p->show_all);
+    }
+    {   // 'a' with ctrl set
+        maya::KeyEvent ev{maya::CharKey{U'a'}, {}, {}};
+        ev.mods.ctrl = true;
+        Model m2 = press(fresh(), ev);
+        auto* p = m2.ui.panel.get<pn::Providers>();
+        REQUIRE(p != nullptr);
+        CHECK(p->show_all);
+    }
+    {   // and it TOGGLES -- two presses return to collapsed
+        maya::KeyEvent ev{maya::CharKey{static_cast<char32_t>(0x01)}, {}, {}};
+        Model m2 = press(press(fresh(), ev), ev);
+        auto* p = m2.ui.panel.get<pn::Providers>();
+        REQUIRE(p != nullptr);
+        CHECK_FALSE(p->show_all);
+    }
+}
+
+TEST_CASE("provider picker: typing stays typing, ^A is not swallowed") {
+    // ^A must not land in the filter query, and a bare 'a' must not toggle.
+    Model m;
+    m.ui.panel.descend(pn::Providers{});
+
+    maya::KeyEvent bare{maya::CharKey{U'a'}, {}, {}};
+    if (auto msg = app::on_key(m, bare))
+        m = app::update(std::move(m), std::move(*msg)).first;
+    auto* p = m.ui.panel.get<pn::Providers>();
+    REQUIRE(p != nullptr);
+    CHECK(p->query == "a");
+    CHECK_FALSE(p->show_all);
+}
+
+TEST_CASE("provider picker: the row list is never a stale snapshot") {
+    // THE bug that read as a flaky key. providers_update used to build the
+    // row list ONCE on entry, so any arm running after a mutation saw the
+    // PREVIOUS state: after ^A expanded the list, `n` was still the
+    // collapsed length, ProvidersMove clamped the cursor to it, and Enter
+    // or ^D on a revealed row did nothing. Single-threaded, fully
+    // deterministic -- but it looked like a race because it depended on
+    // the key SEQUENCE, not on any one key.
+    auto press = [](Model&& mm, Msg msg) {
+        return app::update(std::move(mm), std::move(msg)).first;
+    };
+
+    Model m;
+    m.ui.panel.descend(pn::Providers{});
+
+    const int collapsed = static_cast<int>(
+        ui::build_sectioned_provider_rows(
+            {}, "", m.d.persisted, m.d.auth,
+            m.d.selection.catalog_id(), false).rows.size());
+    const int expanded = static_cast<int>(
+        ui::build_sectioned_provider_rows(
+            {}, "", m.d.persisted, m.d.auth,
+            m.d.selection.catalog_id(), true).rows.size());
+    REQUIRE(expanded > collapsed);       // there is something to reveal
+
+    m = press(std::move(m), Msg{ProvidersToggleAll{}});
+    REQUIRE(m.ui.panel.get<pn::Providers>()->show_all);
+
+    // Walk to the very end. With the stale snapshot this stopped at the
+    // COLLAPSED length and the last rows were unreachable.
+    for (int i = 0; i < expanded * 2; ++i)
+        m = press(std::move(m), Msg{ProvidersJump{ProvidersJump::Where::End}});
+
+    auto* p = m.ui.panel.get<pn::Providers>();
+    REQUIRE(p != nullptr);
+    CHECK(p->index == expanded - 1);
+    CHECK(p->index >= collapsed);        // genuinely past the old ceiling
+
+    // And a step down from the end wraps rather than sticking.
+    m = press(std::move(m), Msg{ProvidersMove{+1}});
+    CHECK(m.ui.panel.get<pn::Providers>()->index == 0);
+}
+
+TEST_CASE("provider picker: collapsing never strands the cursor") {
+    // The mirror case: ^A while parked on a revealed row must pull the
+    // cursor back inside the shorter list, not leave it pointing past the
+    // end where Enter would silently do nothing.
+    auto press = [](Model&& mm, Msg msg) {
+        return app::update(std::move(mm), std::move(msg)).first;
+    };
+
+    Model m;
+    m.ui.panel.descend(pn::Providers{});
+    m = press(std::move(m), Msg{ProvidersToggleAll{}});          // expand
+    m = press(std::move(m), Msg{ProvidersJump{ProvidersJump::Where::End}});
+    m = press(std::move(m), Msg{ProvidersToggleAll{}});          // collapse
+
+    auto* p = m.ui.panel.get<pn::Providers>();
+    REQUIRE(p != nullptr);
+    CHECK_FALSE(p->show_all);
+    const int n = static_cast<int>(
+        ui::build_sectioned_provider_rows(
+            {}, "", m.d.persisted, m.d.auth,
+            m.d.selection.catalog_id(), false).rows.size());
+    CHECK(p->index >= 0);
+    CHECK(p->index < n);
 }
 
 TEST_CASE("provider picker: each section header appears at most once") {

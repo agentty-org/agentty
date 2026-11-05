@@ -58,27 +58,31 @@ using maya::overload;
 // model fetch so the model list reflects the new backend. No restart.
 Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
     // The picker's rows are ONE ordered list (presets + ACP agents + saved
-    // custom hosts + "Custom host…" sentinel), built once from the current
-    // search query. The cursor is an index into THIS list — no offset math,
-    // and the same list the view renders (see build_provider_rows).
-    const std::string query = [&] {
-        const auto* p = m.ui.panel.get<pn::Providers>();
-        return p ? p->query : std::string{};
-    }();
+    // custom hosts + "Custom host…" sentinel). The cursor is an index into
+    // THIS list — no offset math, and the same list the view renders.
+    //
+    // Computed ON DEMAND, never snapshotted. Arms mutate p->query and
+    // p->show_all, and a list captured once on entry would describe the
+    // state BEFORE the mutation: `n` would clamp the cursor to the old
+    // length, so after ^A expanded the list, arrowing down stopped early and
+    // Enter/^D on a revealed row did nothing. That read as a flaky key.
+    // A function of the live Model cannot go stale.
     const auto& settings = m.d.persisted;
     const std::vector<std::string> saved_custom_hosts =
         provider::saved_custom_hosts(settings.provider_keys);
-    const auto sectioned = ui::build_sectioned_provider_rows(
-        saved_custom_hosts, query, settings, m.d.auth,
-        m.d.selection.catalog_id(),
-        [&] { const auto* p = m.ui.panel.get<pn::Providers>();
-              return p && p->show_all; }());
-    // The reducer selects from the SAME list the view renders; section
-    // headers are decoration the view adds, so indices still line up.
-    std::vector<ui::ProviderRow> rows;
-    rows.reserve(sectioned.rows.size());
-    for (const auto& sr : sectioned.rows) rows.push_back(sr.row);
-    const int n = static_cast<int>(rows.size());
+    auto build = [&] {
+        const auto* p = m.ui.panel.get<pn::Providers>();
+        return ui::build_sectioned_provider_rows(
+            saved_custom_hosts, p ? p->query : std::string{},
+            m.d.persisted, m.d.auth, m.d.selection.catalog_id(),
+            p && p->show_all);
+    };
+    auto plain_rows = [&](const ui::SectionedProviderRows& s) {
+        std::vector<ui::ProviderRow> out;
+        out.reserve(s.rows.size());
+        for (const auto& sr : s.rows) out.push_back(sr.row);
+        return out;
+    };
 
     return std::visit(overload{
         [&](OpenProviders) -> Cmd {
@@ -108,12 +112,8 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             //
             // Open at the row matching the currently-active provider. Fresh
             // rows with an empty query (so every provider is present to match).
-            const auto fresh_s = ui::build_sectioned_provider_rows(
-                saved_custom_hosts, "", settings, m.d.auth,
-                m.d.selection.catalog_id());
-            std::vector<ui::ProviderRow> fresh;
-            fresh.reserve(fresh_s.rows.size());
-            for (const auto& sr : fresh_s.rows) fresh.push_back(sr.row);
+            const auto fresh_s = build();
+            const auto fresh = plain_rows(fresh_s);
             const auto& sel = m.d.selection;
             const std::string active_label =
                 sel.kind == provider::Kind::ExternalAcp ? sel.acp_agent_id
@@ -138,6 +138,7 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
         },
         [&](ProvidersMove& e) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
+            const int n = static_cast<int>(build().rows.size());
             if (!p || n == 0) return Cmd::none();
             p->confirm_remove.clear();   // navigating disarms a pending delete
             p->index = ui::step(p->index, e.delta, n);
@@ -145,6 +146,7 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
         },
         [&](ProvidersJump& e) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
+            const int n = static_cast<int>(build().rows.size());
             if (!p || n == 0) return Cmd::none();
             p->confirm_remove.clear();   // navigating disarms a pending delete
             using W = ProvidersJump::Where;
@@ -199,30 +201,28 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
         [&](ProvidersToggleAll) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
             if (!p) return Cmd::none();
-            const bool expanding = !p->show_all;
-            p->show_all = expanding;
-            if (expanding) {
+            p->show_all = !p->show_all;
+            p->confirm_remove.clear();
+            // Rebuild AFTER the flip -- build() reads the live flag.
+            const auto next = build();
+            if (p->show_all) {
                 // Park the cursor on the FIRST revealed row: you asked to
                 // see them, so the payoff belongs under the cursor rather
                 // than wherever you happened to be standing.
-                const auto next = ui::build_sectioned_provider_rows(
-                    saved_custom_hosts, p->query, settings, m.d.auth,
-                    m.d.selection.catalog_id(), true);
                 for (int i = 0; i < static_cast<int>(next.rows.size()); ++i)
                     if (next.rows[static_cast<std::size_t>(i)].section
                         == ui::ProviderSection::More) { p->index = i; break; }
-            } else {
-                // Collapsing can strand the cursor past the end.
-                const auto next = ui::build_sectioned_provider_rows(
-                    saved_custom_hosts, p->query, settings, m.d.auth,
-                    m.d.selection.catalog_id(), false);
-                const int last = static_cast<int>(next.rows.size()) - 1;
-                if (p->index > last) p->index = last < 0 ? 0 : last;
             }
+            // Either way, never leave the cursor past the end.
+            const int last = static_cast<int>(next.rows.size()) - 1;
+            if (p->index > last) p->index = last < 0 ? 0 : last;
+            if (p->index < 0) p->index = 0;
             return Cmd::none();
         },
         [&](ProvidersDelete) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
+            const auto rows = plain_rows(build());
+            const int n = static_cast<int>(rows.size());
             if (!p || p->index < 0 || p->index >= n)
                 return Cmd::none();
             const ui::ProviderRow& row =
@@ -289,13 +289,9 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
                 ? Cmd(InstallAuth{.provider = removed, .clear = true})
                 : Cmd::none();
             // Rebuild the row list so a removed custom host is gone; clamp.
-            const auto& s2 = m.d.persisted;
-            const auto fresh_s = ui::build_sectioned_provider_rows(
-                provider::saved_custom_hosts(s2.provider_keys), p->query,
-                s2, m.d.auth, m.d.selection.catalog_id());
-            std::vector<ui::ProviderRow> fresh;
-            fresh.reserve(fresh_s.rows.size());
-            for (const auto& sr : fresh_s.rows) fresh.push_back(sr.row);
+            // build() re-reads m.d.persisted, which the key-save above has
+            // already updated in the Model.
+            const auto fresh = plain_rows(build());
             if (!fresh.empty() && p->index >= static_cast<int>(fresh.size()))
                 p->index = static_cast<int>(fresh.size()) - 1;
             auto toast = set_status_toast(m,
@@ -312,6 +308,9 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             // OpenAt alternative, so keeping a pointer into it would dangle.
             const auto* p = m.ui.panel.get<pn::Providers>();
             const int selected = p ? p->index : -1;
+            const auto sectioned = build();
+            const auto rows = plain_rows(sectioned);
+            const int n = static_cast<int>(rows.size());
 
             // Enter on the "N more providers" signpost EXPANDS in place --
             // the picker stays open, it is not a destination. Checked before
