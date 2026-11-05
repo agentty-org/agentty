@@ -9,6 +9,7 @@
 #include "panels_common.hpp"   // kPanel* widths, panel_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
+#include "agentty/runtime/view/hints.hpp"   // key_hints
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/panel/fork.hpp"
 
@@ -77,11 +78,15 @@ Element fork_panel(const Model& m) {
         "  A fork starts FRESH (near-zero context) · the old transcript is "
         "readable on demand.",
         fg_dim(muted)));
-    cfg.footer.push_back(h(
-        text("\xe2\x86\x91\xe2\x86\x93 ", fg_of(fg)),  text("choose   ", fg_dim(muted)),
-        text("Enter ", fg_of(fg)), text("fork   ", fg_dim(muted)),
-        text("Esc ", fg_of(fg)),   text("close", fg_dim(muted))
-    ).build());
+    // The shared key_hints idiom, not a hand-built run: this one spelled its
+    // own spacing and could not shed keys under width pressure, so on a
+    // narrow pane it overflowed instead of dropping the least important hint
+    // like every other panel's footer does.
+    cfg.footer.push_back(key_hints({
+        {"\xe2\x86\x91\xe2\x86\x93", "choose", 5},   // ↑↓
+        {"Enter", "fork", 4},
+        {"Esc", "close", 3},
+    }));
 
     return Panel{std::move(cfg)}.build();
 }
