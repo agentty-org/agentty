@@ -116,6 +116,18 @@ namespace agentty::provider::wire {
                 "reason=empty_bytes media_type={}", wire_media_type(img));
         return false;
     }
+    // Every provider accepts exactly png/jpeg/gif/webp. Anything else (a
+    // macOS clipboard TIFF, a HEIC) 400s the WHOLE request — and since the
+    // image lives in history, every later turn too, wedging the thread.
+    {
+        const auto mt = wire_media_type(img);
+        if (mt != "image/png" && mt != "image/jpeg"
+            && mt != "image/gif" && mt != "image/webp") {
+            AGT_LOG(Wire, Warn, "wire.image_dropped",
+                    "reason=unsupported_media_type media_type={}", mt);
+            return false;
+        }
+    }
     if (!util::image_within_wire_limits(img.bytes(), max_side)) {
         const auto d = util::image_dimensions(img.bytes());
         AGT_LOG(Wire, Warn, "wire.image_dropped",

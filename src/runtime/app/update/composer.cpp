@@ -279,6 +279,14 @@ Cmd insert_image(Model& m, std::string bytes, std::string media_type,
         m.ui.composer.text.insert(m.ui.composer.cursor, placeholder);
         m.ui.composer.cursor += static_cast<int>(placeholder.size());
         m.ui.composer.expanded = true;
+        const auto& mt = m.ui.composer.attachments.back().media_type;
+        if (mt != "image/png" && mt != "image/jpeg"
+            && mt != "image/gif" && mt != "image/webp") {
+            return set_status_toast(
+                m, "Image is " + mt + " — models only accept PNG, JPEG, GIF "
+                   "or WebP, so it won't be sent. Convert it first.",
+                std::chrono::seconds{8});
+        }
         if (oversized) {
             return set_status_toast(
                 m, "Image is " + std::to_string(dims.w) + "\xc3\x97"
