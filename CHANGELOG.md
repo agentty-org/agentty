@@ -4,7 +4,53 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.47] - 2026-11-05
+
+### Changed
+- **The provider picker (`Ctrl+P`) shows what you've set up, not the whole
+  catalogue.** It used to list all fifteen built-in providers flat, ten of
+  them amber "set the named key first" warnings for vendors you'd never
+  touched. Now it opens on your configured backends and collapses the rest
+  behind one line: `Show 11 more providers`. Press `Enter` on it or `^E` to
+  reveal them. Typing still searches every provider — an unconfigured one
+  appears as a dim `Enter to set up` row, so nothing became harder to
+  reach, and pasting a key that a provider recognises still routes it to
+  the right place.
+- **A multi-account provider says which account is serving.** The model
+  picker's section header and the status badge name the active account
+  when a provider has more than one. Providers with a single account look
+  exactly as before.
+- **`RECENT` in the model picker is ordered by recency.** Browsing sorted
+  it alphabetically, so the model you picked ten seconds ago could sit
+  below one you last used a week back. Favourites still lead the list.
+
 ### Fixed
+- **Changing model no longer renames every turn already in the thread**
+  ([#120](https://github.com/agentty-org/agentty/issues/120)). A turn's
+  header named whichever model was currently selected rather than the one
+  that actually produced it, so switching model rewrote the whole
+  transcript — a Granite turn claiming to be Spark. Each turn now records
+  its own model when it runs. (Turns from before this release have nothing
+  recorded and still show the selection.)
+- **Switching account on the active provider reloads its models.** The
+  model list was cached for 60 seconds and not invalidated on the switch,
+  so `Ctrl+/` could show the previous account's models — wrong whenever
+  two accounts have different entitlements.
+- **Keys in the provider picker no longer appear to need two presses.**
+  Expanding the list left the cursor clamped to the old, shorter list, so
+  arrowing down stopped early and `Enter` on a revealed row did nothing.
+- **The `@` and `#` pickers show their keys.** `Enter`, `Esc` and the
+  arrows all worked; nothing on screen said so.
+- **Settings → Plugins shows `e edit` and `d remove` on an unapproved
+  server.** Both keys worked there — the footer just hid them, exactly
+  where you're deciding what to do about the server.
+- Footer hints describe the highlighted row: `^F` reads `unfavorite` on a
+  model you've already starred, and `^/` reads `all providers` when the
+  list is scoped to one, which is how you widen it again.
+- The Retrieval pane's `^E advanced` reads `^E hide advanced` once the
+  advanced rows are showing.
+- A scoped model list no longer offers to filter "across providers" while
+  its own title says it is limited to one.
 - `agentty update` no longer offers a release whose binary for your
   platform is still building, then fails with a bare `HTTP 404`
   ([#119](https://github.com/agentty-org/agentty/issues/119)). Releases
