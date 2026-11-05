@@ -406,6 +406,56 @@ TEST_CASE("provider picker: configured rows lead the unconfigured in search") {
 // header (and the status badge), never per row: the account is not part of
 // what a model IS. See docs/IDENTITY_CAPABILITY_ENTITLEMENT.md.
 
+TEST_CASE("model picker: a scoped list never claims to search all providers") {
+    // The title said "Anthropic only" while the search box invited you to
+    // filter "across providers" -- two contradictory claims on one screen.
+    // And ^/ is the way back out, so its hint must say so or a narrowed
+    // list looks like a trap.
+    Model m;
+    m.ui.panel.descend(pn::Models{});
+    auto* mp = m.ui.panel.get<pn::Models>();
+    REQUIRE(mp != nullptr);
+
+    FusedRow r;
+    r.provider_id = "anthropic";
+    r.label       = "Anthropic";
+    r.model.id    = ModelId{"claude-opus-4-5"};
+    r.authed      = true;
+    m.d.fused_rows.push_back(r);
+
+    auto render = [&] {
+        auto root = ui::models_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(120, 200, &pool);
+        canvas.clear();
+        maya::render_tree(root, canvas, pool, maya::theme::native, true);
+        std::string s;
+        for (int y = 0; y <= canvas.max_content_row(); ++y) {
+            for (int x = 0; x < 120; ++x) {
+                char32_t ch = canvas.get(x, y).character;
+                s.push_back(ch && ch < 128 ? static_cast<char>(ch) : ' ');
+            }
+            s.push_back('\n');
+        }
+        return s;
+    };
+
+    {   // Unscoped: the cross-provider promise is true, keep it.
+        const std::string s = render();
+        INFO(s);
+        CHECK(has(s, "across providers"));
+    }
+    {   // Scoped: it must not claim to reach past the one provider, and the
+        // footer must name the way back.
+        mp->provider_scope = "anthropic";
+        const std::string s = render();
+        INFO(s);
+        CHECK_FALSE(has(s, "across providers"));
+        CHECK(has(s, "this provider"));
+        CHECK(has(s, "all providers"));      // ^/ hint, the escape hatch
+    }
+}
+
 TEST_CASE("model picker: the scoped header names the active account") {
     Model m;
     m.ui.panel.descend(pn::Models{});

@@ -51,10 +51,15 @@ Element models_panel(const Model& m) {
     cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.fused_picker_scroll;
 
+    // The placeholder must name the scope ACTUALLY in force. It only knew
+    // about slot-assign, so a ^/ scoped list titled "Anthropic only" still
+    // invited you to filter "across providers" -- the header and the search
+    // box contradicting each other on the same screen.
     cfg.header.push_back(
         filter_header(picker->query,
-                      picker->assign_slot ? "this provider"
-                                          : "across providers",
+                      (picker->assign_slot || !picker->provider_scope.empty())
+                          ? "this provider"
+                          : "across providers",
                       accent));
     cfg.header.push_back(sep);
 
@@ -388,12 +393,15 @@ Element models_panel(const Model& m) {
     // code, read better, and match the surrounding footer style — so this is
     // a quieting rewrite, not a fix. Restoring the ternary would be correct
     // C++ and would only bring the noise back.
+    // ^/ is a TOGGLE: scoped, it widens back to every provider. Saying
+    // "provider" in both states left a narrowed list with no way back.
+    const bool scoped = !picker->provider_scope.empty();
     if (picker->assign_slot)
         cfg.footer.push_back(key_hints({
             {"\xe2\x86\x91\xe2\x86\x93", "move", 5},
             {"Enter", "pin to role", 5},
             {"^F", "favorite", 1},
-            {"^/", "provider", 2},
+            {"^/", scoped ? "all providers" : "provider", 2},
             {"^L", "refresh", 2},
             {"Esc", "back", 4},
           }));
@@ -402,7 +410,7 @@ Element models_panel(const Model& m) {
             {"\xe2\x86\x91\xe2\x86\x93", "move", 5},
             {"Enter", "switch", 5},
             {"^F", "favorite", 1},
-            {"^/", "provider", 2},
+            {"^/", scoped ? "all providers" : "provider", 2},
             {"^L", "refresh", 2},
             {"^Tab", "prev", 2},
             {"Esc", "close", 4},
