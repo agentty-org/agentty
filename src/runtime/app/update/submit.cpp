@@ -1015,17 +1015,34 @@ commit_provider_switch(Model& m, std::string_view spec,
 }
 
 bool no_provider_configured(const Model& m) {
-    // Same question init() asks on first run: does ANY provider have a
-    // credential, in settings or the environment? Local/no-auth backends
-    // report Local and don't count -- Ollama being installed doesn't mean
-    // the user has set agentty up.
+    // "Is there a backend the user could actually send a turn to right now?"
+    //
+    // NOT "is provider_keys empty". A keyless custom host is stored as an
+    // empty-string value (login.cpp writes provider_keys[spec] = ""), so a
+    // map-emptiness test reports "configured" for a map that holds nothing
+    // usable -- and the reverse case bit harder: adding a second local host
+    // looked like a FIRST RUN, so it adopted and moved you off the provider
+    // you were working on.
+    //
+    // Registry providers: a Saved or Env credential counts. Local/no-auth
+    // backends report Local and do NOT -- Ollama being installed on the box
+    // is not evidence the user set agentty up.
     for (const auto& p : provider::providers()) {
         const auto src = provider::auth_source(p, m.d.persisted, m.d.auth);
         if (src == provider::AuthSource::Saved
             || src == provider::AuthSource::Env)
             return false;
     }
-    return m.d.persisted.provider_keys.empty();
+    // Saved custom hosts: one with a non-empty key is a configured backend.
+    // A keyless one is only a configured backend if it is the ACTIVE
+    // selection -- i.e. the user already chose to work against it, which is
+    // exactly the session the next sign-in must not disturb.
+    const std::string active = m.d.selection.catalog_id();
+    for (const auto& [spec, key] : m.d.persisted.provider_keys) {
+        if (!key.empty()) return false;
+        if (!active.empty() && spec == active) return false;
+    }
+    return true;
 }
 
 Cmd provider_ready_without_switch(Model& m, std::string_view label,

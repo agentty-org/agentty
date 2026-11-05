@@ -230,6 +230,93 @@ TEST_CASE("first-run host adopt leaves provider and model agreeing") {
     check(!m3.s.models_loading, "and the fetch is no longer in flight");
 }
 
+TEST_CASE("a second local host does not adopt over the one in use") {
+    // Guards the end-to-end behaviour rather than the predicate: a user
+    // working against one local box adds another and keeps their session.
+    // (The predicate's own edge -- a keyless host that is NOT active -- is
+    // the "saved-but-unusable" case below, which is where the old
+    // provider_keys.empty() test and this one actually disagree.)
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-2ndhost-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    agentty::store::Settings s;
+    s.provider_keys["localhost:11434"] = "";   // keyless, already added
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;
+    // ...and it is what the user is CURRENTLY working against.
+    m.d.selection = agentty::provider::parse_selection("localhost:11434");
+    m.d.model_id  = agentty::ModelId{"qwen3:8b"};
+    const auto before_sel   = m.d.selection.catalog_id();
+    const auto before_model = m.d.model_id;
+
+    m.ui.login = login::HostProbing{.spec = "localhost:8080",
+                                    .attempt_id = 2};
+    agentty::HostProbed r;
+    r.attempt_id = 2;
+    r.spec = "localhost:8080";
+    r.ok = true;
+    r.model_count = 2;
+    r.latency_ms = 8;
+    auto [m2, cmd] = ::agentty::app::detail::step(
+        ::agentty::app::detail::login_update, std::move(m),
+        msg::LoginMsg{std::move(r)});
+
+    check(m2.d.selection.catalog_id() == before_sel,
+          "the host you are working on stays active");
+    check(m2.d.model_id == before_model,
+          "and your model is untouched");
+    check(m2.d.persisted.provider_keys.count("localhost:8080") == 1,
+          "the new host is still saved for later");
+    check(m2.s.status.find("^P") != std::string::npos,
+          "with the switch offered, not taken");
+}
+
+TEST_CASE("a saved-but-unusable host still counts as unconfigured") {
+    // The case the two predicates actually disagree on, and the reason the
+    // old one was wrong in BOTH directions. A keyless host is stored as an
+    // empty-string value, so "provider_keys.empty()" called it configured --
+    // even though nothing in the map can serve a turn and the active
+    // provider has no credential either. Someone in that state adding a
+    // real backend got no adopt and a dead session.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-unusable-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    agentty::store::Settings s;
+    // A keyless host was added once, but it is NOT what is selected, and
+    // the selected provider (Anthropic) has no credential.
+    s.provider_keys["localhost:11434"] = "";
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;          // loaded, and empty: nothing stored
+    m.ui.login = login::HostProbing{.spec = "localhost:8080",
+                                    .attempt_id = 3};
+    agentty::HostProbed r;
+    r.attempt_id = 3;
+    r.spec = "localhost:8080";
+    r.ok = true;
+    r.model_count = 2;
+    r.latency_ms = 7;
+    auto [m2, cmd] = ::agentty::app::detail::step(
+        ::agentty::app::detail::login_update, std::move(m),
+        msg::LoginMsg{std::move(r)});
+
+    check(m2.d.selection.catalog_id() == "localhost:8080",
+          "nothing usable was configured, so the new host is adopted");
+}
+
 TEST_CASE("custom host key prompt transitions") {
 
     // Redirect XDG_CONFIG_HOME to a temp dir with no agentty/ subdir so
