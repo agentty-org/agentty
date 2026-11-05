@@ -39,6 +39,12 @@ struct Hint {
             return string_width(hn.key) + 1 + string_width(hn.label);
         };
         std::vector<bool> keep(hints.size(), true);
+        // An empty label means "this action does not apply to the current
+        // row" -- drop the hint rather than painting a dangling key with
+        // nothing after it. Lets a caller write `cond ? "" : "label"`
+        // instead of building two different vectors.
+        for (std::size_t i = 0; i < hints.size(); ++i)
+            if (hints[i].label.empty()) keep[i] = false;
         auto total = [&] {
             int sum = 0, shown = 0;
             for (std::size_t i = 0; i < hints.size(); ++i)

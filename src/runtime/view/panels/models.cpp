@@ -396,11 +396,20 @@ Element models_panel(const Model& m) {
     // ^/ is a TOGGLE: scoped, it widens back to every provider. Saying
     // "provider" in both states left a narrowed list with no way back.
     const bool scoped = !picker->provider_scope.empty();
+    // ^F is a toggle too. On a row that is ALREADY a favorite it unstars,
+    // so advertising "favorite" there describes the state, not the action.
+    // On a sign-in offer there is no model to star at all.
+    const auto* hl_row =
+        (picker->index >= 0 && picker->index < static_cast<int>(rows.size()))
+            ? &rows[static_cast<std::size_t>(picker->index)] : nullptr;
+    const bool hl_offer = hl_row && hl_row->is_signin_offer();
+    const char* fav_hint = (hl_row && hl_row->model.favorite) ? "unfavorite"
+                                                              : "favorite";
     if (picker->assign_slot)
         cfg.footer.push_back(key_hints({
             {"\xe2\x86\x91\xe2\x86\x93", "move", 5},
             {"Enter", "pin to role", 5},
-            {"^F", "favorite", 1},
+            {"^F", hl_offer ? "" : fav_hint, 1},
             {"^/", scoped ? "all providers" : "provider", 2},
             {"^L", "refresh", 2},
             {"Esc", "back", 4},
@@ -408,8 +417,8 @@ Element models_panel(const Model& m) {
     else
         cfg.footer.push_back(key_hints({
             {"\xe2\x86\x91\xe2\x86\x93", "move", 5},
-            {"Enter", "switch", 5},
-            {"^F", "favorite", 1},
+            {"Enter", hl_offer ? "sign in" : "switch", 5},
+            {"^F", hl_offer ? "" : fav_hint, 1},
             {"^/", scoped ? "all providers" : "provider", 2},
             {"^L", "refresh", 2},
             {"^Tab", "prev", 2},

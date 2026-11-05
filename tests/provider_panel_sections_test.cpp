@@ -406,6 +406,59 @@ TEST_CASE("provider picker: configured rows lead the unconfigured in search") {
 // header (and the status badge), never per row: the account is not part of
 // what a model IS. See docs/IDENTITY_CAPABILITY_ENTITLEMENT.md.
 
+TEST_CASE("model picker: footer hints describe the HIGHLIGHTED row") {
+    // A hint is a promise about what the key will do NOW. ^F is a toggle,
+    // so on a row that is already starred it unstars -- saying "favorite"
+    // there describes the state instead of the action. And a sign-in offer
+    // has no model to star at all, so the hint must go rather than name an
+    // action that silently does nothing.
+    auto render = [](const Model& mm) {
+        auto root = ui::models_panel(mm);
+        maya::StylePool pool;
+        maya::Canvas canvas(120, 200, &pool);
+        canvas.clear();
+        maya::render_tree(root, canvas, pool, maya::theme::native, true);
+        std::string s;
+        for (int y = 0; y <= canvas.max_content_row(); ++y) {
+            for (int x = 0; x < 120; ++x) {
+                char32_t ch = canvas.get(x, y).character;
+                s.push_back(ch && ch < 128 ? static_cast<char>(ch) : ' ');
+            }
+            s.push_back('\n');
+        }
+        return s;
+    };
+
+    {   // A plain row: ^F adds a favorite.
+        Model m;
+        m.ui.panel.descend(pn::Models{});
+        FusedRow r;
+        r.provider_id = "anthropic";
+        r.label       = "Anthropic";
+        r.model.id    = ModelId{"claude-opus-4-5"};
+        r.authed      = true;
+        m.d.fused_rows.push_back(r);
+        const std::string s = render(m);
+        INFO(s);
+        CHECK(has(s, "favorite"));
+        CHECK_FALSE(has(s, "unfavorite"));
+    }
+    {   // Already a favorite: the same key REMOVES it.
+        Model m;
+        m.ui.panel.descend(pn::Models{});
+        FusedRow r;
+        r.provider_id    = "anthropic";
+        r.label          = "Anthropic";
+        r.model.id       = ModelId{"claude-opus-4-5"};
+        r.model.favorite = true;
+        r.authed         = true;
+        m.d.fused_rows.push_back(r);
+        const std::string s = render(m);
+        INFO(s);
+        CHECK(has(s, "unfavorite"));
+    }
+}
+
 TEST_CASE("model picker: a scoped list never claims to search all providers") {
     // The title said "Anthropic only" while the search box invited you to
     // filter "across providers" -- two contradictory claims on one screen.
