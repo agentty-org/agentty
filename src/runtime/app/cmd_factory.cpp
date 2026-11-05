@@ -1043,9 +1043,15 @@ Cmd launch_stream(Model& m) {
 
     // Record what this turn will ACTUALLY be dispatched on, so the assistant
     // header can name its true author instead of the picker selection (which
-    // Smart Mode routinely overrides). Mirrors the req.model choice below;
-    // orchestrate=false means the plain selection serves the turn, and an
-    // empty string tells the view to fall back to it.
+    // the user is free to change mid-thread).
+    //
+    // ROLE is Smart-Mode-only: a turn that wasn't routed has no role, and
+    // claiming one would overstate the feature in the stats fold. MODEL is
+    // stamped ALWAYS. It used to share the orchestrate gate, which meant a
+    // plain (Smart Mode off) session recorded no provenance at all -- so
+    // every header fell back to the live selection and switching models
+    // relabelled the whole transcript retroactively (#120). The selection is
+    // not a fact about a turn that already ran.
     if (!compacting && orchestrate && !turn_profile.model.empty()) {
         m.s.smart_turn_model = ModelId{turn_profile.model};
         // The role the router ACTUALLY chose for this turn. Hardcoding
@@ -1055,7 +1061,9 @@ Cmd launch_stream(Model& m) {
         // 577-turn trace read "strategic 501" and looked correct.
         m.s.smart_turn_role  = routing.role;
     } else {
-        m.s.smart_turn_model = ModelId{};
+        // Not routed: the plain selection serves the turn. Still a fact
+        // about THIS turn, so it is still recorded.
+        m.s.smart_turn_model = compacting ? ModelId{} : m.d.model_id;
         m.s.smart_turn_role.reset();
     }
 

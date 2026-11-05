@@ -23,6 +23,7 @@
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/app/cmd_factory.hpp"   // launch_stream
 #include "agentty/provider/selection.hpp"
 #include "agentty/store/store.hpp"
 
@@ -124,14 +125,20 @@ TEST_CASE("turn provenance: the header names the model that served the turn") {
               "stamping provenance must not disturb the user's selection");
     }
 
-    // ── Smart Mode off: no stamp, the header falls back to the selection ──
+    // ── Smart Mode off: the turn is STILL stamped, with no role ──────
+    // The model that served the turn is a fact about the turn whether or
+    // not a router chose it. Leaving it empty here was #120: a plain
+    // session recorded nothing, so every header fell back to the live
+    // selection and switching models relabelled the whole transcript.
     {
-        Model m = mid_turn("mistral-large-3", "", std::nullopt);
+        Model m = mid_turn("mistral-large-3", "mistral-large-3", std::nullopt);
         auto [m1, _] = app::update(std::move(m), Msg{StreamStarted{}});
         const auto& asst = m1.d.current.messages.back();
-        CHECK(asst.served_model.empty(),
-              "no Smart Mode routing ⇒ no stamp (the selection served it)");
-        CHECK(!asst.served_role.has_value(), "and no role tag");
+        CHECK(asst.served_model == ModelId{"mistral-large-3"},
+              "an unrouted turn still records the model that served it");
+        CHECK(!asst.served_role.has_value());
+        INFO("no role — nothing routed it, and claiming one would "
+             "overstate Smart Mode in the stats fold");
     }
 
     // ── Switching models does NOT relabel turns already in the transcript ──
@@ -157,4 +164,45 @@ TEST_CASE("turn provenance: the header names the model that served the turn") {
         CHECK(a.compute_render_key() != b.compute_render_key(),
               "served_model/role must invalidate the per-message render cache");
     }
+}
+
+TEST_CASE("turn provenance: a plain session stamps every turn (#120)") {
+    // The reported bug, at the layer it actually lived. launch_stream used
+    // to write smart_turn_model ONLY when Smart Mode orchestrated the turn,
+    // so an ordinary session left every assistant message unstamped. The
+    // header then fell back to the live selection, and switching model
+    // relabelled the entire transcript retroactively -- a Granite turn
+    // claiming to be the Spark model the user had just picked.
+    install_stub_deps();
+    {
+        provider::Selection sel;
+        sel.kind = provider::Kind::Anthropic;
+        provider::select(::agentty::IoAccess::grant(), sel);
+    }
+
+    Model m;
+    m.d.model_id = ModelId{"granite-4.2-3b"};
+    // Smart Mode OFF -- the condition under which nothing was recorded.
+    CHECK_FALSE(m.d.smart.orchestration());
+
+    Message user;
+    user.role = Role::User;
+    user.text = "first";
+    m.d.current.messages.push_back(std::move(user));
+    Message asst;
+    asst.role = Role::Assistant;
+    m.d.current.messages.push_back(std::move(asst));
+
+    (void)agentty::app::cmd::launch_stream(m);
+    CHECK(m.s.smart_turn_model == ModelId{"granite-4.2-3b"},
+          "an unrouted turn records the model serving it");
+    INFO("an unrouted turn gets no role");
+    CHECK_FALSE(m.s.smart_turn_role.has_value());
+
+    // The stamp lands on the message, and survives a later model switch.
+    auto [m1, _] = app::update(std::move(m), Msg{StreamStarted{}});
+    CHECK(m1.d.current.messages.back().served_model == ModelId{"granite-4.2-3b"});
+    m1.d.model_id = ModelId{"spark-1"};
+    CHECK(m1.d.current.messages.back().served_model == ModelId{"granite-4.2-3b"},
+          "switching model must not rewrite who served an earlier turn");
 }

@@ -638,8 +638,15 @@ struct StreamState {
     // The model + role the IN-FLIGHT turn was actually dispatched on. Written
     // by launch_stream once the role is resolved, read when the assistant
     // message settles so the turn header can name its true author (see
-    // Message::served_model). Empty when Smart Mode is off — the turn ran on
-    // the plain selection and the header falls back to it.
+    // Message::served_model).
+    //
+    // The MODEL is set for every live turn, routed or not: with Smart Mode
+    // off it is simply the selection, which is still the fact about THIS
+    // turn. (It used to be left empty, so a plain session stamped nothing
+    // and switching models retroactively relabelled the transcript — #120.)
+    // The ROLE stays empty unless Smart Mode actually routed the turn.
+    // Both are cleared when the turn settles, so the status badge falls back
+    // to the live selection while idle.
     ModelId                         smart_turn_model;
     std::optional<smart::ModelRole> smart_turn_role;
     // Which summary shape the in-flight compaction is producing. Set at
