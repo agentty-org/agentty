@@ -119,7 +119,10 @@ void invalidate_probe(rs::EmbedForm& f) {
 
 // Project the probe state onto the Action row + footer note, so the outcome
 // renders where the action lives. One place, called after every transition.
-void refresh_status(rs::EmbedForm& f) {
+// Pane-specific status note. `advanced` is the pane's current toggle state:
+// ^E flips it, so the note must name what the NEXT press does rather than
+// always saying "advanced" (which reads as a no-op once the rows are out).
+void refresh_status(rs::EmbedForm& f, bool advanced = false) {
     using A = form::field::Action;
     if (auto* row = f.form.find(rs::kFieldTest))
         if (auto* act = std::get_if<A>(&row->value)) {
@@ -160,7 +163,7 @@ void refresh_status(rs::EmbedForm& f) {
         // form layer only claims it (caret-end) while EDITING, and the pane
         // handler fires it in browse mode only. Shown only when there is
         // nothing more urgent to say.
-        f.form.note = "^E  advanced";
+        f.form.note = advanced ? "^E  hide advanced" : "^E  advanced";
 }
 
 // Build the pane's form for `mode`, seeded with what the live retriever
@@ -173,13 +176,19 @@ void refresh_status(rs::EmbedForm& f) {
     rs::EmbedForm f;
     f.cfg  = current_embed_config(env, settings);
     f.form = rs::build_form(f.cfg, mode, settings, env.settings, advanced);
-    refresh_status(f);
+    refresh_status(f, advanced);
     return f;
 }
 
 [[nodiscard]] rs::EmbedForm* form_of(Model& m) {
     auto* o = m.ui.panel.get<pn::Rag>();
     return o ? &o->embed : nullptr;
+}
+
+// The pane's live advanced-rows flag, for the status note.
+[[nodiscard]] bool adv_of(Model& m) {
+    const auto* o = m.ui.panel.get<pn::Rag>();
+    return o && o->advanced;
 }
 
 } // namespace
@@ -243,6 +252,8 @@ Cmd rag_settings_update(Model& m, msg::RagMsg rm) {
                 form::rebuild(o->embed.form,
                               rs::build_form(o->embed.cfg, o->cursor, m.d.persisted,
                                              m.env.settings, o->advanced));
+                // The note names the next press, so it has to follow the flip.
+                refresh_status(o->embed, o->advanced);
             }
             return Cmd::none();
         },
@@ -300,7 +311,7 @@ Cmd rag_settings_update(Model& m, msg::RagMsg rm) {
                     }
                 }
             }
-            refresh_status(*f);
+            refresh_status(*f, adv_of(m));
 
             if (applied.fired)
                 return Cmd::batch(
@@ -339,7 +350,7 @@ Cmd rag_settings_update(Model& m, msg::RagMsg rm) {
             // consequence (a changed field invalidates the probe) stays here.
             if (form::paste_into_focused(f->form, e.text)) {
                 invalidate_probe(*f);
-                refresh_status(*f);
+                refresh_status(*f, adv_of(m));
             }
             return Cmd::none();
         },
@@ -451,7 +462,7 @@ Cmd rag_settings_update(Model& m, msg::RagMsg rm) {
             form::rebuild(f->form, rs::build_form(f->cfg, o ? o->cursor : store::RagMode::On,
                                                   m.d.persisted, m.env.settings,
                                                   o && o->advanced));
-            refresh_status(*f);
+            refresh_status(*f, o && o->advanced);
             return Cmd::none();
         },
         [&](RagEmbedKeySaved& e) -> Cmd {
@@ -468,7 +479,7 @@ Cmd rag_settings_update(Model& m, msg::RagMsg rm) {
                 return Cmd::none();
             if (e.ready)       f->probe = rs::EmbedForm::Ok{e.dim, e.latency_ms};
             else if (e.failed) f->probe = rs::EmbedForm::Failed{std::move(e.reason)};
-            refresh_status(*f);
+            refresh_status(*f, adv_of(m));
             return Cmd::none();
         },
     }, rm);

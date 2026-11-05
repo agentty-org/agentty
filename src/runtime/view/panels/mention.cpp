@@ -87,6 +87,15 @@ Element mention_panel(const Model& m) {
             fg_dim(muted)));
     }
 
+    // Enter/Esc/arrows all work here (on_mention_palette) but were never
+    // advertised, so the only way to learn them was to guess. Same grammar
+    // as the command palette.
+    cfg.footer.push_back(key_hints({
+        {"\xe2\x86\x91\xe2\x86\x93", "move", 5},   // ↑↓
+        {"Enter", matches.empty() ? "" : "insert", 6},
+        {"Esc", "close", 4},
+    }));
+
     return Panel{std::move(cfg)}.build();
 }
 

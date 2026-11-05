@@ -341,7 +341,14 @@ Element settings_list_panel(const Model& m) {
             const se::Item* cur = (o->index >= 0 && o->index < static_cast<int>(rows.size()))
                 ? &rows[static_cast<std::size_t>(o->index)] : nullptr;
             const bool on_tool   = cur && cur->action == se::Action::ToggleTool;
-            const bool on_server = cur && cur->action == se::Action::TogglePlugin;
+            // A server row is TogglePlugin normally, ApprovePlugin in an
+            // untrusted project. The reducer accepts `e` and `d` on BOTH
+            // (settings_list.cpp), so checking only TogglePlugin hid two
+            // working keys exactly where a user is most likely to want
+            // them -- deciding what to do about an unapproved server.
+            const bool on_server = cur
+                && (cur->action == se::Action::TogglePlugin
+                    || cur->action == se::Action::ApprovePlugin);
             if (cur && cur->expandable)
                 keys.push_back({cur->expanded ? "\xe2\x86\x90" : "\xe2\x86\x92",   // ← / →
                                 cur->expanded ? "hide tools" : "show tools", 4});

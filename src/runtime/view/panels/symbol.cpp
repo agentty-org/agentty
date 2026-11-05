@@ -68,6 +68,13 @@ Element symbol_panel(const Model& m) {
             fg_dim(muted)));
     }
 
+    // Same gap as the @ picker: the keys worked, nothing said so.
+    cfg.footer.push_back(key_hints({
+        {"\xe2\x86\x91\xe2\x86\x93", "move", 5},   // ↑↓
+        {"Enter", matches.empty() ? "" : "insert", 6},
+        {"Esc", "close", 4},
+    }));
+
     return Panel{std::move(cfg)}.build();
 }
 
