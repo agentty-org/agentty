@@ -258,4 +258,58 @@ template <typename E, std::uint8_t N>
 [[nodiscard]] constexpr Thinking   next(Thinking v)   noexcept { return cycle<Thinking, 3>(v); }
 [[nodiscard]] constexpr Timestamps next(Timestamps v) noexcept { return cycle<Timestamps, 3>(v); }
 
+// ── The field table ──────────────────────────────────────────────────────
+//
+// EVERY Prefs field, declared ONCE. The settings.json writer, its loader and
+// the save-time merge all walk this; none of them names a field.
+//
+// WHY THIS EXISTS
+// ===============
+// Those three used to spell the list out by hand, and nothing made them
+// agree. Each omission failed differently and silently: missing from the
+// writer meant the setting never reached disk; missing from the loader meant
+// it was written and then ignored on restart; missing from the merge meant a
+// second agentty session clobbered it on its next save. That last one is what
+// "settings don't persist" looked like in practice.
+//
+// The other settings blocks (smart, rag, web_search, paste) have had this
+// shape for a while via settings_registry.hpp. `ui` predates it. It does not
+// move ONTO that registry because the registry stores an enum as a STRING
+// ("convex", "auto") while ui stores typed enums written as integers --
+// migrating would change the on-disk format for every existing user to buy
+// nothing the table below does not already give.
+//
+// A field here is `member pointer + json key`. The default comes from
+// `Prefs{}` itself, through the member pointer, so there is no second copy of
+// it to drift: this table cannot disagree with the struct about what a
+// default is, because it never states one.
+
+// Visit every Prefs field, passing (member-pointer, json-key) to `f`.
+//
+// A generic lambda sees each field at its OWN type, so a visitor can switch
+// on it with `if constexpr` -- an int stays an int, an enum stays its enum,
+// and nothing round-trips through a variant or a string.
+//
+// ADDING A FIELD: add it to Prefs, add one line here. The writer, loader and
+// merge pick it up with no edit. Forgetting the line is caught by
+// tests/lint/prefs_sync.py, which compares this table against the struct.
+template <typename F>
+constexpr void for_each_field(F&& f) {
+    f(&Prefs::theme,            std::string_view{"theme"});
+    f(&Prefs::lang,             std::string_view{"lang"});
+    f(&Prefs::tier,             std::string_view{"tier"});
+    f(&Prefs::polarity,         std::string_view{"polarity"});
+    f(&Prefs::density,          std::string_view{"density"});
+    f(&Prefs::prose_width,      std::string_view{"prose_width"});
+    f(&Prefs::compact_turns,    std::string_view{"compact_turns"});
+    f(&Prefs::thread_preview,   std::string_view{"thread_preview"});
+    f(&Prefs::foreign_sessions, std::string_view{"foreign_sessions"});
+    f(&Prefs::motion,           std::string_view{"motion"});
+    f(&Prefs::scrollback,       std::string_view{"scrollback"});
+    f(&Prefs::syntax,           std::string_view{"syntax"});
+    f(&Prefs::tool_output,      std::string_view{"tool_output"});
+    f(&Prefs::thinking,         std::string_view{"thinking"});
+    f(&Prefs::timestamps,       std::string_view{"timestamps"});
+}
+
 }  // namespace agentty::ui_prefs

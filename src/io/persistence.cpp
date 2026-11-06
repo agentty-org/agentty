@@ -2979,29 +2979,32 @@ store::Settings load_settings_from_disk() {
         // refusing to load.
         if (j.contains("ui") && j["ui"].is_object()) {
             const auto& u = j["ui"];
-            auto en = [&u](const char* k, auto def) {
-                using E = decltype(def);
-                return static_cast<E>(u.value(k, static_cast<int>(def)));
-            };
-            s.ui.theme         = u.value("theme", std::string{});
-            // Empty = auto (follow the environment). Same shape as theme:
-            // an absent key and an explicit "" both mean "nobody chose".
-            s.ui.lang          = u.value("lang", std::string{});
-            s.ui.tier          = en("tier",       ui_prefs::ColorTier::Auto);
-            s.ui.polarity      = en("polarity",   ui_prefs::Polarity::Auto);
-            s.ui.density       = en("density",    ui_prefs::Density::Normal);
-            s.ui.motion        = en("motion",     ui_prefs::Motion::Full);
-            s.ui.scrollback    = en("scrollback", ui_prefs::Scrollback::Auto);
+            // Walked, not spelled out. An ABSENT key keeps the value Prefs
+            // already holds -- its own default -- so a config written by an
+            // older build, or hand-edited badly, degrades to the default look
+            // rather than refusing to load.
+            ui_prefs::for_each_field([&](auto member, std::string_view key) {
+                const std::string k{key};
+                if (!u.contains(k)) return;
+                auto& dst = s.ui.*member;
+                using V = std::remove_cvref_t<decltype(dst)>;
+                try {
+                    if constexpr (std::is_enum_v<V>) {
+                        if (u[k].is_number_integer())
+                            dst = static_cast<V>(u[k].get<int>());
+                    } else {
+                        dst = u[k].get<V>();
+                    }
+                } catch (...) {
+                    // Wrong JSON type for this field: keep the default. One
+                    // bad key must not cost the user every other setting.
+                }
+            });
+            // Range-check what the file claims. An out-of-range enum is a
+            // hand-edit or a downgrade, and casting it straight in would
+            // index past the end of a label table.
             if (static_cast<int>(s.ui.scrollback) > static_cast<int>(ui_prefs::Scrollback::Auto))
                 s.ui.scrollback = ui_prefs::Scrollback::Auto;
-            s.ui.tool_output   = en("tool_output",ui_prefs::ToolOutput::Preview);
-            s.ui.thinking      = en("thinking",   ui_prefs::Thinking::Collapsed);
-            s.ui.timestamps    = en("timestamps", ui_prefs::Timestamps::Off);
-            s.ui.prose_width   = u.value("prose_width", 0);
-            s.ui.syntax        = u.value("syntax", true);
-            s.ui.compact_turns = u.value("compact_turns", false);
-            s.ui.thread_preview = u.value("thread_preview", true);
-            s.ui.foreign_sessions = u.value("foreign_sessions", true);
         }
         auto favs = j.value("favorite_models", std::vector<std::string>{});
         for (auto& f : favs) s.favorite_models.push_back(ModelId{std::move(f)});
@@ -3439,26 +3442,23 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
     // Only when it differs from the default look, so a settings file stays
     // a record of what the user CHANGED rather than a dump of every default.
     if (s.ui != ui_prefs::Prefs{}) {
+        // Walked, not spelled out. Every field goes through the one table in
+        // ui_prefs.hpp, so a new setting is written without touching this.
+        //
+        // theme and lang are omitted when EMPTY rather than when default --
+        // same thing, since "" is their default, and the absence is what
+        // makes `auto` work (writing "en" would freeze a user to English the
+        // moment they move to a German machine).
+        const ui_prefs::Prefs def{};
         json u;
-        if (!s.ui.theme.empty())  u["theme"] = s.ui.theme;
-        // Only when CHOSEN. Writing "en" for a user who never opened the
-        // picker would freeze them to English the moment they move to a
-        // German machine -- the absence is what makes `auto` work.
-        if (!s.ui.lang.empty())   u["lang"]  = s.ui.lang;
-        u["tier"]          = static_cast<int>(s.ui.tier);
-        u["polarity"]      = static_cast<int>(s.ui.polarity);
-        u["density"]       = static_cast<int>(s.ui.density);
-        u["motion"]        = static_cast<int>(s.ui.motion);
-        u["scrollback"]    = static_cast<int>(s.ui.scrollback);
-        u["tool_output"]   = static_cast<int>(s.ui.tool_output);
-        u["thinking"]      = static_cast<int>(s.ui.thinking);
-        u["timestamps"]    = static_cast<int>(s.ui.timestamps);
-        u["prose_width"]   = s.ui.prose_width;
-        u["syntax"]        = s.ui.syntax;
-        u["compact_turns"] = s.ui.compact_turns;
-        u["thread_preview"] = s.ui.thread_preview;
-        u["foreign_sessions"] = s.ui.foreign_sessions;
-        j["ui"] = std::move(u);
+        ui_prefs::for_each_field([&](auto member, std::string_view key) {
+            const auto& v = s.ui.*member;
+            if (v == def.*member) return;          // default: not written
+            using V = std::remove_cvref_t<decltype(v)>;
+            if constexpr (std::is_enum_v<V>) u[std::string{key}] = static_cast<int>(v);
+            else                             u[std::string{key}] = v;
+        });
+        if (!u.empty()) j["ui"] = std::move(u);
     }
     json favs = json::array();
     for (const auto& mid : s.favorite_models) favs.push_back(mid);
@@ -3845,36 +3845,30 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
             // inside `ui`: every field has a fixed default, so an absent field
             // means exactly that default, and "did we change it" is a plain
             // comparison against our baseline's value.
-            // Every ui field with the value an ABSENT key means. The writer
-            // drops the whole block when every field is default and omits an
-            // empty theme/lang, so absence is not "no opinion" -- it is the
-            // default. Comparing filled values makes those two the same
-            // thing; comparing raw presence (the first version of this) read
-            // a session whose ui had gone back to all-defaults as having
-            // DROPPED every field, so its empty block won and wiped a
-            // sibling's scrollback.
             //
-            // Must list every field Prefs serialises. A missing one is not
-            // merged at all (it rides along with whatever block we write),
-            // which the round-trip test catches.
-            static const json kUiDefaults = {
-                {"theme", ""}, {"lang", ""},
-                {"tier", static_cast<int>(ui_prefs::ColorTier::Auto)},
-                {"polarity", static_cast<int>(ui_prefs::Polarity::Auto)},
-                {"density", static_cast<int>(ui_prefs::Density::Normal)},
-                {"motion", static_cast<int>(ui_prefs::Motion::Full)},
-                {"scrollback", static_cast<int>(ui_prefs::Scrollback::Auto)},
-                {"tool_output", static_cast<int>(ui_prefs::ToolOutput::Preview)},
-                {"thinking", static_cast<int>(ui_prefs::Thinking::Collapsed)},
-                {"timestamps", static_cast<int>(ui_prefs::Timestamps::Off)},
-                {"prose_width", 0},
-                {"syntax", true},
-                {"compact_turns", false},
-                {"thread_preview", true},
-                {"foreign_sessions", true},
-            };
+            // The writer drops a default field (and the whole block when all
+            // are default), so absence is not "no opinion" -- it is the
+            // default. Comparing FILLED values makes those two the same
+            // thing; comparing raw presence read a session whose ui had gone
+            // back to all-defaults as having DROPPED every field, so its
+            // empty block won and wiped a sibling's scrollback.
+            //
+            // Built by walking ui_prefs::for_each_field over a default-
+            // constructed Prefs, so there is no second list of fields OR of
+            // defaults to drift from the struct.
+            const auto ui_defaults = [] {
+                json d = json::object();
+                const ui_prefs::Prefs p{};
+                ui_prefs::for_each_field([&](auto member, std::string_view key) {
+                    const auto& v = p.*member;
+                    using V = std::remove_cvref_t<decltype(v)>;
+                    if constexpr (std::is_enum_v<V>) d[std::string{key}] = static_cast<int>(v);
+                    else                             d[std::string{key}] = v;
+                });
+                return d;
+            }();
             const auto ui_filled = [&](const json& doc) {
-                json out = kUiDefaults;
+                json out = ui_defaults;
                 if (doc.contains("ui") && doc["ui"].is_object())
                     for (auto it = doc["ui"].begin(); it != doc["ui"].end(); ++it)
                         out[it.key()] = it.value();
@@ -3902,8 +3896,8 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
                 // and stop a shipped-default change reaching this user.
                 json compact = json::object();
                 for (auto it = ui_out.begin(); it != ui_out.end(); ++it)
-                    if (!kUiDefaults.contains(it.key())
-                        || kUiDefaults[it.key()] != it.value())
+                    if (!ui_defaults.contains(it.key())
+                        || ui_defaults[it.key()] != it.value())
                         compact[it.key()] = it.value();
                 if (compact.empty()) j.erase("ui");
                 else                 j["ui"] = std::move(compact);
