@@ -924,6 +924,16 @@ commit_provider_switch(Model& m, std::string_view spec,
         m.d.model_id = ModelId{""};
     }
 
+    // The LIVE routing stamp belongs to the turn that just ran on the
+    // OUTGOING provider. The status badge prefers it over the selection, so
+    // leaving it set across a switch paints the old provider's model beside
+    // the new provider's name -- "Ollama / Opus 4.5", a pairing that cannot
+    // exist. It is normally cleared when a turn settles, but a switch can
+    // happen at any point after that (and the settle path keeps it while
+    // tools are still pending), so the switch has to drop it itself.
+    m.s.smart_turn_model = ModelId{};
+    m.s.smart_turn_role.reset();
+
     // (4) Re-clamp the reasoning-effort tier to what the (possibly new)
     //     active model supports — a stale Xhigh/High carried onto a model
     //     without that tier (or a non-reasoning model) would otherwise show a

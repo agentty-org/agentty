@@ -317,6 +317,44 @@ TEST_CASE("a saved-but-unusable host still counts as unconfigured") {
           "nothing usable was configured, so the new host is adopted");
 }
 
+TEST_CASE("switching provider drops the previous turn's live stamp") {
+    // The status badge prefers m.s.smart_turn_model over the selection, so
+    // a stamp left over from the OUTGOING provider paints an impossible
+    // pair: "Ollama" beside "Opus 4.5". The stamp is normally cleared when
+    // a turn settles, but a switch can happen any time after that -- and
+    // since #120 every turn sets it, not just Smart-Mode-routed ones, so
+    // the stale value is now the common case rather than a rare one.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-stamp-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    agentty::store::Settings s;
+    s.provider_keys["localhost:11434"] = "";
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;
+    m.d.model_id = agentty::ModelId{"claude-opus-4-5"};
+    // A turn just ran on Anthropic and left its stamp behind.
+    m.s.smart_turn_model = agentty::ModelId{"claude-opus-4-5"};
+
+    auto cmd = ::agentty::app::detail::commit_provider_switch(
+        m, "localhost:11434", "Ollama");
+    (void)cmd;
+
+    check(m.s.smart_turn_model.empty(),
+          "the outgoing provider's live stamp is dropped on the switch");
+    check(!m.s.smart_turn_role.has_value(), "and so is its role");
+    // The badge reads smart_turn_model first; with it cleared it falls back
+    // to the selection, which is the host's own (as yet unresolved) model.
+    check(m.d.model_id.value != "claude-opus-4-5",
+          "so the badge cannot still name the old provider's model");
+}
+
 TEST_CASE("custom host key prompt transitions") {
 
     // Redirect XDG_CONFIG_HOME to a temp dir with no agentty/ subdir so
