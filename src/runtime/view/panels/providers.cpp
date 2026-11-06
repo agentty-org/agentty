@@ -105,6 +105,28 @@ Element providers_panel(const Model& m) {
     // one: it's a dim action row, not a warning.
     const bool any_unconfigured = more_count > 0;
 
+    // Name column width: the longest provider label actually on screen, so
+    // every description starts at the SAME column and the list scans
+    // vertically. Capped so one long custom-host spec can't push every
+    // blurb off the right edge.
+    int name_w = 0;
+    for (const auto& sr : srows) {
+        if (sr.more_signpost) continue;
+        std::string nm;
+        if (const auto* p = sr.row.preset())            nm = std::string{p->label};
+        else if (const auto* a = sr.row.acp())          nm = a->id;
+        else if (const auto* s = sr.row.custom_host())  nm = *s;
+        name_w = std::max(name_w, static_cast<int>(maya::string_width(nm)));
+    }
+    name_w = std::min(name_w, 22);
+    // Pad `nm` out to the name column. A name longer than the cap keeps its
+    // full text and simply pushes its own description right -- truncating a
+    // provider name to save alignment is the wrong trade.
+    const auto pad_name = [&](const std::string& nm) {
+        const int w = static_cast<int>(maya::string_width(nm));
+        return nm + std::string(static_cast<std::size_t>(std::max(1, name_w - w + 2)), ' ');
+    };
+
     for (std::size_t ri = 0; ri < srows.size(); ++ri) {
         const auto& sr = srows[ri];
         const auto& r  = sr.row;
@@ -146,6 +168,11 @@ Element providers_panel(const Model& m) {
         // The "N more providers" signpost, rendered as a real row so Enter
         // reaches it. Dim and stated as an action, not a status.
         if (sr.more_signpost) {
+            // An action, not a destination: a dim › marker in the badge
+            // column distinguishes it from the provider rows above without
+            // borrowing the ● that means "active".
+            row.badge       = "\xe2\x80\xba";          // ›
+            row.badge_style = fg_dim(muted);
             row.leading = "Show " + std::to_string(sectioned.n_hidden)
                         + " more providers";
             row.leading_style  = fg_dim(muted);
@@ -160,12 +187,22 @@ Element providers_panel(const Model& m) {
             const bool active = (p->id == active_id);
             const bool confirming = (picker->confirm_remove == std::string{p->id});
             auto [note, note_color] = preset_note(*p, active);
-            row.leading        = std::string{p->label} + "  " + std::string{p->blurb};
+            // ● in the badge column, like the model picker: the marker lives
+            // in chrome the widget already reserves, so every provider name
+            // starts at the same column instead of the active row being
+            // indented one glyph out of line with its neighbours.
+            //
+            // A SPACE when inactive, not an empty string: maya only reserves
+            // the badge cell for rows that set one, so leaving it empty
+            // pulled every other row a glyph left and undid the alignment.
+            row.badge       = active ? "\xe2\x97\x8f" : " ";   // ●
+            row.badge_style = fg_of(accent);
+            row.leading = pad_name(std::string{p->label})
+                        + std::string{p->blurb};
             // Primary content renders at full foreground (same rule as the
             // model picker): dimming EVERY non-active row to make one stand
             // out inverts the hierarchy — it makes the whole list read as
             // unavailable while the trailing status chip out-shouts the name.
-            // Bold + the ● marker is enough to find the active row.
             //
             // An OFFER row is the one exception: it's a provider you haven't
             // set up, shown because you searched for it, so it reads dim and
@@ -188,15 +225,20 @@ Element providers_panel(const Model& m) {
             row.active         = active;
         } else if (const auto* agent = r.acp()) {
             const bool active = (agent->id == active_id);
-            row.leading        = agent->id + "  external ACP agent (" + agent->command + ")";
+            row.badge       = active ? "\xe2\x97\x8f" : " ";   // ●
+            row.badge_style = fg_of(accent);
+            row.leading        = pad_name(agent->id)
+                               + "external ACP agent (" + agent->command + ")";
             row.leading_style  = active ? fg_bold(fg) : fg_of(fg);
-            row.trailing       = "\xe2\x97\x8f agent";
-            row.trailing_style = fg_of(info);
+            row.trailing       = "agent";
+            row.trailing_style = fg_dim(info);
             row.active         = active;
         } else if (const auto* spec = r.custom_host()) {
             const bool active = (*spec == active_id);
             const bool confirming = (picker->confirm_remove == *spec);
-            row.leading        = *spec + "  custom OpenAI-compatible host";
+            row.badge       = active ? "\xe2\x97\x8f" : " ";   // ●
+            row.badge_style = fg_of(accent);
+            row.leading        = pad_name(*spec) + "custom OpenAI-compatible host";
             row.leading_style  = active ? fg_bold(fg) : fg_of(fg);
             if (confirming) {
                 row.trailing       = "\xe2\x9c\x97 press again to remove";
@@ -229,16 +271,22 @@ Element providers_panel(const Model& m) {
             // muted — muted is this TUI's vocabulary for "unavailable", and
             // reading the one row that solves your problem as disabled is
             // exactly how a user concludes agentty cannot reach their server.
+            row.badge          = "+";
+            row.badge_style    = fg_of(success);
             row.leading        = "Use " + *prefill + "  as a custom OpenAI-compatible host";
             row.leading_style  = fg_of(fg);
             row.trailing       = "\xe2\x8f\x8e connect";
             row.trailing_style = fg_of(info);
         } else {   // NewCustomHost sentinel, unpromoted
-            row.leading        = std::string{"Custom host\xe2\x80\xa6  "}
+            // `+` marks the one row that CREATES a provider rather than
+            // selecting one, so "add" is legible without reading the label.
+            row.badge          = "+";
+            row.badge_style    = fg_of(success);
+            row.leading        = pad_name("Custom host\xe2\x80\xa6")
                                + "any OpenAI-compatible server (host:port)";
             row.leading_style  = fg_of(fg);
             row.trailing       = "\xe2\x9c\x8e edit";
-            row.trailing_style = fg_of(info);
+            row.trailing_style = fg_dim(info);
         }
         // Under width pressure the STATUS chip gives way, not the provider
         // name — the name is what you select; "✓ signed in · accounts" is
