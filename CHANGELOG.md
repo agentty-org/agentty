@@ -4,6 +4,38 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.48] - 2026-11-06
+
+### Changed
+- **Setting up a provider no longer switches to it.** Adding a custom host
+  or pasting an API key used to make that provider active — and because a
+  switch has to pick a model for the new backend, it also changed the model
+  you were working with. Registering a spare key while mid-task ended your
+  session. The credential is saved and the toast offers `Ctrl+P` to switch
+  when you actually want to. First run still adopts, since there is no
+  session to protect and leaving you unconfigured would be worse.
+- **The provider picker reads as columns.** Descriptions start at a fixed
+  column so the provider names scan vertically, and the marker column now
+  carries meaning: `●` for the active provider, `›` for "show more", `+`
+  for the row that adds a host.
+
+### Fixed
+- **Picking a model updates the badge immediately**, instead of waiting for
+  the next message. The badge shows the model that actually served the live
+  turn (they differ under Smart Mode), and that marker was not cleared when
+  you chose a different model — so it kept naming the previous one until a
+  new turn overwrote it. The same staleness made a provider switch show an
+  impossible pair, like `Ollama` beside `Opus 4.5`.
+- **A backend still loading its catalogue says so.** Adding a local host
+  left the badge showing a provider with a blank model, which reads as a
+  half-finished switch; it now says `loading models…` while the fetch is in
+  flight, or `no model · ^/ to pick` if it finished without one. The model
+  fills itself in when the catalogue lands — dismissing the picker is safe.
+- **Sign-in adopts only when nothing usable is configured.** A keyless local
+  host is stored with an empty key, so the old check counted it as a working
+  setup; someone whose only entry was such a host got no adopt and a dead
+  session.
+
 ## [0.9.47] - 2026-11-05
 
 ### Changed
