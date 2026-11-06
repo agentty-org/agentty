@@ -1037,17 +1037,25 @@ bool no_provider_configured(const Model& m) {
     // Registry providers: a Saved or Env credential counts. Local/no-auth
     // backends report Local and do NOT -- Ollama being installed on the box
     // is not evidence the user set agentty up.
+    //
+    // EXCEPT the active one. If the user is working against a local preset
+    // (Ollama) right now, that is a session to protect even though it has
+    // no credential. Skipping it made a user on Ollama with no keys look
+    // unconfigured, so adding any provider adopted it and pulled them off.
+    const std::string active = m.d.selection.catalog_id();
     for (const auto& p : provider::providers()) {
         const auto src = provider::auth_source(p, m.d.persisted, m.d.auth);
         if (src == provider::AuthSource::Saved
             || src == provider::AuthSource::Env)
+            return false;
+        if (src == provider::AuthSource::Local && !active.empty()
+            && std::string{p.id} == active)
             return false;
     }
     // Saved custom hosts: one with a non-empty key is a configured backend.
     // A keyless one is only a configured backend if it is the ACTIVE
     // selection -- i.e. the user already chose to work against it, which is
     // exactly the session the next sign-in must not disturb.
-    const std::string active = m.d.selection.catalog_id();
     for (const auto& [spec, key] : m.d.persisted.provider_keys) {
         if (!key.empty()) return false;
         if (!active.empty() && spec == active) return false;

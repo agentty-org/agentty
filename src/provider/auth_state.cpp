@@ -70,8 +70,9 @@ AuthSource auth_source(Io io, const ProviderDescriptor& p,
     // the store family; SettingsKey answers come from the INJECTED settings.
     switch (auth::vault::of(p.id).kind) {
         case auth::vault::Kind::AnthropicFile:
-            if (auth::anthropic_signed_in(io)
-                || settings.provider_keys.count(std::string{p.id}) != 0)
+            if (auth::anthropic_signed_in(io)) return AuthSource::Saved;
+            if (auto it = settings.provider_keys.find(std::string{p.id});
+                it != settings.provider_keys.end() && !it->second.empty())
                 return AuthSource::Saved;
             return AuthSource::None;
         case auth::vault::Kind::OAuthFile:
@@ -97,7 +98,12 @@ AuthSource auth_source(const ProviderDescriptor& p,
     const std::string id{p.id};
     switch (auth::vault::of(p.id).kind) {
         case auth::vault::Kind::AnthropicFile:
-            if (view.stored(id) || settings.provider_keys.count(id) != 0)
+            // Non-empty, same rule as the SettingsKey branch below. count()
+            // counted an empty-string entry as a credential, the exact
+            // empty-key shape a keyless custom host writes.
+            if (view.stored(id)) return AuthSource::Saved;
+            if (auto it = settings.provider_keys.find(id);
+                it != settings.provider_keys.end() && !it->second.empty())
                 return AuthSource::Saved;
             return AuthSource::None;
         case auth::vault::Kind::OAuthFile:

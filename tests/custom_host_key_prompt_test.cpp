@@ -23,6 +23,8 @@
 #include "agentty/runtime/msg.hpp"
 #include "agentty/store/store.hpp"
 #include "agentty/provider/selection.hpp"
+#include "agentty/provider/auth_state.hpp"
+#include "agentty/provider/registry.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -406,6 +408,64 @@ TEST_CASE("picking a new model on the same provider updates the badge now") {
     check(m2.d.model_id.value == "claude-opus-5", "the selection moved");
     check(m2.s.smart_turn_model.empty(),
           "and the stale stamp is gone, so the badge names the new model");
+}
+
+TEST_CASE("working on Ollama counts as configured") {
+    // Ollama is a REGISTRY preset with is_local=true, not a custom host. The
+    // adopt check skips Local auth (Ollama being installed isn't evidence
+    // agentty was set up) and only spares a keyless CUSTOM host when it is
+    // active -- so a user actually working on the Ollama preset looked
+    // unconfigured, and adding any provider adopted it and pulled them off.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-ollama-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    agentty::store::Settings s;          // no keys anywhere
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;
+    m.d.selection = agentty::provider::parse_selection("ollama");
+    m.d.model_id  = agentty::ModelId{"qwen3:8b"};
+    const auto before = m.d.selection.catalog_id();
+
+    m.ui.login = login::HostProbing{.spec = "localhost:8080", .attempt_id = 9};
+    agentty::HostProbed r;
+    r.attempt_id = 9;
+    r.spec = "localhost:8080";
+    r.ok = true;
+    r.model_count = 1;
+    r.latency_ms = 5;
+    auto [m2, cmd] = ::agentty::app::detail::step(
+        ::agentty::app::detail::login_update, std::move(m),
+        msg::LoginMsg{std::move(r)});
+
+    check(m2.d.selection.catalog_id() == before,
+          "the Ollama session you were working in stays active");
+    check(m2.d.model_id.value == "qwen3:8b", "and so does its model");
+}
+
+TEST_CASE("an empty provider key is not a credential, Anthropic included") {
+    // auth_source checked non-empty for every key provider EXCEPT Anthropic,
+    // which used count() -- so an empty-string entry read as signed in. The
+    // picker would have filed it under YOURS and the adopt check would have
+    // called it configured.
+    agentty::store::Settings s;
+    s.provider_keys["anthropic"] = "";
+    agentty::auth::AuthView view;
+    view.loaded = true;
+    const auto* p = agentty::provider::preset_for("anthropic");
+    REQUIRE(p != nullptr);
+    CHECK(agentty::provider::auth_source(*p, s, view)
+          == agentty::provider::AuthSource::None);
+
+    s.provider_keys["anthropic"] = "sk-ant-real";
+    CHECK(agentty::provider::auth_source(*p, s, view)
+          == agentty::provider::AuthSource::Saved);
 }
 
 TEST_CASE("custom host key prompt transitions") {
