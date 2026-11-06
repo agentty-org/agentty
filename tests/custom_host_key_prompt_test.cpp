@@ -15,7 +15,9 @@
 // Run: build the `custom_host_key_prompt_test` target, execute. Exit 0 = pass.
 
 #include "agentty/runtime/app/update/internal.hpp"
+#include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
+#include "agentty/runtime/panel/slot.hpp"
 #include "agentty/runtime/login.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
@@ -353,6 +355,57 @@ TEST_CASE("switching provider drops the previous turn's live stamp") {
     // to the selection, which is the host's own (as yet unresolved) model.
     check(m.d.model_id.value != "claude-opus-4-5",
           "so the badge cannot still name the old provider's model");
+}
+
+TEST_CASE("picking a new model on the same provider updates the badge now") {
+    // Reported: switch Opus 5.5 -> Opus 5 and the badge keeps saying 5.5
+    // until you send the next message. The badge prefers the live routing
+    // stamp over the selection, and the SAME-PROVIDER model switch never
+    // cleared it -- so the chip kept naming the model the last turn ran on
+    // until a new turn overwrote the stamp.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-modelstamp-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+
+    agentty::store::Settings s;
+    s.provider_keys["anthropic"] = "sk-ant-x";
+    install_stub_deps(s);
+
+    agentty::Model m;
+    m.d.persisted = s;
+    m.d.auth.loaded = true;
+    m.d.selection = agentty::provider::parse_selection("anthropic");
+    m.d.model_id  = agentty::ModelId{"claude-opus-5-5"};
+    // A turn just finished on 5.5 and left its stamp.
+    m.s.smart_turn_model = agentty::ModelId{"claude-opus-5-5"};
+
+    // Pick a different model on the SAME provider, through the real
+    // picker path: open, put the cursor on the other row, Enter.
+    m.d.available_models = {
+        [] { agentty::ModelInfo i; i.id = agentty::ModelId{"claude-opus-5-5"};
+             i.display_name = "Opus 5.5"; i.provider = "anthropic";
+             i.context_window = 200000; return i; }(),
+        [] { agentty::ModelInfo i; i.id = agentty::ModelId{"claude-opus-5"};
+             i.display_name = "Opus 5"; i.provider = "anthropic";
+             i.context_window = 200000; return i; }(),
+    };
+    auto [m1, c1] = app::update(std::move(m), agentty::Msg{agentty::OpenModels{}});
+    auto* pk = m1.ui.panel.get<agentty::ui::panel::Models>();
+    REQUIRE(pk != nullptr);
+    int target = -1;
+    for (int i = 0; i < static_cast<int>(m1.d.fused_rows.size()); ++i)
+        if (m1.d.fused_rows[static_cast<std::size_t>(i)].model.id.value
+                == "claude-opus-5") { target = i; break; }
+    REQUIRE(target >= 0);
+    pk->index = target;
+    auto [m2, c2] = app::update(std::move(m1),
+                                agentty::Msg{agentty::ModelsSelect{}});
+
+    check(m2.d.model_id.value == "claude-opus-5", "the selection moved");
+    check(m2.s.smart_turn_model.empty(),
+          "and the stale stamp is gone, so the badge names the new model");
 }
 
 TEST_CASE("custom host key prompt transitions") {

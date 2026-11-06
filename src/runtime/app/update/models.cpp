@@ -465,6 +465,14 @@ Cmd switch_to_model_ref(Model& m, const ModelRef& ref, bool record = true) {
     if (ref.provider_id == cur_pid) {
         // Same provider — pure model change.
         m.d.model_id    = ModelId{ref.model_id};
+        // Drop the finished turn's routing stamp. The status badge prefers
+        // it over the selection (during a Smart Mode turn the routed model
+        // is the one actually serving), so leaving it set means picking a
+        // new model changes nothing on screen until the NEXT turn
+        // overwrites it. The cross-provider branch below gets this from
+        // commit_provider_switch; this branch had no such funnel.
+        m.s.smart_turn_model = ModelId{};
+        m.s.smart_turn_role.reset();
         m.s.context_max = resolved_context_max(m, ref.provider_id);
         if (!m.d.model_id.value.empty())
             m.d.effort = clamp_effort(m.d.effort,
@@ -1258,6 +1266,11 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
             Cmd unlisted_note = Cmd::none();
             const auto adopt = [&](const ModelId& id) {
                 m.d.model_id = id;
+                // Same reason as the picker path: the badge prefers the live
+                // routing stamp, so a stamp from the previous turn would
+                // keep naming the OLD model after the catalog corrected it.
+                m.s.smart_turn_model = ModelId{};
+                m.s.smart_turn_role.reset();
                 // The new model may not support the effort tier in use, so
                 // the chip and the wire agree only after a clamp. Scoped to the
                 // active provider, as every other clamp in this file.
