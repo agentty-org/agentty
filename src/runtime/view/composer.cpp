@@ -254,13 +254,19 @@ maya::Composer::Config composer_config(const Model& m) {
     // whether to press Enter.
     //
     // Appended to the model badge rather than replacing it: the badge is
-    // what you are about to send WITH, and trading it away to say when would
-    // answer one question by hiding another. The hint sheds first under
-    // width pressure for the same reason.
+    // what you are about to send WITH, and trading it away to say WHEN
+    // would answer one question by hiding another.
+    //
+    // Kept to two words. The footer already carries the badge, the word and
+    // token counters and the profile chip; the full sentence ("sends when
+    // this turn ends") made seven competing items out of a row that is
+    // meant to be ambient. The transcript row under the queued message
+    // carries the long form, which is where someone asking "what happened
+    // to my message" is already looking.
     else if (m.s.active() && !m.ui.composer.text.empty()) {
         cfg.status = maya::dsl::h(
             model_badge_config(m),
-            maya::dsl::text("  \xe2\x86\xb5 queues \xc2\xb7 sends when this turn ends",
+            maya::dsl::text("  \xe2\x86\xb5 queues",
                             maya::Style{}.with_fg(muted).with_dim())).build();
     }
 

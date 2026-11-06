@@ -14,6 +14,7 @@
 
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/view/thread/conversation.hpp"
+#include "agentty/runtime/view/composer.hpp"
 
 #include <maya/render/canvas.hpp>
 #include <maya/render/renderer.hpp>
@@ -76,6 +77,50 @@ TEST_CASE("queued preview: idle, it does not promise a turn that isn't running")
     INFO(s);
     CHECK(s.find("queued #1") != std::string::npos);
     CHECK(s.find("sends when this turn ends") == std::string::npos);
+}
+
+TEST_CASE("composer footer: typing mid-turn says Enter will queue") {
+    // The placeholder that teaches "type to queue" is gone the moment there
+    // IS text -- exactly when the user is deciding whether to press Enter.
+    // The footer carries it from then on, beside the model badge rather
+    // than instead of it.
+    auto footer = [](const Model& m, int width = 100) {
+        auto root = maya::Composer{ui::composer_config(m)}.build();
+        maya::StylePool pool;
+        maya::Canvas canvas(width, 30, &pool);
+        canvas.clear();
+        maya::render_tree(root, canvas, pool, maya::theme::native, true);
+        std::string s;
+        for (int y = 0; y <= canvas.max_content_row(); ++y) {
+            for (int x = 0; x < width; ++x) {
+                char32_t ch = canvas.get(x, y).character;
+                s.push_back(ch && ch < 128 ? static_cast<char>(ch) : ' ');
+            }
+            s.push_back('\n');
+        }
+        return s;
+    };
+
+    {   // Mid-turn with text: say it, briefly. The long form lives on the
+        // transcript row; the footer is ambient and already crowded.
+        Model m;
+        m.ui.composer.text = "wait, do it the other way";
+        m.ui.composer.cursor = static_cast<int>(m.ui.composer.text.size());
+        m.s.phase = phase::Streaming{};
+        const std::string s = footer(m);
+        INFO(s);
+        CHECK(s.find("queues") != std::string::npos);
+    }
+    {   // Idle with text: Enter sends immediately, so the hint must not
+        //  appear -- it would describe a queue that is not happening.
+        Model m;
+        m.ui.composer.text = "a normal message";
+        m.ui.composer.cursor = static_cast<int>(m.ui.composer.text.size());
+        REQUIRE(!m.s.active());
+        const std::string s = footer(m);
+        INFO(s);
+        CHECK(s.find("queues") == std::string::npos);
+    }
 }
 
 TEST_CASE("queued preview: the promise is made once, not per row") {
