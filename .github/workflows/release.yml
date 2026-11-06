@@ -1710,7 +1710,19 @@ jobs:
               printf '%s\n' "$pk" | grep -qE "^pkgver=${V}$" && break
               [ "$attempt" -lt 6 ] && sleep 15
             done
-            if printf '%s\n' "$pk" | grep -qE "^pkgver=${V}$"; then
+            # The RPC answers from the AUR database the push wrote to, so it
+            # is current the moment publish-aur finishes. cgit is a cached
+            # mirror: on v0.9.48 it still served 0.9.47 after the full 75s
+            # retry while the RPC already said 0.9.48-1, and the release went
+            # red on a healthy package. The cgit PKGBUILD is still fetched
+            # because the .SRCINFO check below needs its text.
+            rpc_ver=$(curl -fsSL "https://aur.archlinux.org/rpc/v5/info?arg[]=agentty-bin" 2>/dev/null \
+                      | grep -oE '"Version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+            if [ "${rpc_ver%-*}" = "$V" ] && ! printf '%s\n' "$pk" | grep -qE "^pkgver=${V}$"; then
+              echo "::warning::AUR RPC reports $rpc_ver but the cgit mirror is still behind; trusting the RPC"
+              ok "AUR agentty-bin @ $V (rpc)"
+              echo "– AUR .SRCINFO content check skipped (cgit mirror still stale)"
+            elif printf '%s\n' "$pk" | grep -qE "^pkgver=${V}$"; then
               ok "AUR agentty-bin @ $V"
               # ---- 4b. .SRCINFO must MATCH that PKGBUILD ----
               #
