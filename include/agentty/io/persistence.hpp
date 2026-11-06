@@ -142,6 +142,11 @@ ExpireStats expire_threads(Io, const lock_levels::below_thread_log&, int keep_da
 // Test hook: make the writer forget what it knows about `id`, as a failed
 // save does. Nothing in the app should call it.
 void debug_forget_saved(const maya::below<maya::leaf>&, const ThreadId& id);
+// Test hook: set the document this process believes it last loaded or wrote
+// (the save-time merge baseline). Lets one test process play two agentty
+// instances, each with its own startup snapshot. Nothing in the app should
+// call it.
+void debug_set_settings_baseline(std::string_view json_text);
 
 [[nodiscard]] store::Settings load_settings(Io);
 // Write settings.json, then tell the settings cache (on_settings_written) so

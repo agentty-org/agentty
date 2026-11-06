@@ -2940,6 +2940,14 @@ Baseline& loaded_baseline() {
     return b;
 }
 
+void debug_set_settings_baseline(std::string_view json_text) {
+    try {
+        loaded_baseline().store(json::parse(json_text));
+    } catch (...) {
+        loaded_baseline().store(json::object());
+    }
+}
+
 namespace {
 store::Settings load_settings_from_disk();
 } // namespace
@@ -3822,8 +3830,55 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         }
         if (disk.is_object()) {
             const json base = loaded_baseline().load();
+
+            // `ui` merges PER FIELD, not as a block.
+            //
+            // It is the one block a user edits a field at a time across
+            // several running sessions, and block-level merging lost those
+            // edits: instance A set scrollback, instance B (holding the
+            // startup-era ui) then changed its theme, B's whole block differed
+            // from B's baseline, so B's stale scrollback was written back over
+            // A's. "Settings don't persist" -- they did, until a sibling saved.
+            //
+            // The comment below explains why top-level is the default: an
+            // ABSENT key can't be told apart from a default. That doesn't hold
+            // inside `ui`: every field has a fixed default, so an absent field
+            // means exactly that default, and "did we change it" is a plain
+            // comparison against our baseline's value.
+            const auto ui_or_empty = [](const json& doc) {
+                return doc.contains("ui") && doc["ui"].is_object()
+                           ? doc["ui"] : json::object();
+            };
+            const json ui_base = ui_or_empty(base);
+            const json ui_disk = ui_or_empty(disk);
+            json       ui_ours = ui_or_empty(j);
+            json       ui_out  = ui_ours;
+            bool ui_merged = false;
+            for (auto it = ui_disk.begin(); it != ui_disk.end(); ++it) {
+                const auto& k = it.key();
+                const bool in_base = ui_base.contains(k);
+                const bool in_ours = ui_ours.contains(k);
+                // We changed this field iff our value differs from what we
+                // loaded (presence counts: adding or dropping it is a change).
+                const bool we_changed =
+                    in_base != in_ours
+                    || (in_ours && ui_ours[k] != ui_base[k]);
+                if (we_changed) continue;                      // ours wins
+                if (in_ours && ui_ours[k] == it.value()) continue;  // agree
+                AGT_LOG(Persist, Info, "settings.save",
+                        "merge=adopt_disk key=ui.{}", k);
+                ui_out[k] = it.value();
+                ui_merged = true;
+            }
+            if (ui_merged) {
+                if (ui_out.empty()) j.erase("ui");
+                else                j["ui"] = std::move(ui_out);
+            }
+
             for (auto it = disk.begin(); it != disk.end(); ++it) {
                 const auto& key = it.key();
+                // Handled field-by-field above.
+                if (key == "ui") continue;
                 // Absent from what we LOADED and from what we are WRITING:
                 // we never had an opinion on this key, so a sibling instance
                 // added it after our load. Keep theirs. (Previously this fell
