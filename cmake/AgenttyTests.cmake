@@ -1228,6 +1228,21 @@ add_test(NAME i18n_catalog_lint
                  -P ${CMAKE_SOURCE_DIR}/tests/lint/i18n_lint.cmake)
 set_tests_properties(i18n_catalog_lint PROPERTIES LABELS "static")
 
+# ── ui::Prefs field lists ─────────────────────────────────────────
+# Every appearance setting is written out by hand in four places: the struct,
+# the settings.json writer, its loader, and the save-time merge table. Nothing
+# made them agree, and each omission fails silently and differently -- never
+# saved, never loaded, or clobbered when a second agentty session saves. That
+# last one is what "settings don't persist" looked like in practice.
+#
+# A text scan, no compile, same shape as the lints above.
+add_test(NAME prefs_field_sync
+         COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_SOURCE_DIR}/tests/lint/prefs_sync.py
+                 ${CMAKE_SOURCE_DIR}/include/agentty/domain/ui_prefs.hpp
+                 ${CMAKE_SOURCE_DIR}/src/io/persistence.cpp)
+set_tests_properties(prefs_field_sync PROPERTIES LABELS "static")
+
 # ── Allowlist rot ──────────────────────────────────────────────────────────
 # The banlist walks the files on disk and only ever LOOKS UP the allowlist, so
 # a grant whose justification is gone is silently ignored rather than reported.
