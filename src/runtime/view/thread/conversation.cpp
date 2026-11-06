@@ -347,22 +347,35 @@ void build_live_tail(const Model& m, int& running_turn,
 // Build the queued-message preview rows: visible at the tail of the
 // transcript so the user can see what's queued. Mirrors Claude
 // Code's appearance at offset 80106500 — visually identical to real
-// user turns; the "queued not sent" cue is absence-of-assistant +
-// the composer's `❚ N queued` chip.
+// user turns.
+//
+// The "queued not sent" cue used to be absence-of-assistant plus the
+// composer's `❚ N queued` chip: a missing element and a bare count. Neither
+// says WHEN it goes out, so a row that looks exactly like a sent message
+// reads as "it sent" or "nothing happened" rather than "this fires when the
+// turn ends". The first row's meta now states the promise; the rest stay
+// numbered, because saying it once is informing and saying it three times is
+// nagging.
 void build_queued_previews(const Model& m, int& running_turn,
                            std::vector<maya::Element>& out) {
     if (m.ui.composer.queued.empty()) return;
     out.reserve(out.size() + m.ui.composer.queued.size() * 2);
     const auto now = m.wall_at(maya::anim_now());
     const std::size_t base_idx = m.d.current.messages.size();
-    for (std::size_t qi = 0; qi < m.ui.composer.queued.size(); ++qi) {
+    const std::size_t n = m.ui.composer.queued.size();
+    for (std::size_t qi = 0; qi < n; ++qi) {
         Message synthetic;
         synthetic.role        = Role::User;
         synthetic.text        = m.ui.composer.queued[qi].text;
         synthetic.attachments = m.ui.composer.queued[qi].attachments;
         synthetic.timestamp   = now;
         std::string meta = "queued #" + std::to_string(qi + 1)
-                         + " / "     + std::to_string(m.ui.composer.queued.size());
+                         + " / "     + std::to_string(n);
+        // Only on the first, and only while a turn is actually running --
+        // idle, there is no "this turn" to end and the claim would be a lie
+        // (the queue drains on the next submit instead).
+        if (qi == 0 && m.s.active())
+            meta += " \xc2\xb7 sends when this turn ends";
         if (m.ui.composer.queue_peek_index() == static_cast<int>(qi))
             meta = "\xe2\x9c\x8e editing \xe2\x80\x94 " + meta;   // ✎
         out.push_back(gap_row());

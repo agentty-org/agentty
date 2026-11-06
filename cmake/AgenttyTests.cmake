@@ -81,6 +81,7 @@ set(_AGENTTY_CONSOLIDATED
     oauth_proactive_refresh_test maya_host_sequence_test
     smart_slot_panel_stack_test account_switch_refresh_test fused_models_test
     panel_sections_render_test provider_panel_sections_test settings_roundtrip_test
+    queued_preview_test
     credentials_test entitlement_test inflate_test
     settings_list_scroll_test visual_walk_test md_robustness_test
     stats_test

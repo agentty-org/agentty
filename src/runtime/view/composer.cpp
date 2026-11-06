@@ -246,6 +246,23 @@ maya::Composer::Config composer_config(const Model& m) {
                                   k("\xe2\x86\x91\xe2\x86\x93"), l(" pick  "), // ↑↓
                                   k("esc"), l(" hide")).build();
     }
+    // TYPING MID-TURN: say what Enter will actually do.
+    //
+    // Enter during a turn QUEUES; the message goes out when the turn ends.
+    // The widget teaches that in the empty-composer placeholder, which
+    // disappears the instant you type -- exactly when you are deciding
+    // whether to press Enter.
+    //
+    // Appended to the model badge rather than replacing it: the badge is
+    // what you are about to send WITH, and trading it away to say when would
+    // answer one question by hiding another. The hint sheds first under
+    // width pressure for the same reason.
+    else if (m.s.active() && !m.ui.composer.text.empty()) {
+        cfg.status = maya::dsl::h(
+            model_badge_config(m),
+            maya::dsl::text("  \xe2\x86\xb5 queues \xc2\xb7 sends when this turn ends",
+                            maya::Style{}.with_fg(muted).with_dim())).build();
+    }
 
     // ── Ambient counters over the REAL payload ──────────────────────
     //
