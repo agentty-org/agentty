@@ -3845,34 +3845,68 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
             // inside `ui`: every field has a fixed default, so an absent field
             // means exactly that default, and "did we change it" is a plain
             // comparison against our baseline's value.
-            const auto ui_or_empty = [](const json& doc) {
-                return doc.contains("ui") && doc["ui"].is_object()
-                           ? doc["ui"] : json::object();
+            // Every ui field with the value an ABSENT key means. The writer
+            // drops the whole block when every field is default and omits an
+            // empty theme/lang, so absence is not "no opinion" -- it is the
+            // default. Comparing filled values makes those two the same
+            // thing; comparing raw presence (the first version of this) read
+            // a session whose ui had gone back to all-defaults as having
+            // DROPPED every field, so its empty block won and wiped a
+            // sibling's scrollback.
+            //
+            // Must list every field Prefs serialises. A missing one is not
+            // merged at all (it rides along with whatever block we write),
+            // which the round-trip test catches.
+            static const json kUiDefaults = {
+                {"theme", ""}, {"lang", ""},
+                {"tier", static_cast<int>(ui_prefs::ColorTier::Auto)},
+                {"polarity", static_cast<int>(ui_prefs::Polarity::Auto)},
+                {"density", static_cast<int>(ui_prefs::Density::Normal)},
+                {"motion", static_cast<int>(ui_prefs::Motion::Full)},
+                {"scrollback", static_cast<int>(ui_prefs::Scrollback::Auto)},
+                {"tool_output", static_cast<int>(ui_prefs::ToolOutput::Preview)},
+                {"thinking", static_cast<int>(ui_prefs::Thinking::Collapsed)},
+                {"timestamps", static_cast<int>(ui_prefs::Timestamps::Off)},
+                {"prose_width", 0},
+                {"syntax", true},
+                {"compact_turns", false},
+                {"thread_preview", true},
+                {"foreign_sessions", true},
             };
-            const json ui_base = ui_or_empty(base);
-            const json ui_disk = ui_or_empty(disk);
-            json       ui_ours = ui_or_empty(j);
+            const auto ui_filled = [&](const json& doc) {
+                json out = kUiDefaults;
+                if (doc.contains("ui") && doc["ui"].is_object())
+                    for (auto it = doc["ui"].begin(); it != doc["ui"].end(); ++it)
+                        out[it.key()] = it.value();
+                return out;
+            };
+            const json ui_base = ui_filled(base);
+            const json ui_disk = ui_filled(disk);
+            const json ui_ours = ui_filled(j);
             json       ui_out  = ui_ours;
             bool ui_merged = false;
             for (auto it = ui_disk.begin(); it != ui_disk.end(); ++it) {
                 const auto& k = it.key();
-                const bool in_base = ui_base.contains(k);
-                const bool in_ours = ui_ours.contains(k);
-                // We changed this field iff our value differs from what we
-                // loaded (presence counts: adding or dropping it is a change).
-                const bool we_changed =
-                    in_base != in_ours
-                    || (in_ours && ui_ours[k] != ui_base[k]);
-                if (we_changed) continue;                      // ours wins
-                if (in_ours && ui_ours[k] == it.value()) continue;  // agree
+                // Ours wins only where we changed it since our load.
+                if (ui_ours.value(k, json{}) != ui_base.value(k, json{})) continue;
+                if (ui_ours.value(k, json{}) == it.value()) continue;   // agree
                 AGT_LOG(Persist, Info, "settings.save",
                         "merge=adopt_disk key=ui.{}", k);
                 ui_out[k] = it.value();
                 ui_merged = true;
             }
             if (ui_merged) {
-                if (ui_out.empty()) j.erase("ui");
-                else                j["ui"] = std::move(ui_out);
+                // Write it back in the writer's own shape: only non-default
+                // fields, and no block at all if nothing is left. Writing
+                // the filled map would freeze every default into the file
+                // and stop a shipped-default change reaching this user.
+                json compact = json::object();
+                for (auto it = ui_out.begin(); it != ui_out.end(); ++it)
+                    if (!kUiDefaults.contains(it.key())
+                        || kUiDefaults[it.key()] != it.value())
+                        compact[it.key()] = it.value();
+                if (compact.empty()) j.erase("ui");
+                else                 j["ui"] = std::move(compact);
             }
 
             for (auto it = disk.begin(); it != disk.end(); ++it) {

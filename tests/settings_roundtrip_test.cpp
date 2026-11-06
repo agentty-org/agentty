@@ -173,6 +173,183 @@ TEST_CASE("settings round-trip: one instance's save does not undo another's") {
     CHECK(disk.ui.scrollback == up::Scrollback::Small);  // and A's survived
 }
 
+TEST_CASE("settings round-trip: resetting to defaults keeps a sibling's edit") {
+    // The hole in the first per-field merge. When every ui field is default
+    // the writer omits the WHOLE block, so the merge saw B as having dropped
+    // every field -- "we changed it" -- and B's missing scrollback beat A's
+    // Small. Absence means default, not "no opinion".
+    TmpHome home{"reset"};
+    const auto io = ::agentty::IoAccess::grant();
+
+    agentty::store::Settings start;
+    start.ui.theme = "nord";
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, start);
+    });
+    agentty::store::Settings a = persistence::load_settings(io);
+    agentty::store::Settings b = a;
+    std::string b_baseline;
+    {
+        std::ifstream f(home.dir / "settings.json");
+        b_baseline.assign(std::istreambuf_iterator<char>(f), {});
+    }
+
+    a.ui.scrollback = up::Scrollback::Small;
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, a);
+    });
+
+    // B puts its theme back to the default -- its ui is now ALL defaults,
+    // so it writes no ui block at all.
+    persistence::debug_set_settings_baseline(b_baseline);
+    b.ui.theme.clear();
+    REQUIRE(b.ui == up::Prefs{});
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, b);
+    });
+
+    const auto disk = persistence::load_settings(io);
+    CHECK(disk.ui.theme.empty());                        // B's reset landed
+    CHECK(disk.ui.scrollback == up::Scrollback::Small);  // A's edit survived
+}
+
+TEST_CASE("settings round-trip: every ui field merges on its own") {
+    // The merge needs a table of every ui field and its default. A field
+    // missing from that table isn't merged; it just rides along with
+    // whichever session's block gets written. So walk every field: A
+    // changes only that field, B changes an unrelated one, and A's must
+    // survive. Adding a field to Prefs without the table fails here.
+    using Set = void (*)(up::Prefs&);
+    struct Case { const char* name; Set set; };
+    const Case cases[] = {
+        {"theme",            [](up::Prefs& p) { p.theme = "nord"; }},
+        {"lang",             [](up::Prefs& p) { p.lang = "de"; }},
+        {"tier",             [](up::Prefs& p) { p.tier = up::ColorTier::Ansi256; }},
+        {"polarity",         [](up::Prefs& p) { p.polarity = up::Polarity::Light; }},
+        {"density",          [](up::Prefs& p) { p.density = up::Density::Roomy; }},
+        {"prose_width",      [](up::Prefs& p) { p.prose_width = 88; }},
+        {"compact_turns",    [](up::Prefs& p) { p.compact_turns = true; }},
+        {"thread_preview",   [](up::Prefs& p) { p.thread_preview = false; }},
+        {"foreign_sessions", [](up::Prefs& p) { p.foreign_sessions = false; }},
+        {"motion",           [](up::Prefs& p) { p.motion = up::Motion::Reduced; }},
+        {"scrollback",       [](up::Prefs& p) { p.scrollback = up::Scrollback::Small; }},
+        {"syntax",           [](up::Prefs& p) { p.syntax = false; }},
+        {"tool_output",      [](up::Prefs& p) { p.tool_output = up::ToolOutput::Full; }},
+        {"thinking",         [](up::Prefs& p) { p.thinking = up::Thinking::Shown; }},
+        {"timestamps",       [](up::Prefs& p) { p.timestamps = up::Timestamps::Relative; }},
+    };
+    // B always touches the same unrelated field. Timestamps for every case
+    // but its own, where it falls back to motion.
+    for (const auto& c : cases) {
+        TmpHome home{"field"};
+        const auto io = ::agentty::IoAccess::grant();
+        agentty::store::Settings start = persistence::load_settings(io);
+        maya::thread_root([&](const maya::unlocked& cap) {
+            persistence::save_settings(io, cap, start);
+        });
+        agentty::store::Settings a = persistence::load_settings(io);
+        agentty::store::Settings b = a;
+        std::string b_baseline;
+        {
+            std::ifstream f(home.dir / "settings.json");
+            if (f) b_baseline.assign(std::istreambuf_iterator<char>(f), {});
+        }
+        if (b_baseline.empty()) b_baseline = "{}";
+
+        c.set(a.ui);
+        const up::Prefs want = a.ui;
+        maya::thread_root([&](const maya::unlocked& cap) {
+            persistence::save_settings(io, cap, a);
+        });
+
+        persistence::debug_set_settings_baseline(b_baseline);
+        if (std::string{c.name} == "timestamps") b.ui.motion = up::Motion::Off;
+        else                                    b.ui.timestamps = up::Timestamps::Absolute;
+        maya::thread_root([&](const maya::unlocked& cap) {
+            persistence::save_settings(io, cap, b);
+        });
+
+        auto disk = persistence::load_settings(io).ui;
+        // Undo B's unrelated edit, then the rest must be exactly A's.
+        if (std::string{c.name} == "timestamps") disk.motion = want.motion;
+        else                                    disk.timestamps = want.timestamps;
+        INFO("field: " << std::string{c.name});
+        CHECK(disk == want);
+    }
+}
+
+TEST_CASE("settings round-trip: an all-default ui writes nothing and reads back default") {
+    // Three places hold the ui defaults: the Prefs struct, the loader's
+    // fallbacks, and the merge's table. If they drift, a default is read
+    // back as a choice (or the reverse) and the merge misjudges what a
+    // session changed. A pristine Prefs must round-trip to itself and must
+    // not produce a `ui` block at all.
+    TmpHome home{"defaults"};
+    agentty::store::Settings s;
+    REQUIRE(s.ui == up::Prefs{});
+    const auto back = save_and_reload(s);
+    CHECK(back.ui == up::Prefs{});
+
+    std::ifstream f(home.dir / "settings.json");
+    REQUIRE(f.good());
+    const std::string text{std::istreambuf_iterator<char>(f), {}};
+    INFO(text);
+    CHECK(text.find("\"ui\"") == std::string::npos);
+}
+
+TEST_CASE("settings round-trip: merge default table matches Prefs") {
+    // The merge fills absent ui fields from its own table. If that table
+    // disagrees with a Prefs default, a sibling that reset a field to its
+    // real default looks like it chose some other value, and the merge
+    // misjudges who changed what. Check it directly: a sibling resets each
+    // field to its Prefs default while we hold a non-default for a DIFFERENT
+    // field; the reset must land.
+    TmpHome home{"table"};
+    const auto io = ::agentty::IoAccess::grant();
+
+    // Start with every field off its default, so each one has somewhere to
+    // reset FROM.
+    agentty::store::Settings start;
+    start.ui.theme = "nord";   start.ui.lang = "de";
+    start.ui.tier = up::ColorTier::Ansi256;
+    start.ui.polarity = up::Polarity::Light;
+    start.ui.density = up::Density::Roomy;
+    start.ui.prose_width = 88;
+    start.ui.compact_turns = true;
+    start.ui.thread_preview = false;
+    start.ui.foreign_sessions = false;
+    start.ui.motion = up::Motion::Reduced;
+    start.ui.scrollback = up::Scrollback::Small;
+    start.ui.syntax = false;
+    start.ui.tool_output = up::ToolOutput::Full;
+    start.ui.thinking = up::Thinking::Shown;
+    start.ui.timestamps = up::Timestamps::Relative;
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, start);
+    });
+    const auto loaded = persistence::load_settings(io);
+    std::string baseline;
+    {
+        std::ifstream f(home.dir / "settings.json");
+        baseline.assign(std::istreambuf_iterator<char>(f), {});
+    }
+
+    // A sibling resets EVERYTHING to the shipped defaults and saves.
+    agentty::store::Settings sib = loaded;
+    sib.ui = up::Prefs{};
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, sib);
+    });
+
+    // We, holding the old startup copy, save without changing anything.
+    // We changed nothing, so every field must take the sibling's reset.
+    persistence::debug_set_settings_baseline(baseline);
+    maya::thread_root([&](const maya::unlocked& c) {
+        persistence::save_settings(io, c, loaded);
+    });
+    CHECK(persistence::load_settings(io).ui == up::Prefs{});
+}
+
 TEST_CASE("settings round-trip: a SECOND change in one session persists") {
     // The baseline merge in save_settings compares each top-level key with
     // the document this process last loaded or wrote. A first change is easy;
