@@ -1243,6 +1243,21 @@ add_test(NAME prefs_field_sync
                  ${CMAKE_SOURCE_DIR}/src/io/persistence.cpp)
 set_tests_properties(prefs_field_sync PROPERTIES LABELS "static")
 
+# ── agentty describes UI, maya draws it ────────────────────────────
+# agentty's view layer returns maya::Element values; every pixel decision --
+# layout, truncation, colour resolution, the cursor -- is maya's. That is what
+# lets a maya widget change its width negotiation without agentty noticing.
+#
+# The boundary held by habit, with nothing enforcing it. This bans writing a
+# canvas/cell, defining a paint/draw/render method, and emitting a raw ANSI
+# escape, with two named non-TUI exceptions (the Ctrl+G runner and the
+# sandbox's plain-stderr path, both outside maya's terminal).
+add_test(NAME ui_boundary
+         COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_SOURCE_DIR}/tests/lint/ui_boundary.py
+                 ${CMAKE_SOURCE_DIR})
+set_tests_properties(ui_boundary PROPERTIES LABELS "static")
+
 # ── Allowlist rot ──────────────────────────────────────────────────────────
 # The banlist walks the files on disk and only ever LOOKS UP the allowlist, so
 # a grant whose justification is gone is silently ignored rather than reported.
