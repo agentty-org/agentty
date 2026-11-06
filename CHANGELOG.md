@@ -4,6 +4,36 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.49] - 2026-11-06
+
+### Fixed
+- **Settings stopped reverting when you run several agentty sessions at
+  once.** Each session reads `settings.json` at startup and keeps it in
+  memory, and the save-time merge treated the whole appearance block as one
+  value. So one session setting scrollback, and another (still holding the
+  startup copy) changing its theme, wrote the stale scrollback back over
+  it. The setting did persist — until any other session saved anything.
+  Appearance settings now merge field by field: a field a session did not
+  change keeps whatever is on disk.
+- **Setting up a provider no longer pulls you off the one you are using**
+  in two more cases. Working on Ollama with no API keys counted as "nothing
+  configured", so adding any provider adopted it; the active local backend
+  now counts. And an empty Anthropic key read as signed in — every other
+  provider already required a non-empty key.
+
+### Changed
+- **Appearance settings are declared once.** The settings writer, its
+  loader and the save-time merge each used to spell out every field by
+  hand, and nothing made those lists agree — a field missing from one was
+  silently never saved, never loaded, or clobbered by another session. They
+  now walk a single table, defaults included, so none of them names a
+  field. Two build-time checks were added alongside it: one that every
+  appearance field is in that table, and one that keeps UI drawing out of
+  agentty (maya owns every pixel decision).
+- The release's channel audit reads AUR's version from the RPC as well as
+  the cgit mirror. v0.9.48 went red on a package that had published
+  correctly 90 seconds earlier, because the mirror lags.
+
 ## [0.9.48] - 2026-11-06
 
 ### Changed
