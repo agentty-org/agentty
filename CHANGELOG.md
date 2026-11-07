@@ -4,6 +4,41 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.50] - 2026-11-07
+
+### Changed
+- **Tool cards got a full visual pass.** The header is one two-tone pill:
+  the tool name on a solid chip, the rest on a soft band of the same
+  colour, and the output below sits on a faint tint of it. Write, edit and
+  diff output is syntax coloured on the red/green bands, and paired lines
+  light up the words that changed. Grep rows are syntax coloured too, and
+  every match sits on an amber band. File paths get a language dot and a
+  dim directory with a bold file name, and edit headers end with `+3 −5`.
+- **Grep highlights whatever the pattern matched**, regex included. It used
+  to give up on any pattern with an escape like `resolve\(`.
+- **Running tools keep their spinner** whenever the whole card fits on
+  screen, instead of a still dot, and their header has a soft shimmer.
+- **Permission prompts show what bash will run.** bash was missing from the
+  shell case, so approving it showed the whole args object as json.
+- **Every theme reads.** A contrast floor lifts colours that were too dim on
+  their own background (links, headings, hints), keeping the hue. Across
+  the 615 bundled themes that took 870 dim colours to none.
+- **The native theme gets the same look** on terminals that report their
+  colours: maya asks once at startup, in the round-trip it already makes.
+- Reasoning uses a quiet neutral ink instead of the theme's secondary hue,
+  says how many lines are hidden when collapsed, and its rail is coloured
+  again (a renderer bug left left-only borders uncoloured).
+- Smaller: failed cards drop repeated `[kind]` tags, the composer colours
+  `@file` and `/command`, nested markdown lists indent, picker rows and the
+  diff review panel use the same tinted bands, MCP tools read as
+  `Search Issues · github`, and the `──` branch before each tool is gone.
+
+### Added
+- `tool_gallery` renders every surface from real recorded tool calls
+  (`--running`, `--ask`, `--chrome`, `--reasoning`, `--prose`, `--welcome`,
+  `--panels`), and a `ui_snapshots` test diffs its output so a change that
+  alters how something looks shows up in review.
+
 ## [0.9.49] - 2026-11-06
 
 ### Fixed
