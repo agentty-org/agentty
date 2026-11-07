@@ -82,6 +82,39 @@ public:
         }
     }
     [[nodiscard]] bool usable() const { return !pat_.empty(); }
+
+    // The pattern as LITERAL text, for in-place highlighting of the hit --
+    // empty when the pattern is not literal.
+    //
+    // The body highlights by substring, so handing it `cfg\.status\s*=`
+    // would emphasise nothing (no row contains those bytes) while
+    // `cfg.status` lights up every hit. Rather than guess, only claim a
+    // needle when the pattern carries no regex metacharacter: then the
+    // pattern IS the text, and the tool searched for exactly it.
+    //
+    // Case is NOT a disqualifier. grep defaults to case-insensitive, so
+    // rejecting those would have left highlighting off for nearly every
+    // real call -- the renderer folds case when matching instead.
+    [[nodiscard]] std::string literal_needle() const {
+        if (pat_.empty()) return {};
+        // A pure alternation of literals still highlights: maya takes the
+        // alternatives '\n'-separated. Any other metachar and we bail.
+        if (pat_.find_first_of("\\^$.?*+()[]{}") != std::string::npos) return {};
+        if (pat_.find('|') == std::string::npos) return pat_;
+        std::string out;
+        for (std::size_t s = 0; s <= pat_.size();) {
+            const auto e = pat_.find('|', s);
+            const auto alt = pat_.substr(
+                s, e == std::string::npos ? std::string::npos : e - s);
+            if (alt.size() >= 2) {
+                if (!out.empty()) out += '\n';
+                out += alt;
+            }
+            if (e == std::string::npos) break;
+            s = e + 1;
+        }
+        return out;
+    }
     [[nodiscard]] bool hit(std::string_view row) const {
         if (row.size() > 4096) row = row.substr(0, 4096);   // bound regex cost
         if (ex_) {
@@ -175,6 +208,10 @@ bool grep_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     // multiline pattern): show every row rather than nothing.
     out.text = hits.empty() ? std::move(rows) : std::move(hits);
     out.text_color = text_tertiary;
+    // Light up the searched-for text inside each hit, when the pattern is
+    // literal enough to find by substring. A grep points at a thing; the
+    // row should too.
+    out.match_needle = test.literal_needle();
     return true;
 }
 

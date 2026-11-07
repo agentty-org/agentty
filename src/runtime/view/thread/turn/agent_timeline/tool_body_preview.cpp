@@ -90,9 +90,9 @@ void generic_lifecycle_body(const ToolUse& tc,
     const bool generic_text = supports_generic_text_body(tc.name.value);
     out.text_color = text_tertiary;
     if (tc.is_failed()) {
-        if (text_is_visible(card_output(tc))) {
+        if (auto body = detail::failure_body_text(tc); text_is_visible(body)) {
             out.kind = Kind::Failure;
-            out.text = std::string{card_output(tc)};
+            out.text = std::move(body);
             out.chrome_color = status_error;
         }
         return;
@@ -127,6 +127,10 @@ void generic_lifecycle_body(const ToolUse& tc,
         // truncation chatter. tail_only stays true only for LIVE progress
         // above (newest lines pinned bottom, terminal-like).
         out.tail_only = false;
+        // read_filter / search_* / extract all carry the thing they searched
+        // for; light it up in the output so the answer is findable at a
+        // glance instead of needing a second read-through.
+        out.match_needle = detail::args_match_needle(tc.args);
     }
     // Empty success/failure/rejection is already explicit in the event header.
     // Inventing a body row only at settle would shift committed transcript
@@ -156,6 +160,11 @@ maya::ToolBodyPreview::Config tool_body_preview_config(
 {
     const auto& n = tc.name.value;
     maya::ToolBodyPreview::Config out;
+    // Language for syntax colouring in read / write / edit / diff bodies.
+    if (n == "read" || n == "write" || n == "edit" || n == "apply_patch"
+        || n == "replace" || n == "rewrite_structural" || n == "git_diff"
+        || n == "find_definition")
+        out.lang = detail::lang_for_tool_or_content(tc);
 
     // Chrome (line-number gutter, pipe separator, elision marker) reads
     // in the tool's category color so the body's structure visually
@@ -176,13 +185,19 @@ maya::ToolBodyPreview::Config tool_body_preview_config(
         generic_lifecycle_body(tc, out);
         return out;
     }
-    if (n == "shell" || n == "diagnostics" || n == "test"
+    if (n == "bash" || n == "shell" || n == "diagnostics" || n == "test"
         || n == "process_start" || n == "process_poll"
         || n == "process_stop") {
         // The process_* trio IS terminal output — tail-heavy, ANSI-laden,
         // same reading question as bash ("what did it print / did it
         // fail?"), so it shares BashOutput's structured-extraction chain
         // (test summaries, compiler diagnostics) and tail window.
+        //
+        // `bash` ITSELF was missing from this list while the comment named
+        // it as the archetype. It fell to the generic CodeBlock path, so
+        // the most-used tool in the corpus kept its ``` fences as content
+        // rows and lost the tail-oriented window -- strip_bash_output_fence
+        // exists and was simply never reached.
         detail::bash_body(tc, out);
         generic_lifecycle_body(tc, out);
         return out;

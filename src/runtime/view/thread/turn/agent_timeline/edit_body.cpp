@@ -26,6 +26,10 @@ bool edit_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     using Kind = maya::ToolBodyPreview::Kind;
     const bool streaming_now = !tc.is_terminal();
 
+    // `replace` / `rewrite_structural` carry the literal they searched for;
+    // light it up inside the diff rows so the change is easy to spot.
+    out.match_needle = args_match_needle(tc.args);
+
     // FAILED edit: surface the error text as the body. Falling through to
     // the args-echo EditDiff rendered the *attempted* hunks and swallowed
     // the actual failure reason ("old_text not found", "file changed since
@@ -33,7 +37,7 @@ bool edit_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     // self-correction hint was only on the wire, never on screen.
     if (tc.is_failed() && !card_output(tc).empty()) {
         out.kind = Kind::Failure;
-        out.text = std::string{card_output(tc)};
+        out.text = failure_body_text(tc);
         out.chrome_color = status_error;
         return true;
     }

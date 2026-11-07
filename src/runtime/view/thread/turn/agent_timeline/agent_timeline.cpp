@@ -617,7 +617,7 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
     //    FOOTER, which is always a bottom append below the seam. The
     //    spinner `frame` is zeroed for any not-yet-all-terminal panel so
     //    a top event row's status glyph can't animate a committed row.
-    std::string title = " " + small_caps("Actions") + " ";
+    std::string title = " actions ";
     std::string title_end;
 
     bool all_terminal_title = total > 0;

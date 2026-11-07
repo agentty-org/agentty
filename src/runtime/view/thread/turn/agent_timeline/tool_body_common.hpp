@@ -80,6 +80,25 @@ inline constexpr std::size_t kStreamTailLines = 64;
 // agentty's grep output and accumulate (path → {start lines}) into out.
 void accumulate_grep_hits(std::string_view output, GrepHits& out);
 
+// The literal text a tool is pointing AT, for in-body highlighting:
+// `replace`/`rewrite_structural`'s `find`, `read_filter`/`grep`'s
+// `pattern`, `extract`'s needle. Returns empty when the arg is missing,
+// is a regex (regex:true, or contains regex metacharacters), or is too
+// short/long to highlight usefully.
+[[nodiscard]] std::string args_match_needle(const nlohmann::json& args);
+
+// Error text with its leading `[kind]` tags removed. The card header
+// already says the kind, so the body shouldn't repeat it.
+[[nodiscard]] std::string_view strip_error_tags(std::string_view s);
+[[nodiscard]] std::string failure_body_text(const ToolUse& tc);
+
+// Syntax language for a tool's body, from its file path (or the first
+// file in a diff). Empty when there is no path or it has no extension.
+[[nodiscard]] std::string lang_for_path(std::string_view path);
+[[nodiscard]] std::string lang_for_tool(const ToolUse& tc);
+// Same, but sniffs the code itself when the path gives nothing.
+[[nodiscard]] std::string lang_for_tool_or_content(const ToolUse& tc);
+
 // ── Per-tool body renderers ───────────────────────────────────────────
 //
 // Each fills `out` (kind + data) for the tools it owns and returns true;

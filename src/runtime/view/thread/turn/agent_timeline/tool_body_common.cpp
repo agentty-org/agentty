@@ -4,8 +4,11 @@
 #include "tool_body_common.hpp"
 
 #include <algorithm>
+#include <cctype>
 
 #include <maya/platform/io.hpp>
+
+#include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 
 namespace agentty::ui::detail {
 
@@ -129,6 +132,175 @@ void accumulate_grep_hits(std::string_view output, GrepHits& out) {
         if (nl == std::string::npos) break;
         pos = nl + 1;
     }
+}
+
+std::string args_match_needle(const nlohmann::json& args) {
+    if (!args.is_object()) return {};
+    // An explicit regex:true means the arg is a pattern, not a literal.
+    const auto r = args.find("regex");
+    const bool regex_mode =
+        r != args.end() && r->is_boolean() && r->get<bool>();
+    if (regex_mode) return {};
+
+    // `find` is literal by contract when regex is off, so take it as-is --
+    // metacharacter screening would throw away perfectly good code needles
+    // like `foo(bar);`. The pattern-style args have no such contract, so
+    // those still get screened below.
+    if (auto it = args.find("find"); it != args.end() && it->is_string()) {
+        auto needle = it->get<std::string>();
+        if (needle.size() < 2 || needle.size() > 200) return {};
+        if (needle.find('\n') != std::string::npos) return {};
+        return needle;
+    }
+
+    std::string needle;
+    for (const char* key : {"pattern", "needle", "query"}) {
+        auto it = args.find(key);
+        if (it != args.end() && it->is_string()) {
+            needle = it->get<std::string>();
+            break;
+        }
+    }
+    if (needle.size() < 2 || needle.size() > 200) return {};
+    if (needle.find('\n') != std::string::npos) return {};
+
+    // A pattern that is purely an alternation of literals (`foo|bar|128000`)
+    // is still highlightable: split on '|' and hand maya every alternative.
+    // Any other regex metacharacter means we can't substring-match it.
+    if (needle.find_first_of("\\^$.?*+()[]{}") != std::string::npos)
+        return {};
+    if (needle.find('|') == std::string::npos) return needle;
+
+    std::string out;
+    for (std::size_t s = 0; s <= needle.size();) {
+        const auto e = needle.find('|', s);
+        const auto alt = needle.substr(
+            s, e == std::string::npos ? std::string::npos : e - s);
+        if (alt.size() >= 2) {
+            if (!out.empty()) out += '\n';
+            out += alt;
+        }
+        if (e == std::string::npos) break;
+        s = e + 1;
+    }
+    return out;
+}
+
+std::string_view strip_error_tags(std::string_view s) {
+    // Drop every leading `[kind] ` tag. Exit trailers like `[exit code 1]`
+    // never lead the text, so they are left alone.
+    for (;;) {
+        if (s.empty() || s.front() != '[') return s;
+        const auto close = s.find(']');
+        if (close == std::string_view::npos || close < 2 || close > 32)
+            return s;
+        const auto inner = s.substr(1, close - 1);
+        if (inner.find_first_of("[\n") != std::string_view::npos) return s;
+        if (inner.starts_with("exit code") || inner.starts_with("terminated"))
+            return s;
+        s.remove_prefix(close + 1);
+        while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
+    }
+}
+
+std::string failure_body_text(const ToolUse& tc) {
+    auto s = strip_error_tags(card_output(tc));
+    while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.remove_suffix(1);
+    // The header already says these; a body row would only repeat it.
+    if (s == "cancelled" || s == "interrupted" || s == "aborted") return {};
+    return std::string{s};
+}
+
+std::string lang_for_path(std::string_view path) {
+    const auto slash = path.find_last_of("/\\");
+    std::string base{slash == std::string_view::npos ? path
+                                                     : path.substr(slash + 1)};
+    for (auto& c : base)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (base == "cmakelists.txt") return "cmake";
+    if (base == "makefile" || base == "gnumakefile") return "makefile";
+    if (base == "dockerfile") return "dockerfile";
+    if (base == "pkgbuild") return "sh";
+    const auto dot = base.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= base.size()) return {};
+    return base.substr(dot + 1);
+}
+
+std::string lang_for_tool(const ToolUse& tc) {
+    for (const char* k : {"path", "file_path"}) {
+        auto p = safe_arg(tc.args, k);
+        if (auto l = lang_for_path(p); !l.empty()) return l;
+    }
+    // replace / rewrite_structural: `glob` like "*.cpp" or "src/**/*.ts".
+    if (auto g = safe_arg(tc.args, "glob"); !g.empty()) {
+        if (auto l = lang_for_path(g); !l.empty() && l.find_first_of("{}*,") == std::string::npos)
+            return l;
+    }
+    // A diff body names its files: `+++ b/path` or `▏ path`.
+    const std::string_view out = card_output(tc);
+    for (std::string_view tag : {"+++ b/", "+++ ", "\xe2\x96\x8f "}) {
+        if (auto p = out.find(tag); p != std::string_view::npos) {
+            auto e = out.find('\n', p);
+            auto path = out.substr(p + tag.size(),
+                                   e == std::string_view::npos ? std::string_view::npos
+                                                               : e - p - tag.size());
+            if (auto l = lang_for_path(path); !l.empty()) return l;
+        }
+    }
+    return {};
+}
+
+// Last resort for extensionless files: a shebang or an obvious first line.
+static std::string lang_from_content(std::string_view s) {
+    while (!s.empty() && (s.front() == '\n' || s.front() == ' ')) s.remove_prefix(1);
+    const auto line = s.substr(0, s.find('\n'));
+    if (line.starts_with("#!")) {
+        if (line.find("python") != std::string_view::npos) return "py";
+        if (line.find("node") != std::string_view::npos)   return "js";
+        return "sh";
+    }
+    if (s.find("#include") != std::string_view::npos
+     || s.find("#pragma once") != std::string_view::npos
+     || s.find("namespace ") != std::string_view::npos)
+        return "cpp";
+    if (s.starts_with("use ") || s.find("\nfn ") != std::string_view::npos)
+        return "rs";
+    if (s.starts_with("package ")) return "go";
+    if (s.starts_with("import ") || s.starts_with("def ")
+     || s.find("\ndef ") != std::string_view::npos)
+        return "py";
+    // Lines ending in `;`, `{` or `}` read as C-family; the C++ tokeniser
+    // handles C, Java, JS and friends well enough to colour them.
+    int c_like = 0;
+    for (std::size_t p = 0; p < s.size() && c_like < 2;) {
+        auto e = s.find('\n', p);
+        if (e == std::string_view::npos) e = s.size();
+        auto l = s.substr(p, e - p);
+        while (!l.empty() && (l.back() == ' ' || l.back() == '\r')) l.remove_suffix(1);
+        if (!l.empty() && (l.back() == ';' || l.back() == '{' || l.back() == '}'))
+            ++c_like;
+        p = e + 1;
+    }
+    if (c_like >= 2) return "cpp";
+    return {};
+}
+
+std::string lang_for_tool_or_content(const ToolUse& tc) {
+    if (auto l = lang_for_tool(tc); !l.empty()) return l;
+    for (const char* k : {"content", "new_text", "old_text"}) {
+        if (auto l = lang_from_content(safe_arg(tc.args, k)); !l.empty())
+            return l;
+    }
+    if (tc.args.is_object()) {
+        if (auto it = tc.args.find("edits"); it != tc.args.end() && it->is_array())
+            for (const auto& e : *it)
+                if (e.is_object())
+                    for (const char* k : {"new_text", "old_text"})
+                        if (auto f = e.find(k); f != e.end() && f->is_string())
+                            if (auto l = lang_from_content(f->get<std::string>()); !l.empty())
+                                return l;
+    }
+    return lang_from_content(card_output(tc));
 }
 
 } // namespace agentty::ui::detail

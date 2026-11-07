@@ -29,7 +29,9 @@ bool bash_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         return true;
     }
     if (tc.is_terminal()) {
-        auto stripped = strip_bash_output_fence(card_output(tc));
+        auto stripped = tc.is_failed()
+            ? strip_bash_output_fence(failure_body_text(tc))
+            : strip_bash_output_fence(card_output(tc));
         if (!stripped.empty()) {
             out.kind = Kind::BashOutput;
             out.text = std::move(stripped);

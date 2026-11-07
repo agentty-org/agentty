@@ -38,6 +38,7 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         }
         return true;
     }
+    if (tc.is_failed()) return true;   // generic_lifecycle_body owns failures
     if (tc.is_terminal() && !tc.output().empty()) {
         // Strip the redundant "Subagent report (type, N turns):"
         // header + the blank line after it — the card detail already

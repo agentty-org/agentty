@@ -151,6 +151,9 @@ bool diff_preview_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     out.kind = Kind::GitDiff;
     out.text = std::move(diff);
     out.text_color = text_tertiary;
+    // Light up the literal these tools searched for inside the -/+ rows, so
+    // the needle stands out from the surrounding context on each line.
+    out.match_needle = args_match_needle(tc.args);
     return true;
 }
 

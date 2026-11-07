@@ -112,9 +112,10 @@ std::string tool_display_name(const std::string& n) {
 //   vcs     (git_*)                               → role_info (blue, "context-shift")
 //   plan    (todo)                                → status_warn (yellow, planning)
 maya::Color tool_category_color(const std::string& n) {
-    if (n == "edit" || n == "write" || n == "move" || n == "remove")
+    if (n == "edit" || n == "write" || n == "move" || n == "remove"
+        || n == "apply_patch" || n == "replace" || n == "rewrite_structural")
         return role_brand;
-    if (n == "shell" || n == "diagnostics" || n == "test"
+    if (n == "bash" || n == "shell" || n == "diagnostics" || n == "test"
         || n.rfind("process_", 0) == 0)
         return code_text;
     if (n == "todo")                  return status_warn;
@@ -124,9 +125,10 @@ maya::Color tool_category_color(const std::string& n) {
 }
 
 std::string_view tool_category_label(const std::string& n) {
-    if (n == "edit" || n == "write" || n == "move" || n == "remove")
+    if (n == "edit" || n == "write" || n == "move" || n == "remove"
+        || n == "apply_patch" || n == "replace" || n == "rewrite_structural")
         return "mutate";
-    if (n == "shell" || n == "diagnostics" || n == "test"
+    if (n == "bash" || n == "shell" || n == "diagnostics" || n == "test"
         || n.rfind("process_", 0) == 0)
         return "execute";
     if (n == "todo")                  return "plan";
@@ -281,17 +283,22 @@ static std::string tool_failure_reason(const ToolUse& tc) {
     const std::string_view out = card_output(tc);
     if (out.empty()) return {};
 
-    // "[kind] detail" — the structured ToolError shape.
-    if (out.front() == '[') {
-        if (auto close = out.find(']'); close != std::string::npos && close > 1) {
-            std::string kind{out.substr(1, close - 1)};
-            // A bracketed exit trailer ("[exit code 1]") is not a kind — fall
-            // through to the bash sniff below.
-            if (kind.rfind("exit code", 0) != 0
-             && kind.rfind("terminated", 0) != 0)
-                return kind;
-        }
+    // "[kind] detail" — the structured ToolError shape. Several tags can
+    // stack ("[unknown] [not found] …"); skip the vague `unknown` one.
+    std::string_view rest = out;
+    while (!rest.empty() && rest.front() == '[') {
+        const auto close = rest.find(']');
+        if (close == std::string_view::npos || close < 2 || close > 32) break;
+        std::string kind{rest.substr(1, close - 1)};
+        // A bracketed exit trailer ("[exit code 1]") is not a kind — fall
+        // through to the bash sniff below.
+        if (kind.rfind("exit code", 0) == 0 || kind.rfind("terminated", 0) == 0)
+            break;
+        if (kind != "unknown") return kind;
+        rest.remove_prefix(close + 1);
+        while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
     }
+    if (rest.size() != out.size()) return "failed";
     // Bash-style trailer, wherever it lands in the output.
     if (out.find("[terminated by signal") != std::string::npos)
         return "terminated";
@@ -301,6 +308,9 @@ static std::string tool_failure_reason(const ToolUse& tc) {
             return std::string{out.substr(p + 1, e - p - 1)};   // "exit code N"
     }
     // Unstructured error text: take the first short line.
+    if (out.starts_with("Tool call arguments look incomplete")
+     || out.starts_with("tool args truncated"))
+        return "args cut off";
     std::string first{out.substr(0, out.find('\n'))};
     if (first.size() > 48) first = first.substr(0, 47) + "\xe2\x80\xa6";
     return first;
@@ -393,11 +403,14 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
             detail += "  \xc2\xb7  recursive";
         return detail;
     }
-    if (n == "shell" || n == "diagnostics") {
+    if (n == "bash" || n == "shell" || n == "diagnostics") {
         auto cmd = safe("command");
-        if (cmd.empty()) return "\xe2\x80\xa6";
-        // plain command only. a "Read ..." label made a shell detour look
-        // like a native call and hid it from the user.
+        if (cmd.empty()) {
+            // args never arrived (cancelled / cut off): say what it was for.
+            auto why = safe("display_description");
+            return why.empty() ? std::string{"\xe2\x80\xa6"} : why;
+        }
+        // show the real command, not display_description.
         if (auto nl = cmd.find('\n'); nl != std::string::npos)
             cmd = cmd.substr(0, nl) + " \xe2\x80\xa6";
         if (tc.is_done()) {
@@ -851,6 +864,41 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         }
         return detail;
     }
+    if (n == "git_branch" || n == "git_stash" || n == "git_rebase") {
+        // action + its target, e.g. "switch master", "onto origin/master".
+        std::string action = safe("action");
+        if (action.empty()) action = "list";
+        std::string target = safe("name");
+        if (target.empty()) target = safe("upstream");
+        if (target.empty()) target = safe("ref");
+        if (target.empty()) target = safe("message");
+        return target.empty() ? action : action + "  " + target;
+    }
+    if (n == "git_cherry_pick") {
+        std::string action = safe("action");
+        std::string commits;
+        if (tc.args.is_object()) {
+            auto it = tc.args.find("commits");
+            if (it != tc.args.end() && it->is_array()) {
+                for (const auto& c : *it)
+                    if (c.is_string()) {
+                        if (!commits.empty()) commits += " ";
+                        commits += c.get<std::string>();
+                    }
+            } else if (it != tc.args.end() && it->is_string()) {
+                commits = it->get<std::string>();
+            }
+        }
+        if (action.empty() || action == "pick")
+            return commits.empty() ? std::string{"pick"} : "pick  " + commits;
+        return action;
+    }
+    if (n == "find_references") {
+        auto sym = safe("symbol");
+        if (sym.empty()) return "\xe2\x80\xa6";
+        return path_pp.empty() || path_pp == "." ? sym
+                                                 : sym + "  in  " + path_pp;
+    }
     return safe_arg(tc.args, "display_description");
 }
 
@@ -867,7 +915,7 @@ std::string tool_timeline_detail(const ToolUse& tc) {
         if (reason.empty()) reason = "failed";
         // Avoid a redundant "· failed · failed" if a base branch already said it.
         if (detail.find(reason) == std::string::npos)
-            detail += "  \xc2\xb7  " + reason;
+            detail += detail.empty() ? reason : "  \xc2\xb7  " + reason;
     }
     return detail;
 }

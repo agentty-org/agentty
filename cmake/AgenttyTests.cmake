@@ -231,6 +231,29 @@ endif()
 target_compile_definitions(sandbox_live_check PRIVATE
     AGENTTY_MCP=0)
 
+# tool_gallery: every tool card, rendered through the REAL view, on demand.
+#
+# Judging card design from screenshots means waiting for the right session to
+# happen. This builds a Model per card -- read, grep, edit, bash (ok and
+# failed), a tool still running, todo, task, web, git -- and renders each
+# through conversation_config, so what it prints is what a user sees.
+#
+# Deliberately includes the unflattering cases (a read that lands mid-comment,
+# a grep whose hits are comment fragments), because those are the ones worth
+# fixing and they are invisible in a happy-path demo.
+#
+# Not a ctest: it asserts nothing, it is something to LOOK at.
+#
+#     cmake --build build --target tool_gallery
+#     ./build/tool_gallery              # every card
+#     ./build/tool_gallery read grep    # just those
+#     COLS=120 ./build/tool_gallery     # at another width
+add_executable(tool_gallery EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/tool_gallery.cpp
+    ${AGENTTY_SHARED_OBJECTS})
+_agentty_test_link_full(tool_gallery)
+set_target_properties(tool_gallery PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
 # ws_bind_probe: a hand-run answer to "is the workspace actually bound, and is
 # the rest of $HOME actually read-only" -- driven through run_shell_command
 # (the shipped path) rather than a hand-built posture, because a bug report

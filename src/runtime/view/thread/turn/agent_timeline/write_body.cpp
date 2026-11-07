@@ -23,12 +23,13 @@ bool write_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     // FAILED write: error body, same rationale as edit above.
     if (tc.is_failed() && !card_output(tc).empty()) {
         out.kind = Kind::Failure;
-        out.text = std::string{card_output(tc)};
+        out.text = failure_body_text(tc);
         out.chrome_color = status_error;
         return true;
     }
     auto content = safe_arg(tc.args, "content");
     const bool streaming_now = !tc.is_terminal();
+    out.match_needle = args_match_needle(tc.args);
     if (!content.empty()) {
         out.kind = Kind::FileWrite;
         out.text_color = text_tertiary;
