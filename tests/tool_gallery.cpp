@@ -30,6 +30,7 @@
 // Run:  ./build/tool_gallery                 # every case
 //       ./build/tool_gallery read grep       # tools matching these
 //       ./build/tool_gallery --kind failed   # only the failures
+//       ./build/tool_gallery --running bash  # as in-flight cards
 //       ./build/tool_gallery --list          # what is in the corpus
 //       COLS=120 ./build/tool_gallery        # at another width
 
@@ -55,6 +56,9 @@
 
 using namespace agentty;
 using json = nlohmann::json;
+
+// --running: render every card as an in-flight tool (shimmer, spinner).
+static bool g_running = false;
 
 namespace {
 
@@ -109,8 +113,13 @@ ToolUse make_tool(const Case& c) {
         // the footer's timing chip, but a 2 ms `task` would read as fake.
         c.tool == "task" ? 42000 : c.tool == "test" ? 9100 :
         c.tool == "bash" ? 1400  : 180};
-    if (c.failed) t.status = ToolUse::Failed{started, finished, c.output};
-    else          t.status = ToolUse::Done{started, finished, c.output};
+    if (g_running) {
+        ToolUse::Running r;
+        r.started_at = started;
+        t.status = std::move(r);
+    }
+    else if (c.failed) t.status = ToolUse::Failed{started, finished, c.output};
+    else               t.status = ToolUse::Done{started, finished, c.output};
     return t;
 }
 
@@ -247,6 +256,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--list") list_only = true;
+        else if (a == "--running") g_running = true;
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }

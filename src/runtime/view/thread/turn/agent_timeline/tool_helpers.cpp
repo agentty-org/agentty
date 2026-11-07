@@ -353,7 +353,7 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
                 if (r.total > 0) detail += " of " + std::to_string(r.total);
                 return detail;
             }
-            if (off > 0) detail += " @" + std::to_string(off);
+            if (off > 0) detail += ":" + std::to_string(off);
             // Prefer the file's true length that read reports in its
             // "[showing lines A-B of N]" footer; only re-count the (decorated)
             // output when there's no such marker (small file read whole).
@@ -361,7 +361,7 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
             if (lines < 0) lines = count_lines(card_output(tc));
             if (lines > 1) detail += "  \xc2\xb7  " + std::to_string(lines) + " lines";
         } else if (off > 0) {
-            detail += " @" + std::to_string(off);
+            detail += ":" + std::to_string(off);
         }
         return detail;
     }
