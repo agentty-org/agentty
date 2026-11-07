@@ -86,38 +86,45 @@ public:
     }
     [[nodiscard]] bool usable() const { return !pat_.empty(); }
 
-    // The pattern as LITERAL text, for in-place highlighting of the hit --
-    // empty when the pattern is not literal.
-    //
-    // The body highlights by substring, so handing it `cfg\.status\s*=`
-    // would emphasise nothing (no row contains those bytes) while
-    // `cfg.status` lights up every hit. Rather than guess, only claim a
-    // needle when the pattern carries no regex metacharacter: then the
-    // pattern IS the text, and the tool searched for exactly it.
-    //
-    // Case is NOT a disqualifier. grep defaults to case-insensitive, so
-    // rejecting those would have left highlighting off for nearly every
-    // real call -- the renderer folds case when matching instead.
-    [[nodiscard]] std::string literal_needle() const {
+    // The exact text the pattern matched in `rows`, '\n'-separated, for
+    // in-place highlighting. Running the real regex means any pattern
+    // lights up -- `resolve\(`, `foo.*bar`, `\bid\b` -- not only plain
+    // literals. Falls back to the pattern itself when it isn't a valid
+    // regex (the tool searched it as text then). Capped so a pattern like
+    // `.` can't hand the renderer thousands of needles.
+    [[nodiscard]] std::string matched_needles(std::string_view rows) const {
         if (pat_.empty()) return {};
-        // A pure alternation of literals still highlights: maya takes the
-        // alternatives '\n'-separated. Any other metachar and we bail.
-        if (pat_.find_first_of("\\^$.?*+()[]{}") != std::string::npos) return {};
-        if (pat_.find('|') == std::string::npos) return pat_;
+        if (!re_) return pat_;
+        std::vector<std::string> seen;
+        std::size_t pos = 0;
+        while (pos < rows.size() && seen.size() < 32) {
+            auto nl = rows.find('\n', pos);
+            if (nl == std::string_view::npos) nl = rows.size();
+            std::string_view row = rows.substr(pos, std::min<std::size_t>(nl - pos, 4096));
+            pos = nl + 1;
+            // Rows are `path:line:text`; only the text is ever highlighted.
+            if (auto c1 = row.find(':'); c1 != std::string_view::npos)
+                if (auto c2 = row.find(':', c1 + 1); c2 != std::string_view::npos)
+                    row.remove_prefix(c2 + 1);
+            try {
+                for (std::cregex_iterator it(row.data(), row.data() + row.size(), *re_), end;
+                     it != end && seen.size() < 32; ++it) {
+                    std::string m = it->str();
+                    if (m.size() < 2 || m.size() > 120 || m.find('\n') != std::string::npos)
+                        continue;
+                    if (std::find(seen.begin(), seen.end(), m) == seen.end())
+                        seen.push_back(std::move(m));
+                }
+            } catch (const std::regex_error&) { break; }
+        }
         std::string out;
-        for (std::size_t s = 0; s <= pat_.size();) {
-            const auto e = pat_.find('|', s);
-            const auto alt = pat_.substr(
-                s, e == std::string::npos ? std::string::npos : e - s);
-            if (alt.size() >= 2) {
-                if (!out.empty()) out += '\n';
-                out += alt;
-            }
-            if (e == std::string::npos) break;
-            s = e + 1;
+        for (const auto& s : seen) {
+            if (!out.empty()) out += '\n';
+            out += s;
         }
         return out;
     }
+
     [[nodiscard]] bool hit(std::string_view row) const {
         if (row.size() > 4096) row = row.substr(0, 4096);   // bound regex cost
         if (ex_) {
@@ -211,10 +218,10 @@ bool grep_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     // multiline pattern): show every row rather than nothing.
     out.text = hits.empty() ? std::move(rows) : std::move(hits);
     out.text_color = text_tertiary;
-    // Light up the searched-for text inside each hit, when the pattern is
-    // literal enough to find by substring. A grep points at a thing; the
-    // row should too.
-    out.match_needle = test.literal_needle();
+    // Light up the searched-for text inside each hit: whatever the regex
+    // actually matched in the rows shown. A grep points at a thing; the row
+    // should too.
+    out.match_needle = test.matched_needles(out.text);
     return true;
 }
 
