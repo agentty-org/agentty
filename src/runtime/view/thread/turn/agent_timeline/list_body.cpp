@@ -64,11 +64,14 @@ class HitTest {
 public:
     explicit HitTest(const nlohmann::json& args) {
         pat_ = safe_arg(args, "pattern");
-        icase_ = !(args.is_object() && args.contains("case_sensitive")
+        // find_references searches for `symbol` as a whole word.
+        const bool symbol = pat_.empty() && !safe_arg(args, "symbol").empty();
+        if (symbol) pat_ = safe_arg(args, "symbol");
+        icase_ = !symbol && !(args.is_object() && args.contains("case_sensitive")
                    && args["case_sensitive"].is_boolean()
                    && args["case_sensitive"].get<bool>());
-        const bool word = args.is_object() && args.contains("word")
-                       && args["word"].is_boolean() && args["word"].get<bool>();
+        const bool word = symbol || (args.is_object() && args.contains("word")
+                       && args["word"].is_boolean() && args["word"].get<bool>());
         if (pat_.empty()) return;
         auto flags = std::regex::ECMAScript | std::regex::optimize;
         if (icase_) flags |= std::regex::icase;

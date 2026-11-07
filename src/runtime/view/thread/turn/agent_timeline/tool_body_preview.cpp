@@ -226,7 +226,7 @@ maya::ToolBodyPreview::Config tool_body_preview_config(
             return out;
         }
     }
-    if (n == "grep") {
+    if (n == "grep" || n == "find_references") {
         if (detail::grep_body(tc, out)) {
             generic_lifecycle_body(tc, out);
             return out;
