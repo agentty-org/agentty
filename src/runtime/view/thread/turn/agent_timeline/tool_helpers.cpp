@@ -69,6 +69,16 @@ std::string tool_display_name(const std::string& n) {
     if (n == "mcp__resources__read") return "MCP Resource";
     if (n == "mcp__prompts__get")    return "MCP Prompt";
     if (n == "codex_script")         return "Codex Script";
+    // MCP tools arrive as `mcp__<server>__<tool>`. Show the tool, then the
+    // server it came from: "Search Issues · github", not "Mcp Github
+    // Search Issues".
+    if (n.rfind("mcp__", 0) == 0) {
+        const auto rest = n.substr(5);
+        const auto sep  = rest.find("__");
+        if (sep != std::string::npos && sep + 2 < rest.size())
+            return tool_display_name(rest.substr(sep + 2)) + " \xc2\xb7 "
+                 + rest.substr(0, sep);
+    }
     // Fallback for any UNMAPPED tool name (MCP-provided tools, a raw name the
     // model emitted, future built-ins not yet in the table above): Title-Case
     // it so the timeline is visually consistent — no tool ever renders as a
@@ -899,7 +909,24 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         return path_pp.empty() || path_pp == "." ? sym
                                                  : sym + "  in  " + path_pp;
     }
-    return safe_arg(tc.args, "display_description");
+    if (auto d = safe_arg(tc.args, "display_description"); !d.empty()) return d;
+    // A tool with no description (most MCP tools): show its first few
+    // short string args as `key value`, so the header still says what ran.
+    std::string detail;
+    if (tc.args.is_object()) {
+        int shown = 0;
+        for (auto it = tc.args.begin(); it != tc.args.end() && shown < 3; ++it) {
+            if (!it->is_string() && !it->is_number() && !it->is_boolean()) continue;
+            std::string v = it->is_string() ? it->get<std::string>() : it->dump();
+            if (v.empty()) continue;
+            if (auto nl = v.find('\n'); nl != std::string::npos) v = v.substr(0, nl) + " \xe2\x80\xa6";
+            if (v.size() > 40) { v.resize(39); v += "\xe2\x80\xa6"; }
+            if (!detail.empty()) detail += "  \xc2\xb7  ";
+            detail += it.key() + " " + v;
+            ++shown;
+        }
+    }
+    return detail;
 }
 
 // Public entry: the success-shaped detail plus, for a Failed tool, a uniform

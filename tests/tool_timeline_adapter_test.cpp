@@ -116,6 +116,12 @@ TEST_CASE("tool timeline adapter") {
                   A::ToolUse::Running{}, {{"name", "summarize"}}))
                   == "summarize",
           "MCP prompt broker names its prompt");
+    check(U::tool_display_name("mcp__github__search_issues") == "Search Issues \xc2\xb7 github",
+          "an MCP tool is named by its tool, then its server");
+    check(U::tool_timeline_detail(make_tool("mcp__github__search_issues",
+              A::ToolUse::Running{}, {{"q", "crash on start"}}))
+              == "q crash on start",
+          "an MCP tool with no description shows its args");
 
     auto invisible_live = make_tool("mcp__example__silent", A::ToolUse::Running{},
                                     {{"display_description", "Silent MCP wait"}});

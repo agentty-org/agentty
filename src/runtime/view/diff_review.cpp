@@ -9,6 +9,8 @@
 
 #include <maya/widget/markdown/highlight.hpp>
 #include <maya/widget/tab_strip.hpp>
+#include <maya/widget/tool_body_preview.hpp>   // diff bands, terminal_color_level
+#include <maya/style/theme.hpp>
 
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/view/hints.hpp"
@@ -22,6 +24,12 @@ using namespace maya::dsl;
 namespace syntax = maya::syntax;
 
 namespace {
+
+// Red/green row bands, like the edit cards. Off below 256 colours, where
+// the band colours can't be shown and plain signs read better.
+[[nodiscard]] bool diff_bands_on() noexcept {
+    return maya::terminal_color_level() >= 2;
+}
 
 // ── Language from a file path's extension ────────────────────────────────
 [[nodiscard]] syntax::Lang lang_of(std::string_view path) {
@@ -100,22 +108,41 @@ struct DiffLine { char sign; std::string code; int lineno; };
     std::string gut = dl.lineno > 0 ? std::to_string(dl.lineno) : "";
     gut.insert(gut.begin(), static_cast<std::size_t>(std::max(0, gutter_w - (int)gut.size())), ' ');
     gut += " ";
-    runs.push_back({content.size(), gut.size(), Style{}.with_fg(muted).with_dim()});
+    const bool on_band = diff_bands_on() && (add || del);
+    const maya::Color rail = add ? maya::diff_palette::add_rail : maya::diff_palette::rem_rail;
+    const maya::Color rail_fg = add ? maya::diff_palette::add_fg_hi : maya::diff_palette::rem_fg_hi;
+    runs.push_back({content.size(), gut.size(),
+                    on_band ? Style{}.with_fg(rail_fg).with_bg(rail).with_bold()
+                            : Style{}.with_fg(muted).with_dim()});
     content += gut;
     std::string sign_s = add ? "+ " : del ? "- " : "  ";
-    runs.push_back({content.size(), sign_s.size(), Style{}.with_fg(sign_c)});
+    runs.push_back({content.size(), sign_s.size(),
+                    on_band ? Style{}.with_fg(rail_fg).with_bg(rail).with_bold()
+                            : Style{}.with_fg(sign_c)});
     content += sign_s;
 
-    // Syntax-highlighted code. Removed + context lines render dimmed so the
-    // eye tracks the additions.
+    // Syntax-highlighted code. On a band, each token colour is lifted until
+    // it reads there; context lines render dimmed so the eye tracks changes.
     const std::size_t code_off = content.size();
     content += dl.code;
     auto spans = syntax::highlight(dl.code, lang);
     const auto& theme = syntax::themes::terminal;
+    const bool banded = on_band;
+    const auto& lt = maya::theme::live();
+    const maya::LitColor band = lt.resolve(add ? maya::diff_palette::add_bg
+                                               : maya::diff_palette::rem_bg);
+    const maya::LitColor plain = lt.resolve(add ? maya::diff_palette::add_fg
+                                                : maya::diff_palette::rem_fg);
     auto push = [&](std::size_t from, std::size_t to, syntax::Capture cap) {
         if (to <= from) return;
         Style st = theme.style_for(cap);
-        if (del || dl.sign == ' ') st = st.with_dim();
+        if (banded) {
+            maya::LitColor fg = st.fg ? maya::theme::measure(lt.resolve(*st.fg)) : plain;
+            if (!fg.has_channels()) fg = plain;
+            st = st.with_fg(maya::readable_on(fg, band, 6.0)).with_bg(band);
+        } else if (dl.sign == ' ') {
+            st = st.with_dim();
+        }
         runs.push_back({code_off + from, to - from, st});
     };
     std::size_t pos = 0;
@@ -302,10 +329,18 @@ Element diff_review(const Model& m) {
             rows.push_back(text(std::format(
                 "      \xe2\x86\x91 {} lines above (^U)", off), fg_dim(muted)));
         int shown = 0;
-        for (int li = off; li < nlines && shown < kMaxHunkRows; ++li, ++shown)
-            rows.push_back((diff_code_line(lines[static_cast<std::size_t>(li)],
-                                           lang, gut_w)
-                            | padding(0, 0, 0, 4)).build());
+        for (int li = off; li < nlines && shown < kMaxHunkRows; ++li, ++shown) {
+            const auto& dl = lines[static_cast<std::size_t>(li)];
+            // Same red/green bands as the edit cards, so a change reads the
+            // same in review as it did in the transcript.
+            const bool diff_bands = diff_bands_on();
+            auto row = h(diff_code_line(dl, lang, gut_w)) | grow(1.0f);
+            if (diff_bands && dl.sign == '+')
+                row = std::move(row) | bgc(maya::diff_palette::add_bg);
+            else if (diff_bands && dl.sign == '-')
+                row = std::move(row) | bgc(maya::diff_palette::rem_bg);
+            rows.push_back((h(std::move(row)) | padding(0, 0, 0, 4)).build());
+        }
         if (off + shown < nlines)
             rows.push_back(text(std::format(
                 "      \xe2\x80\xa6 {} more lines in this hunk (^D)",

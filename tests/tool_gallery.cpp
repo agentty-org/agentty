@@ -42,10 +42,13 @@
 #include "agentty/runtime/view/composer.hpp"
 #include "agentty/runtime/view/thread/welcome_screen.hpp"
 #include "agentty/runtime/view/panels.hpp"
+#include "agentty/runtime/view/diff_review.hpp"
+#include "agentty/diff/diff.hpp"
 #include "agentty/runtime/fused_models.hpp"
 #include "agentty/domain/ui_theme.hpp"
 
 #include <maya/runtime.hpp>
+#include <maya/core/anim_clock.hpp>
 #include <maya/render/canvas.hpp>
 #include <maya/render/renderer.hpp>
 #include <maya/style/theme.hpp>
@@ -56,6 +59,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -416,6 +420,27 @@ void render_panels(int cols) {
         m.ui.panel.descend(pn::ThreadList{});
         emit_element("thread list", ui::thread_list_panel(m), cols);
     }
+    {
+        Model m;
+        auto a = diff::compute("src/login.cpp",
+            "int f() {\n  return 0;\n}\n",
+            "int f() {\n  return -1;\n  log();\n}\n");
+        a.added = 2; a.removed = 1;
+        m.d.pending_changes.push_back(a);
+        m.d.pending_changes.push_back(diff::compute("README.md", "old\n", "new\nmore\n"));
+        m.ui.panel.descend(pn::DiffReview{{0, 0}});
+        emit_element("diff review", ui::diff_review(m), cols);
+    }
+    {
+        Model m;
+        m.ui.panel.descend(pn::Providers{});
+        emit_element("providers", ui::providers_panel(m), cols);
+    }
+    {
+        Model m;
+        m.ui.panel.descend(pn::SettingsList{});
+        emit_element("settings", ui::settings_list_panel(m), cols);
+    }
 }
 
 }  // namespace
@@ -426,6 +451,10 @@ int main(int argc, char** argv) {
     // touch. A fixture has no kernel, so borrow the identity jaal exposes
     // for exactly this: it arms THIS thread for the scope below.
     const auto loop = maya::arm_loop_for_tests();
+    // FREEZE_CLOCK=1: pin the animation clock so spinners and shimmer render
+    // the same frame every run (the UI snapshot test sets it).
+    if (const char* f = std::getenv("FREEZE_CLOCK"); f && *f == '1')
+        maya::testing::freeze_anim_clock(1000);
 
     // Install the theme as the LIVE one, not just pass it to render_tree.
     // Style::to_sgr() resolves a slot through theme::live(); with none set
@@ -434,6 +463,33 @@ int main(int argc, char** argv) {
     // THEME=<scheme name> (or "native"); defaults to Srcery, what Ayush runs.
     const char* theme_name = std::getenv("THEME");
     if (!theme_name) theme_name = "Srcery";
+    // TERM_BG / TERM_FG=RRGGBB stand in for what a real terminal answers to
+    // the startup colour probe, so native can be checked without one.
+    auto hex = [](const char* s, maya::LitColor& out) {
+        if (!s || std::strlen(s) != 6) return false;
+        const unsigned v = static_cast<unsigned>(std::strtoul(s, nullptr, 16));
+        out = maya::LitColor::rgb(static_cast<uint8_t>(v >> 16),
+                                  static_cast<uint8_t>(v >> 8),
+                                  static_cast<uint8_t>(v));
+        return true;
+    };
+    if (maya::LitColor fg = maya::LitColor::rgb(0, 0, 0), bg = fg;
+        hex(std::getenv("TERM_FG"), fg) && hex(std::getenv("TERM_BG"), bg))
+        maya::theme::set_terminal_colors(fg, bg);
+    // TERM_PALETTE="RRGGBB,RRGGBB,..." (16 entries): the OSC 4 answers.
+    if (const char* pal = std::getenv("TERM_PALETTE")) {
+        std::string s{pal};
+        int k = 0;
+        for (std::size_t p = 0; p <= s.size() && k < 16;) {
+            const auto e = s.find(',', p);
+            const std::string one = s.substr(p, e == std::string::npos ? std::string::npos : e - p);
+            if (maya::LitColor c = maya::LitColor::rgb(0, 0, 0); hex(one.c_str(), c))
+                maya::theme::set_terminal_palette(k, c);
+            ++k;
+            if (e == std::string::npos) break;
+            p = e + 1;
+        }
+    }
     const maya::Theme* th = ui_prefs::find_scheme(theme_name);
     ui_prefs::publish_theme(th ? *th : maya::theme::native);
 

@@ -254,6 +254,19 @@ add_executable(tool_gallery EXCLUDE_FROM_ALL
 _agentty_test_link_full(tool_gallery)
 set_target_properties(tool_gallery PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
+# ui_snapshots: the gallery's output for every surface, colour included,
+# diffed against tests/fixtures/ui_snapshots. Catches a change that alters
+# how something looks. Accept an intended change with
+#     tests/ui_snapshots.sh build/tool_gallery --update
+if(UNIX)
+    add_test(NAME ui_snapshots
+             COMMAND sh ${CMAKE_SOURCE_DIR}/tests/ui_snapshots.sh
+                     $<TARGET_FILE:tool_gallery>)
+    set_tests_properties(ui_snapshots PROPERTIES TIMEOUT 120 LABELS ui)
+    # Built by `tests` / `tests_gating`, so CI's ctest run has the binary.
+    set_property(DIRECTORY APPEND PROPERTY AGENTTY_T_STANDALONE tool_gallery)
+endif()
+
 # ws_bind_probe: a hand-run answer to "is the workspace actually bound, and is
 # the rest of $HOME actually read-only" -- driven through run_shell_command
 # (the shipped path) rather than a hand-built posture, because a bug report
