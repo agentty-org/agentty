@@ -209,7 +209,7 @@ bool grep_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         // grep with a different shape) — keep the raw text readable.
         out.kind = Kind::CodeBlock;
         out.text = std::string{raw};
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         out.tail_only = false;
         return true;
     }
@@ -217,7 +217,7 @@ bool grep_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     // No row matched card-side (a regex feature std::regex lacks, a
     // multiline pattern): show every row rather than nothing.
     out.text = hits.empty() ? std::move(rows) : std::move(hits);
-    out.text_color = text_tertiary;
+    out.text_color = text_primary;   // plain output reads as normal text
     // Light up the searched-for text inside each hit: whatever the regex
     // actually matched in the rows shown. A grep points at a thing; the row
     // should too.
@@ -231,7 +231,7 @@ bool generic_list_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     if (!card_output(tc).empty()) {
         out.kind = Kind::CodeBlock;
         out.text = std::string{card_output(tc)};
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         // Head-heavy output: show the FIRST lines (plus a small tail via
         // the head_tail profile) instead of the tail-anchored window that
         // surfaced only the pagination footer.

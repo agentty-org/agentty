@@ -32,7 +32,7 @@ bool write_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     out.match_needle = args_match_needle(tc.args);
     if (!content.empty()) {
         out.kind = Kind::FileWrite;
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         out.show_footer_stats = true;
         // While streaming, show a SMALL tail preview (the last few
         // lines of what's been written so far) — show_all=false lets
@@ -95,7 +95,7 @@ bool write_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         }
     } else if (tc.is_running()) {
         out.kind = Kind::FileWrite;
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         out.is_streaming = true;
     }
     return true;

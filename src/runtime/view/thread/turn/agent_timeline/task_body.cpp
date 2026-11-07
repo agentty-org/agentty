@@ -33,7 +33,7 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
             // bottom) — keep the last few feed lines so the running
             // card shows the CURRENT step, not the stale header.
             out.text = tail_window(tc.progress_text(), kTaskLiveRows);
-            out.text_color = text_tertiary;
+            out.text_color = text_primary;   // plain output reads as normal text
             out.is_streaming = true;
         }
         return true;
@@ -54,7 +54,7 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         out.kind = Kind::CodeBlock;
         // keep content lines + 1 "⋯ N more" marker = ceiling rows max.
         out.text = head_window(body, kTaskReportRows - 1);
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         // We pre-sliced to the ceiling; render it verbatim (no further
         // head+tail elision that would fight our marker).
         out.show_all = true;

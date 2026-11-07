@@ -18,7 +18,7 @@ bool web_fetch_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     if (!body.empty()) {
         out.kind = Kind::Json;
         out.text = std::string{body};
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
     }
     return true;
 }

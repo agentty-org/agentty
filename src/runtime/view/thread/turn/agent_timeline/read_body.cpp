@@ -122,7 +122,7 @@ bool read_body(const ToolUse& tc,
         } else {
             out.text = std::string{body};
         }
-        out.text_color = text_tertiary;    // bright cyan — file content rendered as code
+        out.text_color = text_primary;   // code reads as normal text, tokens on top
         // Anchor the gutter to the real source line numbers. Priority:
         // the number mined from the tool's own footer / symbol header
         // (ground truth — covers symbol reads and tail reads), then the

@@ -24,7 +24,7 @@ bool bash_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     if (tc.is_running() && !tc.progress_text().empty()) {
         out.kind = Kind::BashOutput;
         out.text = tc.progress_text();
-        out.text_color = text_tertiary;
+        out.text_color = text_primary;   // plain output reads as normal text
         out.is_streaming = true;
         return true;
     }
@@ -35,7 +35,7 @@ bool bash_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         if (!stripped.empty()) {
             out.kind = Kind::BashOutput;
             out.text = std::move(stripped);
-            out.text_color = text_tertiary;
+            out.text_color = text_primary;   // plain output reads as normal text
             out.failed = tc.is_failed();
         }
         return true;

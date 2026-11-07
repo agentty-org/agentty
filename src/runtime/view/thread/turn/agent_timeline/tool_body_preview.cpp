@@ -160,6 +160,9 @@ maya::ToolBodyPreview::Config tool_body_preview_config(
 {
     const auto& n = tc.name.value;
     maya::ToolBodyPreview::Config out;
+    // Command / tool output gets its paths, numbers, strings, hashes and
+    // flags coloured (named colours only, so native reads well too).
+    out.colorize = true;
     // Language for syntax colouring in read / write / edit / diff bodies.
     if (n == "read" || n == "write" || n == "edit" || n == "apply_patch"
         || n == "replace" || n == "rewrite_structural" || n == "git_diff"
