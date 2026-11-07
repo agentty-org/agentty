@@ -32,11 +32,14 @@
 //       ./build/tool_gallery --kind failed   # only the failures
 //       ./build/tool_gallery --running bash  # as in-flight cards
 //       ./build/tool_gallery --ask bash      # with the permission prompt
+//       ./build/tool_gallery --chrome        # status bar + composer
 //       ./build/tool_gallery --list          # what is in the corpus
 //       COLS=120 ./build/tool_gallery        # at another width
 
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/view/thread/conversation.hpp"
+#include "agentty/runtime/view/status_bar/status_bar.hpp"
+#include "agentty/runtime/view/composer.hpp"
 #include "agentty/domain/ui_theme.hpp"
 
 #include <maya/runtime.hpp>
@@ -232,6 +235,43 @@ void render_case(const Case& c, int cols) {
     emit_canvas(canvas, pool, cols);
 }
 
+void emit_element(const std::string& tag, const maya::Element& root, int cols) {
+    maya::StylePool pool;
+    maya::Canvas canvas(cols, 40, &pool);
+    canvas.clear();
+    maya::render_tree(root, canvas, pool, maya::theme::live(), true);
+    std::printf("\n\x1b[2m\xe2\x94\x80\xe2\x94\x80 %s ", tag.c_str());
+    for (int i = 0; i < cols - 6 - static_cast<int>(tag.size()); ++i)
+        std::printf("\xe2\x94\x80");
+    std::printf("\x1b[0m\n");
+    emit_canvas(canvas, pool, cols);
+}
+
+// The screen chrome around the conversation: status bar and composer, in
+// the states a user actually sees.
+void render_chrome(int cols) {
+    struct State { const char* tag; int tokens; bool streaming; const char* text; };
+    const State states[] = {
+        {"idle, empty composer",           12000,  false, ""},
+        {"streaming, 42% context",         84000,  true,  ""},
+        {"typing, mentions and a command", 150000, false,
+         "/review @src/runtime/view/composer.cpp check the footer"},
+        {"near the limit",                 188000, false, "summarise and compact"},
+    };
+    for (const auto& s : states) {
+        Model m;
+        m.s.tokens_in   = s.tokens;
+        m.s.context_max = 200000;
+        if (s.streaming) m.s.phase = phase::Streaming{};
+        m.ui.composer.text   = s.text;
+        m.ui.composer.cursor = static_cast<int>(std::string_view{s.text}.size());
+        auto bar  = maya::StatusBar{ui::status_bar_config(m)}.build();
+        auto comp = maya::Composer{ui::composer_config(m)}.build();
+        emit_element(std::string{s.tag} + " \xc2\xb7 status", bar, cols);
+        emit_element(std::string{s.tag} + " \xc2\xb7 composer", comp, cols);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -267,6 +307,7 @@ int main(int argc, char** argv) {
         if (a == "--list") list_only = true;
         else if (a == "--running") g_running = true;
         else if (a == "--ask") g_ask = true;
+        else if (a == "--chrome") { render_chrome(cols); return 0; }
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }
