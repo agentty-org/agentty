@@ -41,6 +41,8 @@
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 #include "agentty/runtime/view/composer.hpp"
 #include "agentty/runtime/view/thread/welcome_screen.hpp"
+#include "agentty/runtime/view/panels.hpp"
+#include "agentty/runtime/fused_models.hpp"
 #include "agentty/domain/ui_theme.hpp"
 
 #include <maya/runtime.hpp>
@@ -353,6 +355,69 @@ void render_welcome(int cols) {
     emit_element("welcome", root, cols);
 }
 
+// The overlays a user opens most: ^K palette, the model picker, ^J threads.
+void render_panels(int cols) {
+    namespace pn = agentty::ui::panel;
+    {
+        Model m;
+        m.ui.panel.descend(pn::Palette{{}});
+        emit_element("palette", ui::palette_panel(m), cols);
+    }
+    {
+        auto mk = [](std::string id, std::string name, std::string prov) {
+            ModelInfo mi;
+            mi.id = ModelId{std::move(id)};
+            mi.display_name = std::move(name);
+            mi.provider = std::move(prov);
+            mi.context_window = 200000;
+            return mi;
+        };
+        auto cat = [](std::string id, std::string label, std::vector<ModelInfo> ms) {
+            ProviderCatalog c;
+            c.provider_id = std::move(id);
+            c.label = std::move(label);
+            c.state = ProviderCatalog::State::Ready;
+            c.models = std::move(ms);
+            return c;
+        };
+        const std::vector<ProviderCatalog> cats{
+            cat("anthropic", "Anthropic",
+                {mk("claude-opus-4-5", "Claude Opus 4.5", "anthropic"),
+                 mk("claude-sonnet-4-5", "Claude Sonnet 4.5", "anthropic"),
+                 mk("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic")}),
+            cat("openai", "OpenAI",
+                {mk("gpt-5", "GPT-5", "openai"), mk("gpt-5-mini", "GPT-5 mini", "openai")}),
+        };
+        const std::vector<ModelRef> recents{{"anthropic", "claude-opus-4-5"},
+                                            {"openai", "gpt-5"}};
+        Model m;
+        ui::FusedInputs in;
+        in.catalogs = &cats;
+        in.recents  = &recents;
+        in.active   = ModelRef{"anthropic", "claude-opus-4-5"};
+        m.d.fused_rows = ui::build_fused_rows(in);
+        m.ui.panel.descend(pn::Models{});
+        emit_element("model picker", ui::models_panel(m), cols);
+    }
+    {
+        Model m;
+        const char* titles[] = {"tool cards: chips and syntax colour",
+                                "fix MSYS2 launch under mintty",
+                                "provider switching ux overhaul",
+                                "reasoning: neutral ink and beats"};
+        int i = 0;
+        for (const char* t : titles) {
+            Thread th;
+            th.id = ThreadId{"t-" + std::to_string(i)};
+            th.title = t;
+            th.message_count = 12 + 7 * i++;
+            m.d.threads.push_back(std::move(th));
+        }
+        m.ui.panel.descend(pn::ThreadList{});
+        emit_element("thread list", ui::thread_list_panel(m), cols);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -392,6 +457,7 @@ int main(int argc, char** argv) {
         else if (a == "--reasoning") { render_reasoning(cols); return 0; }
         else if (a == "--prose") { render_prose(cols); return 0; }
         else if (a == "--welcome") { render_welcome(cols); return 0; }
+        else if (a == "--panels") { render_panels(cols); return 0; }
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }
