@@ -484,11 +484,13 @@ TEST_CASE("appearance: the palette follows the chosen theme") {
 
     // And every token tracks the SAME theme — not just the one we looked at.
     // Compared as RESOLVED values, since that is what a Theme field holds.
-    CHECK(ui::danger()    == dracula->error);
-    CHECK(ui::success()   == dracula->success);
-    CHECK(ui::muted()     == dracula->muted);
-    CHECK(ui::highlight() == dracula->primary);
-    CHECK(ui::code_path() == dracula->link);
+    // What goes live is the scheme with its contrast floor applied.
+    const maya::Theme fd = maya::theme::with_contrast_floor(*dracula);
+    CHECK(ui::danger()    == fd.error);
+    CHECK(ui::success()   == fd.success);
+    CHECK(ui::muted()     == fd.muted);
+    CHECK(ui::highlight() == fd.primary);
+    CHECK(ui::code_path() == fd.link);
 
     // Back to native, so the rest of the suite paints as it expects.
     ui_prefs::publish_theme(maya::theme::native);
@@ -527,21 +529,53 @@ TEST_CASE("appearance: publishing a theme reaches the PROJECTED palettes too") {
     REQUIRE(dracula != nullptr);
 
     ui_prefs::publish_theme(*dracula);
-    CHECK(maya::theme::live() == *dracula);
-    CHECK(ui_prefs::theme() == *dracula);
+    // What goes live is the scheme with its contrast floor applied.
+    CHECK(maya::theme::live() == maya::theme::with_contrast_floor(*dracula));
+    CHECK(ui_prefs::theme() == maya::theme::live());
 
     // A light scheme, because polarity is what made the bug visible: light
     // ink left over from a dark theme is unreadable on a light canvas.
     if (rose != nullptr) {
         ui_prefs::publish_theme(*rose);
-        CHECK(maya::theme::live() == *rose);
-        CHECK(ui_prefs::theme() == *rose);
+        CHECK(maya::theme::live() == maya::theme::with_contrast_floor(*rose));
         // The two sinks agree with each other, which is the whole point.
         CHECK(maya::theme::live() == ui_prefs::theme());
     }
 
     ui_prefs::publish_theme(maya::theme::native);
     CHECK(maya::theme::live() == maya::theme::native);
+}
+
+TEST_CASE("appearance: every scheme's ink reads on its own background") {
+    // A third of the bundled schemes ship `primary`/`accent`/`error` under
+    // 4.5:1 on their own canvas, so links, headings and bullets were hard
+    // to read. The floor lifts them; check it held for every scheme, and
+    // that a slot which already read was left exactly as the scheme set it.
+    int lifted = 0, checked = 0;
+    for (const auto& s : maya::theme::schemes) {
+        const maya::Theme& t = *s.theme;
+        if (!t.background.has_channels()) continue;
+        const maya::Theme f = maya::theme::with_contrast_floor(t);
+        const std::pair<maya::LitColor, maya::LitColor> slots[] = {
+            {t.primary, f.primary}, {t.link, f.link},
+            {t.error, f.error},     {t.accent, f.accent}};
+        for (const auto& [raw, out] : slots) {
+            if (!raw.has_channels()) continue;
+            ++checked;
+            const double before = maya::theme::detail::contrast(raw, t.background);
+            const double after  = maya::theme::detail::contrast(out, t.background);
+            if (before >= 4.5) {
+                CHECK_MESSAGE(out == raw, s.name);
+            } else {
+                ++lifted;
+                // A mid-grey canvas may not allow 4.5 at all, but the floor
+                // must never make a slot worse.
+                CHECK_MESSAGE(after >= std::min(4.5, before) - 1e-9, s.name);
+            }
+        }
+    }
+    CHECK(checked > 1000);
+    CHECK(lifted > 100);   // the floor really is doing work
 }
 
 TEST_CASE("appearance: only a theme that names a background owns the canvas") {

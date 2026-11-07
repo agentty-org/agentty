@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
     const char* theme_name = std::getenv("THEME");
     if (!theme_name) theme_name = "Srcery";
     const maya::Theme* th = ui_prefs::find_scheme(theme_name);
-    maya::theme::set_live(th ? *th : maya::theme::native);
+    ui_prefs::publish_theme(th ? *th : maya::theme::native);
 
     int cols = 92;
     if (const char* c = std::getenv("COLS")) {

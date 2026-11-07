@@ -224,8 +224,13 @@ inline std::atomic<const maya::Theme*>& theme_atom() noexcept {
 // common case (view() re-publishes the same theme every frame so `auto`
 // can follow a tmux detach or an ssh hop).
 inline void publish_theme(const maya::Theme& t) noexcept {
-    detail::theme_atom().store(&t, std::memory_order_relaxed);
-    maya::app_set_theme(t);
+    // Every scheme is published with a contrast floor applied: ink slots
+    // that fall under 4.5:1 (3:1 for muted) on the scheme's own background
+    // get lighter or darker, hue kept, so links, headings and hints read in
+    // all 615 schemes. Native comes back unchanged. maya interns the live
+    // theme by value, so its pointer is the stable home for the lifted copy.
+    maya::app_set_theme(maya::theme::with_contrast_floor(t));
+    detail::theme_atom().store(&maya::theme::live(), std::memory_order_relaxed);
 }
 
 // The theme in force. Native until the first publish_theme(), so a
