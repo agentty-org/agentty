@@ -667,8 +667,25 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
                        if (!tool_calls[i].is_terminal()) return false;
                    return true;
                }();
-        if (!(tail_running && maya::available_height() >= 20))
-            cfg.frame = -1;
+        const int H = maya::available_height();
+        bool animate = tail_running && H >= 20;
+        // The same bound, measured. A tail-running header sits at most
+        // H - 12 rows above the card's bottom (capped body + footer +
+        // border), and that is what makes it safe to spin. When the WHOLE
+        // live card is no taller than that, every header in it is just as
+        // far from the viewport top, so queued and parallel tools can spin
+        // too instead of sitting on a static dot. The card is the last
+        // thing in the transcript while any tool is live, so its height is
+        // the distance that matters.
+        if (!animate && H >= 20) {
+            maya::AgentTimeline::Config probe = cfg;
+            probe.frame = -1;   // same glyph width, so the same height
+            const auto sz = maya::measure_element(
+                maya::AgentTimeline{std::move(probe)}.build(),
+                std::max(20, maya::available_width() - 4));
+            animate = sz.height.value <= H - 12;
+        }
+        if (!animate) cfg.frame = -1;
     }
 
     // Panel-level cache key for an ALL-TERMINAL batch. Settled tool bytes
