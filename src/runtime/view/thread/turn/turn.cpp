@@ -3,6 +3,7 @@
 #include "agentty/util/logx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -1796,6 +1797,11 @@ std::optional<maya::Element> reasoning_slot(const Message& msg, const Model& m) 
                                    // light passing over the row, in any theme.
     rcfg.meter_rate  = true;  // "· 26 tok/s" — how fast it is actually thinking
     rcfg.dim_body = true;    // recede the body by color so the answer wins
+    // Decision beats ("Let me…", "Actually", "The issue", bold titles)
+    // light up in the full text colour while the connective prose recedes,
+    // so a long block reads as steps instead of one grey river.
+    rcfg.structured  = true;
+    rcfg.waypoint_fg = ui::text_primary;
     // Colors MUST come from the named-ANSI palette, not the widget's hardcoded
     // truecolor defaults (0x8a gray body / indigo rail). agentty's rule is
     // "the terminal theme wins": named ANSI adapts to the user's palette, so
@@ -1829,6 +1835,47 @@ std::optional<maya::Element> reasoning_slot(const Message& msg, const Model& m) 
     rcfg.accent      = ui::role_brand;          // ┃ rail + sigil
     rcfg.header_word = ui::text_secondary;      // visible header/meter
     rcfg.body_fg     = ui::text_secondary;      // always-visible dim
+    // `secondary` is a HUE in most schemes (green in Srcery), so reasoning
+    // read like success output. When the theme states real colours, use its
+    // own text ink pulled back toward the canvas, with a touch of the rail
+    // hue: neutral, clearly quieter than the answer, still >= 4.5:1.
+    {
+        const maya::Theme& th = maya::theme::live();
+        const auto tx = th.resolve(maya::Color::slot(maya::ThemeSlot::Text));
+        const auto bg = th.resolve(maya::Color::slot(maya::ThemeSlot::Background));
+        const auto ac = th.resolve(ui::role_brand);
+        if (tx.has_channels() && bg.has_channels() && ac.has_channels()) {
+            auto lum = [](int r, int g, int b) {
+                auto f = [](int v) {
+                    const double s = v / 255.0;
+                    return s <= 0.03928 ? s / 12.92
+                                        : std::pow((s + 0.055) / 1.055, 2.4);
+                };
+                return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+            };
+            const double lb = lum(bg.r(), bg.g(), bg.b());
+            auto mix = [&](double t) {
+                auto ch = [&](int a, int b, int c) {
+                    const double v = a + (b - a) * t;          // toward bg
+                    return static_cast<uint8_t>(v + (c - v) * 0.12 + 0.5);  // tint
+                };
+                return maya::Color::rgb(ch(tx.r(), bg.r(), ac.r()),
+                                        ch(tx.g(), bg.g(), ac.g()),
+                                        ch(tx.b(), bg.b(), ac.b()));
+            };
+            // Pull back as far as 40%, but never below 4.5:1 on the canvas.
+            for (double t = 0.40; t >= 0.0; t -= 0.05) {
+                const auto c = maya::theme::live().resolve(mix(t));
+                const double lc = lum(c.r(), c.g(), c.b());
+                const double cr = lc > lb ? (lc + 0.05) / (lb + 0.05)
+                                          : (lb + 0.05) / (lc + 0.05);
+                if (cr >= 4.5 || t <= 0.0) {
+                    rcfg.body_fg = rcfg.header_word = mix(t);
+                    break;
+                }
+            }
+        }
+    }
     // Thinking::Collapsed — a glance, and that is the whole pref: the last
     // 8 ROWS of the reasoning, whether it is still arriving or long done.
     // Thinking::Shown is the one that renders all of it.

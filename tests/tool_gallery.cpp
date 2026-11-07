@@ -249,6 +249,50 @@ void emit_element(const std::string& tag, const maya::Element& root, int cols) {
 
 // The screen chrome around the conversation: status bar and composer, in
 // the states a user actually sees.
+// A real reasoning block (taken from a recorded thread), settled and live,
+// with the answer that followed it.
+void render_reasoning(int cols) {
+    static const char* kThought =
+        "Since `truncate_middle` already exists, I'm planning extension-preserving "
+        "truncation for FileTree filenames \xe2\x80\x94 keeping the stem shortened while "
+        "preserving the extension by default, falling back to middle truncation "
+        "when there's no extension or it's too long, and letting the active row "
+        "reveal the full filename.\n\n"
+        "I'm sketching out the config: a `FileTreeTrunc` enum (KeepExtension, "
+        "Middle, End), plus fluent setters `truncate(mode)` and `reveal_active(bool)` "
+        "on the FileTree class. Writing truncation dispatch logic...\n\n"
+        "For the KeepExtension case, I need to preserve the extension while "
+        "shortening the stem with an ellipsis, falling back to middle-truncation if "
+        "the extension itself is too wide.";
+    for (int live = 0; live < 2; ++live) {
+        Model m;
+        Message user;
+        user.role = Role::User;
+        user.text = "make long filenames in the file tree readable";
+        m.d.current.messages.push_back(std::move(user));
+        Message asst;
+        asst.role = Role::Assistant;
+        asst.thinking = kThought;
+        asst.reasoning_ms = 6400;
+        if (live) {
+            // Thinking started 6.4 s ago on the same clock the view reads.
+            const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                maya::anim_now().time_since_epoch()).count();
+            asst.reasoning_ms = 0;
+            asst.reasoning_started_ms = now_ms - 6400;
+            m.s.phase = phase::Streaming{};
+        } else {
+            asst.text = "Added `FileTreeTrunc` with three modes. KeepExtension is the "
+                        "default, so `really_long_component_name.cpp` shows as "
+                        "`really_lo\xe2\x80\xa6name.cpp`, and the selected row shows the whole name.";
+        }
+        m.d.current.messages.push_back(std::move(asst));
+        auto root = maya::Conversation{ui::conversation_config(m)}.build();
+        emit_element(live ? "reasoning \xc2\xb7 live" : "reasoning \xc2\xb7 settled",
+                     root, cols);
+    }
+}
+
 void render_chrome(int cols) {
     struct State { const char* tag; int tokens; bool streaming; const char* text; };
     const State states[] = {
@@ -308,6 +352,7 @@ int main(int argc, char** argv) {
         else if (a == "--running") g_running = true;
         else if (a == "--ask") g_ask = true;
         else if (a == "--chrome") { render_chrome(cols); return 0; }
+        else if (a == "--reasoning") { render_reasoning(cols); return 0; }
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }
