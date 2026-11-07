@@ -69,4 +69,10 @@ namespace agentty::ui {
 // in it breaks every "Found N"/"HTTP ..." parse and shows as body line 1.
 [[nodiscard]] std::string_view card_output(const ToolUse& tc);
 
+// Output text as a person should read it: drops the notes a tool writes for
+// the model (`[output capped …]`, `[showing lines …]`, `[... N chars
+// elided]`, `[extracted text from …]`), ANSI escapes and \r redraws, and
+// collapses blank-line runs. For display only; parsers keep card_output.
+[[nodiscard]] std::string clean_output(std::string_view s);
+
 } // namespace agentty::ui

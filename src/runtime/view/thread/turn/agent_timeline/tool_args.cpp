@@ -200,7 +200,73 @@ std::string_view card_output(const ToolUse& tc) {
     if (!desc.empty() && out.starts_with(desc)
         && (out.size() == desc.size() || out[desc.size()] == '\n'))
         out.remove_prefix(std::min(out.size(), desc.size() + 1));
+    // A runner's own `PASS exit=0` / `FAIL exit=1` status echo: the card's
+    // status icon already says this.
+    for (std::string_view tag : {"PASS exit=", "FAIL exit="})
+        if (out.starts_with(tag))
+            if (auto nl = out.find('\n'); nl != std::string_view::npos)
+                out.remove_prefix(nl + 1);
+    // Blank lines at either edge never carry anything.
+    while (!out.empty() && (out.front() == '\n' || out.front() == '\r')) out.remove_prefix(1);
+    while (!out.empty() && (out.back() == '\n' || out.back() == ' ' || out.back() == '\r'))
+        out.remove_suffix(1);
     return out;
+}
+
+std::string clean_output(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    std::size_t pos = 0;
+    while (pos <= s.size()) {
+        auto nl = s.find('\n', pos);
+        if (nl == std::string_view::npos) nl = s.size();
+        std::string_view ln = s.substr(pos, nl - pos);
+        pos = nl + 1;
+        // Notes the tool adds for the model about what it cut or how to
+        // page. The card shows its own `⋯ N more`, so they're noise here.
+        auto t = ln;
+        while (!t.empty() && t.front() == ' ') t.remove_prefix(1);
+        const bool note = t.starts_with("[output capped") || t.starts_with("[showing lines")
+            || t.starts_with("[extracted text from") || t.starts_with("[truncated")
+            || (t.starts_with("[... ") && t.find(" elided") != std::string_view::npos)
+            || t.starts_with("[cached —") || t.starts_with("[cached -");
+        if (note) { if (nl == s.size()) break; continue; }
+        // ANSI escapes and carriage-return redraws from progress bars.
+        if (auto cr = ln.rfind('\r'); cr != std::string_view::npos && cr + 1 < ln.size())
+            ln = ln.substr(cr + 1);
+        for (std::size_t i = 0; i < ln.size(); ++i) {
+            if (ln[i] == '\x1b' && i + 1 < ln.size() && ln[i + 1] == '[') {
+                std::size_t j = i + 2;
+                while (j < ln.size() && !(ln[j] >= '@' && ln[j] <= '~')) ++j;
+                i = j;
+                continue;
+            }
+            if (ln[i] == '\r') continue;
+            out += ln[i];
+        }
+        if (nl == s.size()) break;
+        out += '\n';
+    }
+    // Collapse runs of blank lines to one, and drop blank edges.
+    std::string tidy;
+    tidy.reserve(out.size());
+    int blank = 0;
+    std::size_t p = 0;
+    while (p <= out.size()) {
+        auto e = out.find('\n', p);
+        if (e == std::string::npos) e = out.size();
+        std::string_view ln{out.data() + p, e - p};
+        const bool empty = ln.find_first_not_of(" \t") == std::string_view::npos;
+        if (empty) ++blank; else blank = 0;
+        if (!(empty && (blank > 1 || tidy.empty()))) {
+            tidy.append(ln);
+            tidy += '\n';
+        }
+        if (e == out.size()) break;
+        p = e + 1;
+    }
+    while (!tidy.empty() && (tidy.back() == '\n' || tidy.back() == ' ')) tidy.pop_back();
+    return tidy;
 }
 
 } // namespace agentty::ui

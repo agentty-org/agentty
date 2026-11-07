@@ -14,6 +14,7 @@
 
 #include "tool_body_common.hpp"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -139,6 +140,23 @@ bool read_body(const ToolUse& tc,
             if (auto path = read_path_arg(tc.args); !path.empty()) {
                 if (auto it = grep_hits->find(path); it != grep_hits->end())
                     out.highlight_lines = it->second;
+            }
+        }
+        // A file reads from its top (includes, the declaration); its last
+        // lines are usually closing braces. Show the head and say how much
+        // follows. With grep hits, start at the first one instead.
+        out.tail_only = false;
+        if (!out.highlight_lines.empty()) {
+            const int first_hit = *out.highlight_lines.begin();
+            const int skip = std::max(0, first_hit - out.start_line - 1);
+            std::size_t p = 0;
+            for (int k = 0; k < skip && p != std::string::npos; ++k) {
+                p = out.text.find('\n', p);
+                if (p != std::string::npos) ++p;
+            }
+            if (p != std::string::npos && p > 0 && p < out.text.size()) {
+                out.text.erase(0, p);
+                out.start_line += skip;
             }
         }
     }

@@ -107,7 +107,7 @@ void generic_lifecycle_body(const ToolUse& tc,
         // tools, so it remains useful without destabilising frame geometry.
         if (text_is_visible(tc.progress_text())) {
             out.kind = Kind::CodeBlock;
-            out.text = tc.progress_text();
+            out.text = clean_output(tc.progress_text());
             out.is_streaming = true;
         }
         return;
@@ -120,7 +120,7 @@ void generic_lifecycle_body(const ToolUse& tc,
     }
     if (generic_text && tc.is_done() && text_is_visible(card_output(tc))) {
         out.kind = Kind::CodeBlock;
-        out.text = std::string{card_output(tc)};
+        out.text = clean_output(card_output(tc));
         // Settled output for the tools that land here (repo_map, outline,
         // read_filter, search_*, extract, json_query, MCP tools…) is
         // HEAD-heavy: the answer is at the top, the tail is pagination /

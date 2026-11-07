@@ -228,9 +228,42 @@ bool grep_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
 bool generic_list_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     using Kind = maya::ToolBodyPreview::Kind;
     if (!tc.is_done()) return false;
+    if (tc.name.value == "git_status") {
+        // The header already says branch and counts. Keep only the porcelain
+        // file rows, with the two-letter code spelled as a word.
+        std::string rows;
+        const std::string_view s = card_output(tc);
+        for (std::size_t p = 0; p < s.size();) {
+            auto e = s.find('\n', p);
+            if (e == std::string_view::npos) e = s.size();
+            const auto ln = s.substr(p, e - p);
+            p = e + 1;
+            if (ln.size() < 4 || ln[2] != ' ') continue;
+            const auto code = ln.substr(0, 2);
+            const char* word =
+                code == "??" ? "new      " :
+                code.find('D') != std::string_view::npos ? "deleted  " :
+                code.find('A') != std::string_view::npos ? "added    " :
+                code.find('R') != std::string_view::npos ? "renamed  " :
+                code.find('U') != std::string_view::npos ? "conflict " :
+                code.find('M') != std::string_view::npos ? "modified " : nullptr;
+            if (!word) continue;
+            rows += word;
+            rows += ln.substr(3);
+            rows += '\n';
+        }
+        if (!rows.empty()) {
+            rows.pop_back();
+            out.kind = Kind::CodeBlock;
+            out.text = std::move(rows);
+            out.text_color = text_primary;
+            out.tail_only = false;
+            return true;
+        }
+    }
     if (!card_output(tc).empty()) {
         out.kind = Kind::CodeBlock;
-        out.text = std::string{card_output(tc)};
+        out.text = clean_output(card_output(tc));
         out.text_color = text_primary;   // plain output reads as normal text
         // Head-heavy output: show the FIRST lines (plus a small tail via
         // the head_tail profile) instead of the tail-anchored window that
