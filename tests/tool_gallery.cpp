@@ -40,6 +40,7 @@
 #include "agentty/runtime/view/thread/conversation.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 #include "agentty/runtime/view/composer.hpp"
+#include "agentty/runtime/view/thread/welcome_screen.hpp"
 #include "agentty/domain/ui_theme.hpp"
 
 #include <maya/runtime.hpp>
@@ -237,7 +238,7 @@ void render_case(const Case& c, int cols) {
 
 void emit_element(const std::string& tag, const maya::Element& root, int cols) {
     maya::StylePool pool;
-    maya::Canvas canvas(cols, 40, &pool);
+    maya::Canvas canvas(cols, 120, &pool);
     canvas.clear();
     maya::render_tree(root, canvas, pool, maya::theme::live(), true);
     std::printf("\n\x1b[2m\xe2\x94\x80\xe2\x94\x80 %s ", tag.c_str());
@@ -316,6 +317,42 @@ void render_chrome(int cols) {
     }
 }
 
+// A markdown-heavy assistant answer (lifted from a recorded thread) with
+// every element the prose renderer handles.
+void render_prose(int cols) {
+    static const char* kAnswer =
+        "## Emphasis mix\n\n"
+        "You can combine `code` with **bold**, or put a [link with **bold** text](https://example.com) inline.\n\n"
+        "### Ordered + nested\n\n"
+        "1. Setup\n   1. Install deps\n   2. Configure env\n2. Build\n3. Ship\n\n"
+        "| Command | Description                        | Shorthand |\n"
+        "|---------|------------------------------------|:---------:|\n"
+        "| `status`| Show working tree state            | `st`      |\n"
+        "| `commit`| Record changes to the repository   | `ci`      |\n\n"
+        "```bash\nset -euo pipefail\nfor f in *.txt; do\n  echo \"processing $f\"\ndone\n```\n\n"
+        "> Level 1\n> > Level 2\n\n"
+        "- [x] Write parser\n- [ ] Ship release\n\n"
+        "---\n\nWant me to focus on any one element?";
+    Model m;
+    Message user;
+    user.role = Role::User;
+    user.text = "show me every markdown element";
+    m.d.current.messages.push_back(std::move(user));
+    Message asst;
+    asst.role = Role::Assistant;
+    asst.text = kAnswer;
+    m.d.current.messages.push_back(std::move(asst));
+    auto root = maya::Conversation{ui::conversation_config(m)}.build();
+    emit_element("prose", root, cols);
+}
+
+// The first screen: a fresh Model with no conversation.
+void render_welcome(int cols) {
+    Model m;
+    auto root = maya::WelcomeScreen{ui::welcome_screen_config(m)}.build();
+    emit_element("welcome", root, cols);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -353,6 +390,8 @@ int main(int argc, char** argv) {
         else if (a == "--ask") g_ask = true;
         else if (a == "--chrome") { render_chrome(cols); return 0; }
         else if (a == "--reasoning") { render_reasoning(cols); return 0; }
+        else if (a == "--prose") { render_prose(cols); return 0; }
+        else if (a == "--welcome") { render_welcome(cols); return 0; }
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }
