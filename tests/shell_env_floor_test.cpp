@@ -148,3 +148,19 @@ TEST_CASE("permission card: a plain shell call reads exactly as before") {
     const auto cfg = agentty::ui::inline_permission_config(pp, tc);
     CHECK(cfg.description == "cargo test");
 }
+
+TEST_CASE("permission card: bash shows its command, not raw json") {
+    // bash is the most used tool and was missing from the shell branch, so
+    // its prompt dumped the whole args object.
+    agentty::ToolUse tc;
+    tc.id   = agentty::ToolCallId{"c1"};
+    tc.name = agentty::ToolName{"bash"};
+    tc.args = json{{"command", "rm -rf build"},
+                   {"display_description", "Clean the build"}};
+    agentty::PendingPermission pp{tc.id, tc.name, "needs permission", 0};
+
+    const auto cfg = agentty::ui::inline_permission_config(pp, tc);
+    CHECK(cfg.description == "rm -rf build");
+    CHECK(cfg.lang == "sh");
+    CHECK(cfg.verb == "run this command?");
+}

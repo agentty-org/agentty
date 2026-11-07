@@ -31,6 +31,7 @@
 //       ./build/tool_gallery read grep       # tools matching these
 //       ./build/tool_gallery --kind failed   # only the failures
 //       ./build/tool_gallery --running bash  # as in-flight cards
+//       ./build/tool_gallery --ask bash      # with the permission prompt
 //       ./build/tool_gallery --list          # what is in the corpus
 //       COLS=120 ./build/tool_gallery        # at another width
 
@@ -59,6 +60,8 @@ using json = nlohmann::json;
 
 // --running: render every card as an in-flight tool (shimmer, spinner).
 static bool g_running = false;
+// --ask: render each case waiting on a permission prompt.
+static bool g_ask = false;
 
 namespace {
 
@@ -201,7 +204,13 @@ void render_case(const Case& c, int cols) {
 
     Message asst;
     asst.role = Role::Assistant;
-    asst.tool_calls.push_back(make_tool(c));
+    ToolUse tool = make_tool(c);
+    if (g_ask) {
+        tool.status = ToolUse::Pending{std::chrono::steady_clock::now()};
+        m.d.pending_permission = PendingPermission{tool.id, tool.name,
+                                                   "needs permission", 0};
+    }
+    asst.tool_calls.push_back(std::move(tool));
     m.d.current.messages.push_back(std::move(asst));
 
     auto root = maya::Conversation{ui::conversation_config(m)}.build();
@@ -257,6 +266,7 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--list") list_only = true;
         else if (a == "--running") g_running = true;
+        else if (a == "--ask") g_ask = true;
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }
