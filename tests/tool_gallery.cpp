@@ -129,6 +129,9 @@ ToolUse make_tool(const Case& c) {
     if (g_running) {
         ToolUse::Running r;
         r.started_at = started;
+        // The recorded output stands in for live progress, so a running card
+        // has a body to show (as bash and task do mid-run).
+        r.progress_text = c.output;
         t.status = std::move(r);
     }
     else if (c.failed) t.status = ToolUse::Failed{started, finished, c.output};
