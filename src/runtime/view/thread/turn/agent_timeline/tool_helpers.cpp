@@ -908,8 +908,34 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
 // code path owns the failure summary; individual tool branches stay
 // success-only. Rejected/aborted tools are intentionally left plain — they
 // weren't errors, and their glyph already says "skipped".
+// "(3+ 5-)" from edit / write / apply_patch output, as "+3 −5". The
+// minus is U+2212 so the header colouring can't confuse it with a flag.
+static std::string change_stat(std::string_view out) {
+    for (std::size_t p = out.find(" ("); p != std::string_view::npos;
+         p = out.find(" (", p + 2)) {
+        std::size_t i = p + 2, a = i;
+        while (i < out.size() && out[i] >= '0' && out[i] <= '9') ++i;
+        if (i == a || i + 1 >= out.size() || out[i] != '+' || out[i + 1] != ' ') continue;
+        const auto add = out.substr(a, i - a);
+        i += 2;
+        const std::size_t r = i;
+        while (i < out.size() && out[i] >= '0' && out[i] <= '9') ++i;
+        if (i == r || i + 1 >= out.size() || out[i] != '-' || out[i + 1] != ')') continue;
+        const auto rem = out.substr(r, i - r);
+        std::string s = "+" + std::string{add};
+        if (rem != "0") s += " \xe2\x88\x92" + std::string{rem};
+        return s;
+    }
+    return {};
+}
+
 std::string tool_timeline_detail(const ToolUse& tc) {
     std::string detail = tool_timeline_detail_base(tc);
+    const auto& n = tc.name.value;
+    if (tc.is_done() && (n == "edit" || n == "write" || n == "apply_patch")) {
+        if (auto st = change_stat(card_output(tc)); !st.empty())
+            detail += "  \xc2\xb7  " + st;
+    }
     if (tc.is_failed()) {
         std::string reason = tool_failure_reason(tc);
         if (reason.empty()) reason = "failed";
