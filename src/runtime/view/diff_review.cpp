@@ -56,13 +56,25 @@ namespace {
     return muted;
 }
 
-// A parsed diff line: its sign, the code text (sign stripped), and the new-side
-// line number (0 = none, e.g. a removed line).
-struct DiffLine { char sign; std::string code; int lineno; };
+// A parsed diff line: its sign, the code text (sign stripped), and its old-
+// and new-side line numbers (0 = none on that side).
+struct DiffLine { char sign; std::string code; int oldno; int newno; };
 
-[[nodiscard]] std::vector<DiffLine> parse_hunk(std::string_view patch) {
+// Lines in a file's text, the way an editor counts them.
+[[nodiscard]] int line_count(const std::string& s) {
+    int n = static_cast<int>(std::count(s.begin(), s.end(), '\n'));
+    return (!s.empty() && s.back() != '\n') ? n + 1 : n;
+}
+
+// `old_lines`/`new_lines` drop the empty "line" diff::compute emits past a
+// trailing newline; it isn't in the file.
+[[nodiscard]] std::vector<DiffLine> parse_hunk(std::string_view patch,
+                                               int old_lines = 1 << 30,
+                                               int new_lines = 1 << 30,
+                                               int old_start = 1, int new_start = 1) {
     std::vector<DiffLine> out;
-    int newno = 0;
+    // diff::compute's patches carry no @@ header, so start from the hunk
+    int oldno = old_start, newno = new_start;
     std::size_t i = 0;
     while (i < patch.size()) {
         std::size_t nl = patch.find('\n', i);
@@ -70,20 +82,26 @@ struct DiffLine { char sign; std::string code; int lineno; };
         i = (nl == std::string_view::npos) ? patch.size() : nl + 1;
         if (line.empty()) continue;
         if (line.starts_with("@@")) {
-            // Seed the new-side counter from "+start".
-            auto p = line.find('+');
-            if (p != std::string_view::npos) {
-                newno = 0;
-                for (std::size_t k = p + 1; k < line.size() && line[k] >= '0' && line[k] <= '9'; ++k)
-                    newno = ::agentty::util::push_digit(newno, line[k]);
-            }
+            // Seed both counters from "-start" and "+start".
+            auto seed = [&](char c) {
+                int v = 0;
+                if (auto p = line.find(c, 2); p != std::string_view::npos)
+                    for (std::size_t k = p + 1; k < line.size() && line[k] >= '0' && line[k] <= '9'; ++k)
+                        v = ::agentty::util::push_digit(v, line[k]);
+                return v;
+            };
+            oldno = seed('-');
+            newno = seed('+');
             continue;   // the @@ header itself isn't rendered as a code line
         }
         char sign = line[0];
         std::string code{line.substr(1)};
-        int ln = 0;
-        if (sign == '+' || sign == ' ') ln = newno++;
-        out.push_back({sign, std::move(code), ln});
+        int o = 0, n = 0;
+        if (sign == '-' || sign == ' ') o = oldno++;
+        if (sign == '+' || sign == ' ') n = newno++;
+        const bool past_end = code.empty() && (o == 0 || o > old_lines) && (n == 0 || n > new_lines);
+        if (past_end) continue;
+        out.push_back({sign, std::move(code), o, n});
     }
     return out;
 }
@@ -104,10 +122,13 @@ struct DiffLine { char sign; std::string code; int lineno; };
     std::string content;
     std::vector<StyledRun> runs;
 
-    // Gutter (right-aligned line number) + sign marker.
-    std::string gut = dl.lineno > 0 ? std::to_string(dl.lineno) : "";
-    gut.insert(gut.begin(), static_cast<std::size_t>(std::max(0, gutter_w - (int)gut.size())), ' ');
-    gut += " ";
+    // Gutter: old and new line numbers, right-aligned, then the sign.
+    auto num = [gutter_w](int n) {
+        std::string s = n > 0 ? std::to_string(n) : "";
+        s.insert(s.begin(), static_cast<std::size_t>(std::max(0, gutter_w - (int)s.size())), ' ');
+        return s;
+    };
+    std::string gut = num(dl.oldno) + " " + num(dl.newno) + " ";
     const bool on_band = diff_bands_on() && (add || del);
     const maya::Color rail = add ? maya::diff_palette::add_rail : maya::diff_palette::rem_rail;
     const maya::Color rail_fg = add ? maya::diff_palette::add_fg_hi : maya::diff_palette::rem_fg_hi;
@@ -176,12 +197,13 @@ Element diff_review(const Model& m) {
     const auto& fc = m.d.pending_changes[static_cast<std::size_t>(fidx)];
 
     // ── Overall progress across every file's hunks ──
-    int total_hunks = 0, decided = 0, accepted = 0;
+    int total_hunks = 0, decided = 0, accepted = 0, rejected = 0;
     for (const auto& f : m.d.pending_changes)
         for (const auto& hk : f.hunks) {
             ++total_hunks;
             if (hk.status != Hunk::Status::Pending) ++decided;
             if (hk.status == Hunk::Status::Accepted) ++accepted;
+            if (hk.status == Hunk::Status::Rejected) ++rejected;
         }
     // NOTE: the pane can never sit at decided == total with work still
     // pending — the reducer commits and closes itself the moment the last
@@ -262,20 +284,46 @@ Element diff_review(const Model& m) {
             text("  "),
             text(std::format("{}/{} reviewed", decided, total_hunks), fg_dim(muted)),
             spacer(),
-            text("  "),
-            text(std::format("{} to accept", accepted), fg_dim(muted)),
+            text(std::format("{} accepted", accepted), accepted ? fg_of(success) : fg_dim(muted)),
+            text("  \xc2\xb7  ", fg_dim(muted)),
+            text(std::format("{} rejected", rejected), rejected ? fg_of(danger) : fg_dim(muted)),
             text("  ")
         ).build());
     }
     rows.push_back(rule(muted));
 
+    // ── Current file: the full path the rail shortened, and its diffstat ──
+    {
+        std::string dir, base = fc.path;
+        if (auto sl = base.rfind('/'); sl != std::string::npos) {
+            dir = base.substr(0, sl + 1);
+            base = base.substr(sl + 1);
+        }
+        rows.push_back(h(
+            text("  "),
+            text(dir, fg_dim(muted)),
+            text(base, fg_bold(fg)),
+            text("  "),
+            text(std::format("+{}", fc.added), fg_of(success)),
+            text(" "),
+            text(std::format("-{}", fc.removed), fg_of(danger)),
+            spacer(),
+            text(std::format("{} hunk{}", fc.hunks.size(), fc.hunks.size() == 1 ? "" : "s"),
+                 fg_dim(muted)),
+            text("  ")
+        ).build());
+        rows.push_back(text(""));
+    }
+
     // ── The current file's hunks, syntax-highlighted ──
     const syntax::Lang lang = lang_of(fc.path);
-    // Gutter width from the largest new-side line number in this file.
+    // Gutter width from the largest line number on either side.
     int max_ln = 1;
     for (const auto& hk : fc.hunks)
-        max_ln = std::max(max_ln, hk.new_start + hk.new_len);
+        max_ln = std::max({max_ln, hk.new_start + hk.new_len, hk.old_start + hk.old_len});
     const int gut_w = std::max(2, static_cast<int>(std::to_string(max_ln).size()));
+    const int old_n = line_count(fc.original_contents);
+    const int new_n = line_count(fc.new_contents);
 
     // Set inside the hunk loop when the FOCUSED hunk overflows its window —
     // gates the ^D/^U footer hint so it only appears when scrolling exists.
@@ -287,13 +335,15 @@ Element diff_review(const Model& m) {
 
         // Per-hunk diffstat for the collapsed summary.
         int hadd = 0, hrem = 0;
-        for (const auto& dl : parse_hunk(hk.patch)) {
+        auto lines = parse_hunk(hk.patch, old_n, new_n, hk.old_start, hk.new_start);
+        for (const auto& dl : lines) {
             if (dl.sign == '+') ++hadd; else if (dl.sign == '-') ++hrem;
         }
 
-        // Hunk header: "▸ hunk N/M  ● status   +A −R". The caret marks the
-        // focused hunk; collapsed hunks show only this one line so a huge
-        // changeset stays navigable instead of a 200-row wall.
+        // Hunk header: "▸ hunk N/M  ● status   +A -R    line L". The caret
+        // marks the focused hunk; collapsed hunks show only this one line so
+        // a huge changeset stays navigable instead of a 200-row wall.
+        const int at = hk.new_start > 0 ? hk.new_start : hk.old_start;
         rows.push_back(h(
             text("  "),
             text(sel ? "\xe2\x96\xb8 " : "  ", sel ? fg_bold(accent) : fg_of(muted)),
@@ -302,10 +352,13 @@ Element diff_review(const Model& m) {
             text(status_dot(hk.status), fg_of(status_color(hk.status))),
             text(" "),
             text(hk.status == Hunk::Status::Accepted ? "accepted"
-               : hk.status == Hunk::Status::Rejected ? "rejected" : "pending",
+               : hk.status == Hunk::Status::Rejected ? "rejected" : "pending ",
                  fg_of(status_color(hk.status))),
             text(std::format("   +{} ", hadd), fg_dim(success)),
-            text(std::format("-{}", hrem), fg_dim(danger))
+            text(std::format("-{}", hrem), fg_dim(danger)),
+            spacer(),
+            text(std::format("line {}", at), fg_dim(muted)),
+            text("  ")
         ).build());
 
         // Only the FOCUSED hunk expands. Others stay collapsed to the header
@@ -318,7 +371,6 @@ Element diff_review(const Model& m) {
         // "↑ N lines above" / "… N more" bracket it so nothing is silently
         // hidden and the user knows both directions exist.
         constexpr int kMaxHunkRows = 24;
-        auto lines = parse_hunk(hk.patch);
         const int nlines = static_cast<int>(lines.size());
         // Clamp the offset precisely against the parsed rows (the reducer
         // clamps loosely against the raw patch's newline count).
@@ -339,7 +391,7 @@ Element diff_review(const Model& m) {
                 row = std::move(row) | bgc(maya::diff_palette::add_bg);
             else if (diff_bands && dl.sign == '-')
                 row = std::move(row) | bgc(maya::diff_palette::rem_bg);
-            rows.push_back((h(std::move(row)) | padding(0, 0, 0, 4)).build());
+            rows.push_back((h(std::move(row)) | padding(0, 0, 0, 2)).build());
         }
         if (off + shown < nlines)
             rows.push_back(text(std::format(
