@@ -42,6 +42,7 @@
 #include "agentty/runtime/view/composer.hpp"
 #include "agentty/runtime/view/thread/welcome_screen.hpp"
 #include "agentty/runtime/view/panels.hpp"
+#include "agentty/runtime/view/view.hpp"
 #include "agentty/runtime/app/update/internal.hpp"   // collect_viewer_entries
 #include "agentty/runtime/panel/tool_output.hpp"
 #include "agentty/runtime/view/diff_review.hpp"
@@ -492,6 +493,33 @@ static void render_viewer(int cols, const std::vector<std::string>& want,
     auto* o = m.ui.panel.get<pn::ToolOutput>();
     o->viewing = true;
     if (const char* q = std::getenv("VIEWER_FIND")) { o->query = q; ++o->hit_seq; }
+    if (std::getenv("VIEWER_FULL")) {
+        // The real screen: base + overlay, laid out for a cols x rows terminal.
+        // The corpus turn is cleared so the base is just the chrome.
+        m.d.current.messages.clear();
+        m.ui.term_cols = cols;
+        m.ui.term_rows = rows;
+        {
+            Model bare;
+            bare.ui.term_cols = cols;
+            bare.ui.term_rows = rows;
+            std::printf("== base alone %dx%d: %d rows\n", cols, rows,
+                        maya::measure_element(ui::view(bare), cols).height.value);
+            bare.ui.panel.descend(pn::Palette{});
+            std::printf("== palette open %dx%d: %d rows\n", cols, rows,
+                        maya::measure_element(ui::view(bare), cols).height.value);
+        }
+        for (int i = 0; i < std::min(n, 3); ++i) {
+            o->index = i;
+            m.ui.tool_viewer_scroll.y = 0;
+            auto root = ui::view(m);
+            const auto sz = maya::measure_element(root, cols);
+            std::printf("\n== full screen %dx%d, entry %d: frame is %d rows%s\n", cols, rows, i + 1,
+                        sz.height.value, sz.height.value > rows ? "  OVERFLOW" : "");
+            emit_element("screen", root, cols);
+        }
+        return;
+    }
     const int bodies = std::getenv("VIEWER_ALL") ? n : std::min(n, 4);
     for (int i = 0; i < bodies; ++i) {
         o->index = i;

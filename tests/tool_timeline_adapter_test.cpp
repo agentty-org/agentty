@@ -810,6 +810,36 @@ TEST_CASE("tool output viewer: find, Esc order, paging") {
     check(o() && !o()->viewing, "then goes back to the list");
 }
 
+TEST_CASE("tool output viewer: never taller than the terminal") {
+    A::tool_output::Entry e;
+    e.name = "shell";
+    e.title = "Shell";
+    e.detail = "cmake --build build --target a-very-long-target-name -j12";
+    e.trailing = "failed \xc2\xb7 41.2s \xc2\xb7 1 MB";
+    for (int i = 0; i < 200; ++i) e.output += "output row " + std::to_string(i) + "\n";
+    e.call = make_tool("shell", A::ToolUse::Done{{}, {}, e.output},
+                       {{"command", "cmake --build build " + std::string(120, 'z')}});
+    for (bool viewing : {false, true})
+        for (bool searching : {false, true}) {
+            A::Model m;
+            m.ui.panel.descend(A::ui::panel::ToolOutput{{{e, e, e}, 0, viewing}});
+            if (searching) m.ui.panel.get<A::ui::panel::ToolOutput>()->query = "row 1";
+            for (int rows = 6; rows <= 40; ++rows)
+                for (int cols : {30, 40, 60, 80, 120}) {
+                    setenv("LINES", std::to_string(rows).c_str(), 1);
+                    setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+                    auto el = U::tool_output_panel(m);
+                    // The overlay sits 2 rows above the bottom, 4 columns in.
+                    const auto sz = maya::measure_element(el, cols - 4);
+                    check(sz.height.value <= std::max(3, rows - 2),
+                          std::string{viewing ? "body" : "list"}
+                              + (searching ? " (find)" : "") + " fits "
+                              + std::to_string(cols) + "x" + std::to_string(rows)
+                              + ": " + std::to_string(sz.height.value) + " rows");
+                }
+        }
+}
+
 TEST_CASE("tool output viewer: long lines wrap inside the pane") {
     A::tool_output::Entry e;
     e.name = "shell";

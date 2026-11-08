@@ -81,9 +81,9 @@ Element tool_output_panel(const Model& m) {
         // At truly tiny heights, drop the optional footer and devote every
         // remaining row to selectable outputs.
         const int list_term_rows = panel_terminal_rows();
-        const bool compact_list = list_term_rows < 7;
-        cfg.viewport_h = std::clamp(
-            list_term_rows - (compact_list ? 4 : 6), 1, kViewportH);
+        const bool compact_list = list_term_rows < 6;
+        // The fit loop at the end shrinks this to what the terminal has.
+        cfg.viewport_h = std::clamp(static_cast<int>(o->entries.size()), 1, kViewportH);
 
         // Badge column width: longest display name across the entries,
         // so every detail line starts at the same column and the badge
@@ -143,7 +143,23 @@ Element tool_output_panel(const Model& m) {
                 {"Esc", "close", 3},
             }));
         }
-        return Panel{std::move(cfg)}.build();
+        // Same rule as the body: never taller than the room the overlay has.
+        const int budget = std::max(3, list_term_rows - 2);
+        const int cols   = std::max(10, panel_terminal_cols() - 4);
+        Element out;
+        for (int pass = 0; pass < 8; ++pass) {
+            Panel::Config c = cfg;
+            out = Panel{std::move(c)}.build();
+            const int h = maya::measure_element(out, cols).height.value;
+            if (h <= budget) break;
+            const int over = h - budget;
+            if (cfg.viewport_h > 3) cfg.viewport_h = std::max(3, cfg.viewport_h - over);
+            else if (!cfg.tight) cfg.tight = true;
+            else if (!cfg.footer.empty()) cfg.footer.clear();
+            else if (cfg.viewport_h > 1) cfg.viewport_h = std::max(1, cfg.viewport_h - over);
+            else break;
+        }
+        return out;
     }
 
     // ── BODY stage ──
@@ -161,10 +177,9 @@ Element tool_output_panel(const Model& m) {
     // inside all viable terminal heights (5+ rows) instead of inheriting the
     // shared picker's four-row viewport floor.
     const int body_term_rows = panel_terminal_rows();
-    const bool compact_body = body_term_rows < 10;
-    // Reading output wants the room, so the pane takes the terminal's height
-    // less its own chrome (9 rows) and a row of margin, not the picker cap.
-    cfg.viewport_h = std::max(1, body_term_rows - (compact_body ? 4 : 10));
+    const bool compact_body = body_term_rows < 6;   // the fit loop handles the rest
+    // Start from the whole terminal; the fit loop below takes the chrome off.
+    cfg.viewport_h = std::max(1, body_term_rows);
 
     // Header: tool name, what it ran on, and how it went. The status never
     // clips; the detail gives way first.
@@ -365,49 +380,51 @@ Element tool_output_panel(const Model& m) {
         }
     }
 
-    // Window the cached rows to the viewport and keep the scroll bounds the
-    // reducer clamps against.
+    // Window the cached rows into the pane. The pane must never be taller
+    // than the terminal (a too-tall frame scrolls into scrollback), and the
+    // header, status and hint rows can each wrap at some width, so rather
+    // than guess the chrome we build, measure, and give the body less until
+    // it fits.
     const int total_rows = static_cast<int>(cache.rows.size());
-    const int vh = std::max(1, cfg.viewport_h);
     auto& sc = m.ui.tool_viewer_scroll;
-    sc.max_y = std::max(0, total_rows - vh);
-    sc.viewport_bounds.h = vh;   // page size for PgUp / PgDn
-    // Find: the current match (wrapping) is brought into view, a third of
+    const int nhits = static_cast<int>(cache.hit_rows.size());
+    const int cur_hit = nhits > 0 ? ((o->hit % nhits) + nhits) % nhits : -1;
+    const int cur_row = cur_hit >= 0 ? cache.hit_rows[static_cast<std::size_t>(cur_hit)] : -1;
+    // Find: bring the current match into view once per jump, a third of
     // the way down so there's context above it.
     static int seen_seq = -1;
-    const int nhits = static_cast<int>(cache.hit_rows.size());
-    int cur_hit = -1;
-    if (nhits > 0) {
-        cur_hit = ((o->hit % nhits) + nhits) % nhits;
-        if (seen_seq != o->hit_seq) {
-            seen_seq = o->hit_seq;
-            sc.y = cache.hit_rows[static_cast<std::size_t>(cur_hit)] - vh / 3;
+    const bool jump_to_hit = cur_hit >= 0 && seen_seq != o->hit_seq;
+    seen_seq = o->hit_seq;
+    const int y_before = sc.y;
+
+    const Panel::Config base = std::move(cfg);
+    auto assemble = [&](int vh, bool hints, bool header) {
+        Panel::Config c = base;
+        if (!header) c.header.clear();
+        c.scroll = nullptr;
+        sc.max_y = std::max(0, total_rows - vh);
+        sc.viewport_bounds.h = vh;   // page size for PgUp / PgDn
+        sc.y = jump_to_hit ? cur_row - vh / 3 : y_before;
+        // A live entry follows its newest output unless the user scrolled up.
+        if (e.is_live && m.ui.tool_viewer_tail && o->query.empty()) sc.y = sc.max_y;
+        sc.y = std::clamp(sc.y, 0, sc.max_y);
+        const int first = sc.y;
+        const int last  = std::min(total_rows, first + vh);
+        for (int i = first; i < last; ++i) {
+            // While searching, a one-column margin marks the current match.
+            if (!o->query.empty())
+                c.prebuilt.push_back(hstack().width(Dimension::percent(100))(
+                    text(i == cur_row ? "\xe2\x96\xb8" : " ", fg_bold(warn)),   // ▸
+                    cache.rows[static_cast<std::size_t>(i)] | grow(1.0f) | shrink(1.0f)
+                ).build() | height(1) | overflow(Overflow::Hidden));
+            else
+                c.prebuilt.push_back(cache.rows[static_cast<std::size_t>(i)]);
         }
-    }
-    // A live entry follows its newest output unless the user scrolled up.
-    if (e.is_live && m.ui.tool_viewer_tail && o->query.empty())
-        sc.y = sc.max_y;
-    sc.y = std::clamp(sc.y, 0, sc.max_y);
-    cfg.scroll = nullptr;
-    const int first = sc.y;
-    const int last  = std::min(total_rows, first + vh);
-    const int cur_row = cur_hit >= 0 ? cache.hit_rows[static_cast<std::size_t>(cur_hit)] : -1;
-    for (int i = first; i < last; ++i) {
-        // While searching, a one-column margin marks the current match.
-        if (!o->query.empty())
-            cfg.prebuilt.push_back(hstack().width(Dimension::percent(100))(
-                text(i == cur_row ? "\xe2\x96\xb8" : " ", fg_bold(warn)),   // ▸
-                cache.rows[static_cast<std::size_t>(i)] | grow(1.0f) | shrink(1.0f)
-            ).build() | height(1) | overflow(Overflow::Hidden));
-        else
-            cfg.prebuilt.push_back(cache.rows[static_cast<std::size_t>(i)]);
-    }
+        if (total_rows == 0)
+            c.prebuilt.push_back(text("  waiting for output\xe2\x80\xa6", fg_italic(muted))
+                                 | height(1) | overflow(Overflow::Hidden));
+        if (compact_body) return c;
 
-    if (total_rows == 0)
-        cfg.prebuilt.push_back(text("  waiting for output\xe2\x80\xa6", fg_italic(muted))
-                               | height(1) | overflow(Overflow::Hidden));
-
-    if (!compact_body) {
         // Status line: the find prompt or result, then where we are.
         std::vector<Element> status;
         if (o->typing || !o->query.empty()) {
@@ -434,8 +451,9 @@ Element tool_output_panel(const Model& m) {
             where += where.empty() ? "following" : " \xc2\xb7 following";
         status.push_back(spacer());
         status.push_back(text(where + "  ", fg_dim(e.is_live ? tool_hue : muted)) | clip);
-        cfg.footer.push_back(hstack().width(Dimension::percent(100))(std::move(status)).build()
-                             | height(1) | overflow(Overflow::Hidden));
+        c.footer.push_back(hstack().width(Dimension::percent(100))(std::move(status)).build()
+                           | height(1) | overflow(Overflow::Hidden));
+        if (!hints) return c;
 
         std::vector<Hint> viewer_hints;
         if (o->typing) {
@@ -456,9 +474,35 @@ Element tool_output_panel(const Model& m) {
             if (!e.is_live) viewer_hints.push_back({"y", "copy", 4});
             viewer_hints.push_back({"Esc", o->query.empty() ? "back" : "clear", 3});
         }
-        cfg.footer.push_back(key_hints(std::move(viewer_hints)));
+        c.footer.push_back(key_hints(std::move(viewer_hints)));
+        return c;
+    };
+
+    // The overlay floats 2 rows above the bottom and is 4 columns narrower
+    // than the terminal (compose_panel / maya::Overlay), so that's the room.
+    const int budget = std::max(3, body_term_rows - 2);
+    const int cols   = std::max(10, panel_terminal_cols() - 4);
+    // Never more viewport than there is output, so each fit pass removes rows
+    // that are really there.
+    int  vh = std::clamp(base.viewport_h, 1, std::max(1, total_rows));
+    bool hints = true, header = true, tight = false;
+    Element out;
+    for (int pass = 0; pass < 8; ++pass) {
+        auto c = assemble(vh, hints, header);
+        c.tight = tight;
+        out = Panel{std::move(c)}.build();
+        const int h = maya::measure_element(out, cols).height.value;
+        if (h <= budget) break;
+        const int over = h - budget;
+        // Keep at least 3 rows of output while there's chrome left to drop.
+        if (vh > 3)          vh = std::max(3, vh - over);
+        else if (!tight)     tight = true;                  // then the frame's blank rows
+        else if (hints)      hints = false;                 // then the key hints
+        else if (header)     header = false;                // then the header
+        else if (vh > 1)     vh = std::max(1, vh - over);   // last, the output itself
+        else break;
     }
-    return Panel{std::move(cfg)}.build();
+    return out;
 }
 
 
