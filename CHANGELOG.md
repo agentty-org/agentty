@@ -4,6 +4,45 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.51] - 2026-11-08
+
+### Fixed
+- **Reasoning off really is off on Claude 5 models.** Sonnet 5 kept
+  thinking with effort off because the request left `thinking` out, and
+  Claude 5 models think by default. Off now follows what Anthropic's
+  `/v1/models` says each model accepts (`disabled`, `between_tools` on
+  Sonnet 5.5), with rules matching Anthropic's per-model table as the
+  fallback. A rejected thinking mode is retried and remembered. Models that
+  always think (Opus 5.5, Fable, Mythos) no longer offer off at all. Smart
+  Mode's routed off is sent explicitly too.
+- **Switching providers keeps the right model.** The saved model per
+  provider was looked up under the name you typed (`codex`) but saved under
+  the canonical one (`openai`), so switching back fell to the default. A
+  local server (Ollama, LM Studio) that doesn't have the saved model now
+  picks one it has and says so.
+- **Effort survives switching models.** It used to be rewritten on every
+  switch, so off became low on a model that always thinks and stayed low
+  after switching back.
+- **`agentty run -m` no longer changes the TUI's saved model**, and neither
+  does a headless `--provider`.
+
+### Changed
+- **The tool output pane (^O) is readable and searchable.** It uses the
+  terminal's height and never runs past it, wraps long lines and the full
+  command instead of cutting them off, and shows the output as you'd want
+  to read it: no description echo, ``` fences or notes meant for the model,
+  in normal text with tokens coloured. A cut is shown as a `⋯` line. `/`
+  finds as you type, `n`/`N` step through matches, PgUp/PgDn page, and `y`
+  copies the clean text. The list never cuts off a row's status.
+- **The diff review panel was redone.** It says up front that the edits
+  are saved and you keep or undo each one, shows files as tabs, lists each
+  change with real old and new line numbers, and counts kept and undone.
+- Tool output reads in the normal text colour with paths, numbers, strings
+  and flags coloured, instead of a dull grey. Cards drop notes the tool
+  wrote for the model, `read` opens at the top of the file, and `git
+  status` shows just the changed files.
+- The status bar shows the whole thread title when there's room.
+
 ## [0.9.50] - 2026-11-07
 
 ### Changed
