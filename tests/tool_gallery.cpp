@@ -42,6 +42,8 @@
 #include "agentty/runtime/view/composer.hpp"
 #include "agentty/runtime/view/thread/welcome_screen.hpp"
 #include "agentty/runtime/view/panels.hpp"
+#include "agentty/runtime/app/update/internal.hpp"   // collect_viewer_entries
+#include "agentty/runtime/panel/tool_output.hpp"
 #include "agentty/runtime/view/diff_review.hpp"
 #include "agentty/diff/diff.hpp"
 #include "agentty/runtime/fused_models.hpp"
@@ -456,6 +458,49 @@ void render_panels(int cols) {
 
 }  // namespace
 
+// The ^O tool-output pane: the list, then each body, from the real corpus.
+// VIEWER_ROWS sets the terminal height the pane lays out for (default 40).
+static void render_viewer(int cols, const std::vector<std::string>& want,
+                          const std::string& kind_filter) {
+    namespace pn = agentty::ui::panel;
+    const auto cases = load_corpus("tests/fixtures/tool_corpus.json");
+    Model m;
+    Message user;
+    user.role = Role::User;
+    user.text = "look around";
+    m.d.current.messages.push_back(std::move(user));
+    Message asst;
+    asst.role = Role::Assistant;
+    for (const auto& c : cases) {
+        if (!kind_filter.empty() && c.kind != kind_filter) continue;
+        bool hit = want.empty();
+        for (const auto& w : want) if (c.tool.find(w) != std::string::npos) hit = true;
+        if (hit) asst.tool_calls.push_back(make_tool(c));
+    }
+    m.d.current.messages.push_back(std::move(asst));
+    const int rows = [] {
+        const char* r = std::getenv("VIEWER_ROWS");
+        return r ? std::max(10, std::atoi(r)) : 40;
+    }();
+    setenv("LINES", std::to_string(rows).c_str(), 1);
+    setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+    auto entries = app::detail::collect_viewer_entries(m);
+    if (entries.empty()) { std::puts("no entries"); return; }
+    const int n = static_cast<int>(entries.size());
+    m.ui.panel.descend(pn::ToolOutput{{std::move(entries), 0, false}});
+    emit_element("tool output \xc2\xb7 list", ui::tool_output_panel(m), cols);
+    auto* o = m.ui.panel.get<pn::ToolOutput>();
+    o->viewing = true;
+    if (const char* q = std::getenv("VIEWER_FIND")) { o->query = q; ++o->hit_seq; }
+    const int bodies = std::getenv("VIEWER_ALL") ? n : std::min(n, 4);
+    for (int i = 0; i < bodies; ++i) {
+        o->index = i;
+        m.ui.tool_viewer_scroll.y = 0;
+        emit_element("tool output \xc2\xb7 body " + std::to_string(i + 1),
+                     ui::tool_output_panel(m), cols);
+    }
+}
+
 int main(int argc, char** argv) {
     // The view reads loop_bound<T> caches (the tool-body and settled-panel
     // memos in agent_timeline.cpp), which only the kernel's loop thread may
@@ -525,6 +570,15 @@ int main(int argc, char** argv) {
         else if (a == "--prose") { render_prose(cols); return 0; }
         else if (a == "--welcome") { render_welcome(cols); return 0; }
         else if (a == "--panels") { render_panels(cols); return 0; }
+        else if (a == "--viewer") {
+            std::vector<std::string> w; std::string k;
+            for (int j = i + 1; j < argc; ++j) {
+                const std::string b = argv[j];
+                if (b == "--kind" && j + 1 < argc) k = argv[++j]; else w.push_back(b);
+            }
+            render_viewer(cols, w, k);
+            return 0;
+        }
         else if (a == "--kind" && i + 1 < argc) kind_filter = argv[++i];
         else want.push_back(a);
     }

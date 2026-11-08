@@ -247,16 +247,18 @@ void arm_reconcile_cooldown(Model& m) {
             e.title  = ui::tool_display_name(tc.name.value);
             e.detail = ui::tool_timeline_detail(tc);
             e.call   = tc;   // snapshot for the rich body render (diff/gutter)
-            // Trailing: ok/failed · duration · size.
-            e.trailing = e.failed ? "failed" : "ok";
+            // Trailing: duration · size; a failure says so first.
+            e.trailing = e.failed ? "failed" : "";
             if (float secs = ui::tool_elapsed(tc); secs >= 0.05f) {
                 char buf[32];
-                std::snprintf(buf, sizeof buf, " \xc2\xb7 %.1fs", secs);
+                std::snprintf(buf, sizeof buf, "%s%.1fs",
+                              e.trailing.empty() ? "" : " \xc2\xb7 ", secs);
                 e.trailing += buf;
             }
+            if (!e.trailing.empty()) e.trailing += " \xc2\xb7 ";
             e.trailing += (body.size() >= 1024)
-                ? " \xc2\xb7 " + std::to_string(body.size() / 1024) + " KB"
-                : " \xc2\xb7 " + std::to_string(body.size()) + " B";
+                ? std::to_string(body.size() / 1024) + " KB"
+                : std::to_string(body.size()) + " B";
             out.push_back(std::move(e));
         }
     }

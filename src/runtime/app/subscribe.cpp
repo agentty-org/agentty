@@ -802,7 +802,26 @@ std::optional<Msg> on_todo_modal(const KeyEvent& ev) {
 // and the BODY (↑↓/j/k/PgUp/PgDn/Home/End scroll, y copies, Esc back to
 // the list). The reducer branches on Open::viewing, so the same Move/
 // Copy msgs serve both stages. h/l (and ←/→) step between entries.
-std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
+std::optional<Msg> on_tool_viewer(const Model& m, const KeyEvent& ev) {
+    using Op = ToolOutputFind::Op;
+    const auto* o = m.ui.panel.get<ui::panel::ToolOutput>();
+    // The / prompt owns the keyboard while it's open.
+    if (o && o->typing) {
+        if (const auto* sk = std::get_if<SpecialKey>(&ev.key)) {
+            switch (*sk) {
+                case SpecialKey::Escape:    return Msg{ToolOutputFind{Op::Cancel}};
+                case SpecialKey::Enter:     return Msg{ToolOutputFind{Op::Commit}};
+                case SpecialKey::Backspace: return Msg{ToolOutputFind{Op::Erase}};
+                case SpecialKey::Down:      return Msg{ToolOutputFind{Op::Next}};
+                case SpecialKey::Up:        return Msg{ToolOutputFind{Op::Prev}};
+                default:                    return std::nullopt;
+            }
+        }
+        if (const auto* ck = std::get_if<CharKey>(&ev.key);
+            ck && !ev.mods.ctrl && !ev.mods.alt && ck->codepoint >= 0x20)
+            return Msg{ToolOutputFind{Op::Type, ck->codepoint}};
+        return std::nullopt;
+    }
     nav::NavSpec s;
     s.close     = [] { return Msg{CloseToolOutput{}}; };
     s.select    = [] { return Msg{ToolOutputSelect{}}; };
@@ -811,14 +830,24 @@ std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
     s.toggle_close_chord = U'o';
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
-            if (*sk == SpecialKey::Left)  return Msg{ToolOutputStep{-1}};
-            if (*sk == SpecialKey::Right) return Msg{ToolOutputStep{+1}};
+            if (*sk == SpecialKey::Left)     return Msg{ToolOutputStep{-1}};
+            if (*sk == SpecialKey::Right)    return Msg{ToolOutputStep{+1}};
+            if (*sk == SpecialKey::PageUp)   return Msg{ToolOutputMove{0, -1}};
+            if (*sk == SpecialKey::PageDown) return Msg{ToolOutputMove{0, +1}};
             return std::nullopt;
+        }
+        // n / N are case-distinct, so they're matched before letter_verbs folds case.
+        if (const auto* ck = std::get_if<CharKey>(&e.key); ck && !e.mods.ctrl && !e.mods.alt) {
+            if (ck->codepoint == U'/') return Msg{ToolOutputFind{Op::Open}};
+            if (ck->codepoint == U'n') return Msg{ToolOutputFind{Op::Next}};
+            if (ck->codepoint == U'N') return Msg{ToolOutputFind{Op::Prev}};
+            if (ck->codepoint == U' ') return Msg{ToolOutputMove{0, +1}};
         }
         const auto v = nav::char_view(e);
         if (!v || !v->ctrl) return std::nullopt;   // chords only
         switch (v->c) {
             case U'y': return Msg{ToolOutputCopy{}};
+            case U'f': return Msg{ToolOutputFind{Op::Open}};
             default:   return std::nullopt;
         }
     };
@@ -1349,7 +1378,7 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
                     case OK::Symbol:         return on_symbol_palette(ev);
                     case OK::CodeBlocks:     return on_code_block_picker(ev);
                     case OK::CodeBlockResult: return on_code_block_result(ev);
-                    case OK::ToolOutput:     return on_tool_viewer(ev);
+                    case OK::ToolOutput:     return on_tool_viewer(m, ev);
                     case OK::Checkpoints:    return on_checkpoint_picker(ev);
                     case OK::Rag:    return on_rag_settings(rag_form, ev);
                     case OK::Stats:          return on_stats_viewer(ev);

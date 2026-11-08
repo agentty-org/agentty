@@ -25,6 +25,8 @@
 // view/pickers.cpp — the same file split as the other pickers.
 
 #include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -67,7 +69,23 @@ struct Open {
     std::vector<Entry> entries;   // newest first
     int                index   = 0;
     bool               viewing = false;   // false = list, true = body stage
+    // Find in the body (/ then n / N). The query stays when you hop to
+    // another entry, so one search can be checked across outputs.
+    std::string        query;
+    bool               typing  = false;   // the / prompt is open
+    int                hit     = 0;       // current match (wraps; the view resolves it)
+    int                hit_seq = 0;       // bumped on each jump; the view scrolls to it
 };
+
+// What the viewer shows and copies for an entry: the output without the
+// notes a tool writes for the model, ANSI escapes or a wrapping ``` fence.
+// A note saying the tool cut its output stays, as a "⋯" line.
+[[nodiscard]] std::string display_text(const Entry& e);
+
+// Byte spans of `q` in `line`, ignoring ASCII case (same as the cards'
+// search highlight).
+[[nodiscard]] std::vector<std::pair<std::size_t, std::size_t>>
+hit_spans(std::string_view line, std::string_view q);
 
 } // namespace tool_output
 

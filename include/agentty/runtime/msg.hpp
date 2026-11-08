@@ -739,13 +739,20 @@ struct CodeBlockResultDiscard {};
 // stage; Close = Esc (body → back to list, list → closed); Copy = y.
 struct OpenToolOutput {};
 struct CloseToolOutput {};
-struct ToolOutputMove { int delta; };
+struct ToolOutputMove { int delta; int pages = 0; };   // pages: PgUp/PgDn
 struct ToolOutputSelect {};
 struct ToolOutputCopy {};
 // ←/→: in the body stage, jump straight to the previous/next entry's
 // output without bouncing through the list; in the list stage ←/→ are
 // unbound (the viewer swallows all keys while open, so they simply no-op).
 struct ToolOutputStep { int delta; };
+// Find in the body: / opens the prompt, typing searches as you go, Enter
+// keeps the query, Esc drops it, n / N go to the next / previous match.
+struct ToolOutputFind {
+    enum class Op : std::uint8_t { Open, Type, Erase, Commit, Cancel, Next, Prev };
+    Op       op;
+    char32_t ch = 0;   // for Type
+};
 
 // ── Todo modal ───────────────────────────────────────────────────────────
 struct OpenTodoModal {};
@@ -1454,7 +1461,8 @@ using ToolMsg = std::variant<
 // tool.cpp to the execution plumbing the name promises.
 using ToolOutputMsg = std::variant<
     OpenToolOutput, CloseToolOutput,
-    ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep>;
+    ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep,
+    ToolOutputFind>;
 
 using ProvidersMsg = std::variant<
     OpenProviders, CloseProviders, ProvidersMove,

@@ -13,6 +13,8 @@
 
 #include "agentty/domain/conversation.hpp"
 #include "agentty/runtime/model.hpp"
+#include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/panel/tool_output.hpp"
 #include "agentty/runtime/view/panels.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_body_preview.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
@@ -739,4 +741,95 @@ TEST_CASE("shell card shows the plain command") {
     };
     check(d("sed -n '10,40p' src/a.cpp") == "sed -n '10,40p' src/a.cpp", "inspection unlabelled");
     check(d("cmake --build build -j12") == "cmake --build build -j12", "build unlabelled");
+}
+
+TEST_CASE("tool output viewer: what it shows and copies") {
+    A::tool_output::Entry e;
+    e.name = "shell";
+    e.call = make_tool("shell", A::ToolUse::Done{{}, {}, ""},
+                       {{"command", "make"}, {"display_description", "build it"}});
+    e.output = "build it\n```\n\x1b[32mok\x1b[0m line\n\n\n\nnext\n```\n\n[output truncated: 400 more lines]";
+    const auto t = A::tool_output::display_text(e);
+    check(t.find("build it") == std::string::npos, "description echo dropped");
+    check(t.find("```") == std::string::npos, "fence dropped");
+    check(t.find('\x1b') == std::string::npos, "ANSI dropped");
+    check(t.find("ok line\n\nnext") != std::string::npos, "blank runs collapse to one");
+    check(t.find("\xe2\x8b\xaf output truncated: 400 more lines") != std::string::npos,
+          "a cut is shown, not hidden");
+
+    const auto spans = A::tool_output::hit_spans("Error: error ERROR", "error");
+    check(spans.size() == 3, "find ignores case");
+}
+
+TEST_CASE("tool output viewer: find, Esc order, paging") {
+    using namespace agentty::app;
+    A::tool_output::Entry e;
+    e.name = "shell";
+    e.title = "Shell";
+    for (int i = 0; i < 300; ++i)
+        e.output += (i % 50 == 7 ? "needle here " : "row ") + std::to_string(i) + "\n";
+    e.call = make_tool("shell", A::ToolUse::Done{{}, {}, e.output});
+    A::Model m;
+    m.ui.panel.descend(A::ui::panel::ToolOutput{{{e, e}, 0, true}});
+    auto step = [&](A::Msg msg) { m = std::move(update(std::move(m), std::move(msg)).first); };
+    auto o = [&] { return m.ui.panel.get<A::ui::panel::ToolOutput>(); };
+    using Op = A::ToolOutputFind::Op;
+
+    step(A::ToolOutputFind{Op::Open});
+    check(o()->typing, "/ opens the prompt");
+    for (char c : std::string{"NEEDLE"}) step(A::ToolOutputFind{Op::Type, char32_t(c)});
+    check(o()->query == "NEEDLE", "typing builds the query");
+    step(A::ToolOutputFind{Op::Erase});
+    check(o()->query == "NEEDL", "backspace erases one");
+    step(A::ToolOutputFind{Op::Commit});
+    check(!o()->typing && o()->query == "NEEDL", "Enter keeps the query");
+
+    // The view resolves the match and scrolls to it.
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "100", 1);
+    (void)U::tool_output_panel(m);
+    const int y0 = m.ui.tool_viewer_scroll.y;
+    step(A::ToolOutputFind{Op::Next});
+    (void)U::tool_output_panel(m);
+    const int y1 = m.ui.tool_viewer_scroll.y;
+    check(y1 > y0, "n moves down to the next match");
+    step(A::ToolOutputFind{Op::Prev});
+    (void)U::tool_output_panel(m);
+    check(m.ui.tool_viewer_scroll.y == y0, "N goes back");
+
+    // A page is the viewport, less one line.
+    m.ui.tool_viewer_scroll.y = 0;
+    step(A::ToolOutputMove{0, +1});
+    check(m.ui.tool_viewer_scroll.y == m.ui.tool_viewer_scroll.viewport_bounds.h - 1,
+          "PgDn moves a page");
+
+    // Esc clears the search first, then leaves the body, then the pane.
+    step(A::CloseToolOutput{});
+    check(o() && o()->viewing && o()->query.empty(), "Esc clears the search");
+    step(A::CloseToolOutput{});
+    check(o() && !o()->viewing, "then goes back to the list");
+}
+
+TEST_CASE("tool output viewer: long lines wrap inside the pane") {
+    A::tool_output::Entry e;
+    e.name = "shell";
+    e.title = "Shell";
+    e.output = std::string(500, 'x') + "\nshort\n";
+    e.call = make_tool("shell", A::ToolUse::Done{{}, {}, e.output},
+                       {{"command", "echo " + std::string(200, 'y') + " | tail -2"}});
+    A::Model m;
+    m.ui.panel.descend(A::ui::panel::ToolOutput{{{e}, 0, true}});
+    for (int cols : {60, 80, 120}) {
+        setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+        setenv("LINES", "14", 1);   // 4-row viewport
+        auto el = U::tool_output_panel(m);
+        auto boxed = maya::dsl::vstack().width(maya::Dimension::fixed(cols))(el);
+        const auto size = maya::measure_element(boxed, cols);
+        check(size.width.value <= cols, "pane fits " + std::to_string(cols) + " cols");
+        // 500 x's plus a 200-char command take more rows than the viewport:
+        // they're wrapped into rows, not clipped at the right edge.
+        const int rows = m.ui.tool_viewer_scroll.max_y + 4;
+        check(rows >= 500 / cols + 200 / cols + 2,
+              "long lines wrap at " + std::to_string(cols) + " cols");
+    }
 }
