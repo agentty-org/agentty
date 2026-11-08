@@ -47,6 +47,7 @@
 #include "agentty/runtime/fused_models.hpp"
 #include "agentty/domain/ui_theme.hpp"
 
+#include <format>
 #include <maya/runtime.hpp>
 #include <maya/core/anim_clock.hpp>
 #include <maya/render/canvas.hpp>
@@ -425,13 +426,20 @@ void render_panels(int cols) {
     }
     {
         Model m;
-        auto a = diff::compute("src/login.cpp",
-            "int f() {\n  return 0;\n}\n",
-            "int f() {\n  return -1;\n  log();\n}\n");
-        a.added = 2; a.removed = 1;
+        // two separate changes in one file, the first already kept
+        std::string before, after;
+        for (int i = 1; i <= 30; ++i) {
+            before += std::format("int f{}() {{ return {}; }}\n", i, i);
+            after  += i == 4  ? std::string{"int f4() { return -1; }\nvoid log();\n"}
+                    : i == 22 ? std::string{""}
+                              : std::format("int f{}() {{ return {}; }}\n", i, i);
+        }
+        auto a = diff::compute("src/auth/login.cpp", before, after);
+        if (!a.hunks.empty()) a.hunks[0].status = Hunk::Status::Accepted;
         m.d.pending_changes.push_back(a);
         m.d.pending_changes.push_back(diff::compute("README.md", "old\n", "new\nmore\n"));
-        m.ui.panel.descend(pn::DiffReview{{0, 0}});
+        m.d.pending_changes.push_back(diff::compute("src/net/http_client.cpp", "a\n", "b\n"));
+        m.ui.panel.descend(pn::DiffReview{{0, 1}});
         emit_element("diff review", ui::diff_review(m), cols);
     }
     {

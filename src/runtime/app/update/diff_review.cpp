@@ -90,7 +90,7 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
                     + (kept == 1 ? " change" : " changes") + " kept"
                 : (done ? "review complete — " : "review closed — ")
                     + std::to_string(reverted)
-                    + " reverted, " + std::to_string(kept) + " kept");
+                    + " undone, " + std::to_string(kept) + " kept");
         writes.push_back(std::move(cmd));
         return Cmd::batch(std::move(writes));
     };
