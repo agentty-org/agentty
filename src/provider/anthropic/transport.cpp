@@ -422,7 +422,8 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     // dead-air-free wire. The assistant thinking blocks the model emits in
     // response are captured and replayed by messages_json_string (see below)
     // so tool_use turns don't 400 for a dropped thinking block.
-    const auto off_caps = ModelCapabilities::from_id(wire_model_id(req.model));
+    // Declared (/v1/models) and learned facts first, id rules as fallback.
+    const auto off_caps = resolved_caps(wire_model_id(req.model), "anthropic");
     if (!req.effort.empty()) {
         // Thinking MODE is revision-gated (Anthropic changed the interface at
         // the 4.6/4.7 boundary):
@@ -589,16 +590,47 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     auto& client = http::default_client(::agentty::IoAccess::grant());
     auto result  = client.stream(hreq, sc.handler(), tos, cancel);
 
-    // A model we think takes "disabled" may still 400 on it (opus-5-5 does).
-    // A 400 streams nothing, so swap in the lowest effort and send once more.
+    // A model we think takes "disabled" may still 400 on it. A 400 streams
+    // nothing, so send once more with what the API asks for: between_tools
+    // when it names it (sonnet-5-5 style), else the lowest effort (opus-5-5).
     constexpr std::string_view kDisabled = R"("thinking":{"type":"disabled"})";
     constexpr std::string_view kLow      = R"("output_config":{"effort":"low"})";
-    if (result && sc.http_status == 400
-        && sc.error_body.find("thinking.type.disabled") != std::string::npos) {
-        if (auto p = hreq.body.find(kDisabled); p != std::string::npos) {
+    constexpr std::string_view kBetween  = R"("thinking":{"type":"between_tools"})";
+    // The model's thinking types for learning below: declared, else what the
+    // id rules assume.
+    using MC = ModelCapabilities;
+    const std::uint8_t known_types = off_caps.thinking_declared()
+        ? off_caps.thinking_types
+        : static_cast<std::uint8_t>(MC::kThinkDeclared
+              | (off_caps.uses_adaptive_thinking() ? MC::kThinkAdaptive : MC::kThinkEnabled)
+              | (off_caps.needs_explicit_thinking_off() ? MC::kThinkDisabled : 0)
+              | (off_caps.supports_between_tools_thinking() ? MC::kThinkBetweenTools : 0));
+    if (result && sc.http_status == 400) {
+        const bool wants_between =
+            sc.error_body.find("between_tools") != std::string::npos;
+        const bool rejects_disabled = wants_between
+            || sc.error_body.find("thinking.type.disabled") != std::string::npos;
+        const bool rejects_between =
+            sc.error_body.find("thinking.type.between_tools") != std::string::npos;
+        if (auto p = hreq.body.find(kDisabled);
+            rejects_disabled && p != std::string::npos) {
             AGT_LOG(Wire, Warn, "anthropic.thinking_disabled_rejected",
+                    "model={} retrying with {}", req.model,
+                    wants_between ? "between_tools" : "effort=low");
+            // Remember it, so later turns send the right thing first time.
+            learn_anthropic_thinking(wire_model_id(req.model), known_types,
+                                     MC::kThinkDisabled,
+                                     wants_between ? MC::kThinkBetweenTools : 0);
+            hreq.body.replace(p, kDisabled.size(), wants_between ? kBetween : kLow);
+            arm();
+            result = client.stream(hreq, sc.handler(), tos, cancel);
+        } else if (auto q = hreq.body.find(kBetween);
+                   rejects_between && q != std::string::npos) {
+            AGT_LOG(Wire, Warn, "anthropic.thinking_between_rejected",
                     "model={} retrying with effort=low", req.model);
-            hreq.body.replace(p, kDisabled.size(), kLow);
+            learn_anthropic_thinking(wire_model_id(req.model), known_types,
+                                     MC::kThinkBetweenTools, 0);
+            hreq.body.replace(q, kBetween.size(), kLow);
             arm();
             result = client.stream(hreq, sc.handler(), tos, cancel);
         }
@@ -682,6 +714,40 @@ std::vector<Msg> parse_sse_for_test(
     return out;
 }
 
+// capabilities.thinking.types / capabilities.effort from a /v1/models row.
+// Zero fields when the row doesn't say (older API, a proxy that strips it).
+AnthropicDecl parse_capabilities(const json& model) {
+    AnthropicDecl d;
+    const auto caps = model.find("capabilities");
+    if (caps == model.end() || !caps->is_object()) return d;
+    auto supported = [](const json& o, const char* key) {
+        const auto it = o.find(key);
+        if (it == o.end()) return false;
+        if (it->is_boolean()) return it->get<bool>();
+        return it->is_object() && it->value("supported", false);
+    };
+    if (const auto th = caps->find("thinking"); th != caps->end() && th->is_object()) {
+        if (const auto ty = th->find("types"); ty != th->end() && ty->is_object()) {
+            using MC = ModelCapabilities;
+            d.thinking = MC::kThinkDeclared;
+            if (supported(*ty, "enabled"))       d.thinking |= MC::kThinkEnabled;
+            if (supported(*ty, "adaptive"))      d.thinking |= MC::kThinkAdaptive;
+            if (supported(*ty, "disabled"))      d.thinking |= MC::kThinkDisabled;
+            if (supported(*ty, "between_tools")) d.thinking |= MC::kThinkBetweenTools;
+        } else if (!th->value("supported", true)) {
+            // No thinking at all: "off" is just leaving the field out.
+            d.thinking = ModelCapabilities::kThinkDeclared;
+        }
+    }
+    if (const auto ef = caps->find("effort"); ef != caps->end() && ef->is_object()) {
+        for (Effort e : {Effort::Minimal, Effort::Low, Effort::Medium, Effort::High,
+                         Effort::Xhigh, Effort::Max})
+            if (supported(*ef, std::string{effort_wire(e)}.c_str()))
+                d.effort |= effort_bit(e);
+    }
+    return d;
+}
+
 std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth) {
     const bool is_oauth = std::holds_alternative<BearerHeader>(auth);
 
@@ -729,6 +795,7 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth) {
 
     try {
         auto j = json::parse(resp->body);
+        std::vector<std::pair<std::string, AnthropicDecl>> decls;
         for (const auto& m : j.value("data", json::array())) {
             auto id = m.value("id", "");
             auto name = m.value("display_name", id);
@@ -737,6 +804,8 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth) {
             if (const auto mt = m.find("max_tokens");
                 mt != m.end() && mt->is_number_integer())
                 set_catalog_max_output("anthropic/" + id, mt->get<int>());
+            if (auto d = parse_capabilities(m); d.thinking != 0 || d.effort != 0)
+                decls.emplace_back(id, d);
             result.push_back(ModelInfo{
                 .id = ModelId{id},
                 .display_name = name,
@@ -750,6 +819,7 @@ std::vector<ModelInfo> list_models(Io io, const AuthHeader& auth) {
         // fixed family bucket, so Fable/Mythos never sinks below Opus/Sonnet/
         // Haiku just because of alphabetical/positional bad luck).
         std::stable_sort(result.begin(), result.end(), model_picker_less);
+        set_anthropic_decls(std::move(decls));
         // Surface a `[1m]` companion for every suffix-capable model, inserted
         // right after its base model so the pairing is adjacent (shared impl).
         catalog::add_1m_variants(result);

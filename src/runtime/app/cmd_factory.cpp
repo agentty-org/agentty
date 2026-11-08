@@ -1280,8 +1280,9 @@ Cmd launch_stream(Model& m) {
         // Compaction never needs reasoning — summarising is a mechanical text
         // task — and the cheap compaction model may not even support the
         // parent's effort tier, so force it OFF (no wasted thinking tokens).
+        const auto routed_caps = resolved_caps(req.model);
         req.effort        = compacting ? std::string{}
-                          : (orchestrate ? std::string{effort_wire(turn_profile.effort)}
+                          : (orchestrate ? std::string{effort_wire_for(turn_profile.effort, routed_caps)}
                                          : std::move(effort));
         // Reasoning display follows the effort ACTUALLY SENT, computed from
         // req.effort rather than the pre-orchestration value: with a
@@ -1294,12 +1295,13 @@ Cmd launch_stream(Model& m) {
         // false for it; the explicit `!compacting` stays as documentation
         // of the intent rather than a load-bearing term.
         req.show_reasoning = !compacting && !req.effort.empty();
-        // Off is sent explicitly. Compaction is mechanical and never needs
-        // thinking, so it asks for off too. The routed model may differ
-        // from the picker's, so read its own off-switch.
-        req.no_reasoning  = req.effort.empty() && (compacting || in.no_reasoning);
-        req.reasoning_off = req.model == picked_model
-            ? in.reasoning_off : resolved_caps(req.model).reasoning_off;
+        // Off is sent explicitly, including when Smart Mode routed this
+        // turn to off: Claude 5 models think unless told not to. Compaction
+        // is mechanical and never needs thinking, so it asks for off too.
+        req.no_reasoning  = req.effort.empty()
+            && (compacting || in.no_reasoning
+                || (orchestrate && turn_profile.effort == Effort::None));
+        req.reasoning_off = routed_caps.reasoning_off;
         req.session_key   = std::move(session_key);
 
         // Capability gate: withhold tools ONLY on an explicit declaration of

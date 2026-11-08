@@ -312,6 +312,10 @@ TEST_CASE("anthropic thinking: which models need an explicit off") {
                     "claude-opus-4-8"})
         CHECK(!MC::from_id(id).binds_thinking_to_prefix());
     CHECK(MC::from_id("claude-haiku-5-5").needs_explicit_thinking_off());
+    // Sonnet 5 thinks when the field is left out (checked live).
+    CHECK(MC::from_id("claude-sonnet-5").needs_explicit_thinking_off());
+    CHECK(!MC::from_id("claude-sonnet-5-5").needs_explicit_thinking_off());
+    CHECK(MC::from_id("claude-haiku-6").needs_explicit_thinking_off());
     // Off by default on older models: leaving the field out is enough.
     CHECK(!MC::from_id("claude-opus-4-8").needs_explicit_thinking_off());
     CHECK(!MC::from_id("claude-sonnet-4-6").needs_explicit_thinking_off());
@@ -319,6 +323,96 @@ TEST_CASE("anthropic thinking: which models need an explicit off") {
     CHECK(!MC::from_id("claude-fable-5").needs_explicit_thinking_off());
     CHECK(!MC::from_id("claude-mythos-5").needs_explicit_thinking_off());
     CHECK(!MC::from_id("gpt-5.5").needs_explicit_thinking_off());
+    CHECK(MC::from_id("claude-mythos-preview").thinking_always_on());
+}
+
+// The fallback rules must match Anthropic's per-model table
+// (docs: thinking-troubleshooting, "Thinking support ... by model").
+TEST_CASE("anthropic thinking: id rules match the documented table") {
+    using MC = agentty::ModelCapabilities;
+    enum Off { Omit, Disabled, Between, AlwaysOn };
+    auto how = [](const char* id) {
+        const auto c = MC::from_id(id);
+        if (c.needs_explicit_thinking_off())     return Disabled;
+        if (c.supports_between_tools_thinking()) return Between;
+        if (c.thinking_always_on())              return AlwaysOn;
+        return Omit;
+    };
+    for (auto id : {"claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5",
+                    "claude-mythos-5", "claude-opus-5-5"})
+        CHECK(how(id) == AlwaysOn);
+    for (auto id : {"claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5"})
+        CHECK(how(id) == Disabled);
+    CHECK(how("claude-sonnet-5-5") == Between);
+    for (auto id : {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+                    "claude-sonnet-4-6", "claude-opus-4-5", "claude-haiku-4-5",
+                    "claude-sonnet-4-5"})
+        CHECK(how(id) == Omit);
+}
+
+// What /v1/models declares beats the id rules, both ways.
+TEST_CASE("anthropic thinking: declared types win over the id") {
+    using MC = agentty::ModelCapabilities;
+    MC c = MC::from_id("claude-opus-5-5");          // id says: always on
+    c.thinking_types = MC::kThinkDeclared | MC::kThinkAdaptive | MC::kThinkDisabled;
+    CHECK(c.needs_explicit_thinking_off());
+    CHECK(!c.thinking_always_on());
+    c = MC::from_id("claude-sonnet-5");              // id says: disabled
+    c.thinking_types = MC::kThinkDeclared | MC::kThinkAdaptive | MC::kThinkBetweenTools;
+    CHECK(!c.needs_explicit_thinking_off());
+    CHECK(c.supports_between_tools_thinking());
+    c.thinking_types = MC::kThinkDeclared | MC::kThinkAdaptive;
+    CHECK(c.thinking_always_on());
+    // Extended only (4.5): legacy budget mode, off by omission.
+    c = MC::from_id("claude-opus-4-5");
+    c.thinking_types = MC::kThinkDeclared | MC::kThinkEnabled | MC::kThinkDisabled;
+    CHECK(!c.uses_adaptive_thinking());
+    CHECK(!c.thinking_always_on());
+}
+
+// A declaration reaches resolved_caps on the anthropic scope only, and an
+// always-on model has no "off" in its ladder.
+TEST_CASE("anthropic thinking: declared + learned facts reach resolved_caps") {
+    using MC = agentty::ModelCapabilities;
+    set_anthropic_decls({{"claude-sonnet-7",
+        AnthropicDecl{static_cast<std::uint8_t>(MC::kThinkDeclared | MC::kThinkAdaptive),
+                      static_cast<std::uint8_t>(effort_bit(Effort::Low) | effort_bit(Effort::High))}}});
+    const auto c = resolved_caps("claude-sonnet-7", "anthropic");
+    CHECK(c.thinking_always_on());
+    const auto ladder = available_efforts(c);
+    CHECK(std::find(ladder.begin(), ladder.end(), Effort::None) == ladder.end());
+    CHECK(std::find(ladder.begin(), ladder.end(), Effort::Medium) == ladder.end());
+    CHECK(clamp_effort(Effort::None, c) == Effort::Low);
+    CHECK(effort_wire_for(Effort::None, c) == "low");
+    // Not applied to the same id on another provider.
+    CHECK(!resolved_caps("claude-sonnet-7", "openrouter").thinking_declared());
+
+    // A rejected "disabled" that names between_tools is learned.
+    const auto base = MC::from_id("claude-haiku-7");
+    CHECK(base.needs_explicit_thinking_off());
+    learn_anthropic_thinking("claude-haiku-7",
+        static_cast<std::uint8_t>(MC::kThinkDeclared | MC::kThinkAdaptive | MC::kThinkDisabled),
+        MC::kThinkDisabled, MC::kThinkBetweenTools);
+    const auto l = resolved_caps("claude-haiku-7", "anthropic");
+    CHECK(!l.needs_explicit_thinking_off());
+    CHECK(l.supports_between_tools_thinking());
+    CHECK(!l.thinking_always_on());
+}
+
+// Always-on models never offer off, so off can't be picked by hand.
+TEST_CASE("anthropic thinking: no off on a model that always thinks") {
+    for (auto id : {"claude-opus-5-5", "claude-fable-5", "claude-mythos-5-1"}) {
+        const auto c = resolved_caps(id, "anthropic");
+        const auto ladder = available_efforts(c);
+        CHECK(!ladder.empty());
+        CHECK(std::find(ladder.begin(), ladder.end(), Effort::None) == ladder.end());
+        CHECK(clamp_effort(Effort::None, c) != Effort::None);
+    }
+    // Models that can turn it off still offer off.
+    for (auto id : {"claude-opus-5", "claude-sonnet-5-5", "claude-opus-4-8"}) {
+        const auto ladder = available_efforts(resolved_caps(id, "anthropic"));
+        CHECK(std::find(ladder.begin(), ladder.end(), Effort::None) != ladder.end());
+    }
 }
 
 TEST_CASE("anthropic thinking mode: adaptive vs enabled by revision") {

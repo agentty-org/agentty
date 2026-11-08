@@ -747,14 +747,23 @@ bool entitlement_record_blocked(store::Settings& s,
 }
 
 std::string model_for_provider(const store::Settings& s,
-                               std::string_view spec) {
+                               std::string_view raw_spec) {
+    // Recalls are saved under the canonical id (catalog_id), so look them
+    // up the same way: "codex" saves as "openai", "codex-cli" as "chatgpt".
+    const std::string canon =
+        raw_spec.empty() ? std::string{}
+                         : provider::parse_selection(raw_spec).catalog_id();
+    const std::string_view spec = canon.empty() ? raw_spec : std::string_view{canon};
     const bool is_chatgpt =
         spec == "codex" || spec == "chatgpt" || spec == "codex-cli";
     const bool is_copilot = spec == "copilot";
 
-    // 1) Recall the model the user last used on this provider.
-    if (auto it = s.provider_models.find(std::string{spec});
-        it != s.provider_models.end() && !it->second.empty()) {
+    // 1) Recall the model the user last used on this provider. Older builds
+    //    keyed it by the raw spec; try that too.
+    auto it = s.provider_models.find(std::string{spec});
+    if (it == s.provider_models.end() || it->second.empty())
+        it = s.provider_models.find(std::string{raw_spec});
+    if (it != s.provider_models.end() && !it->second.empty()) {
         // ChatGPT's line-up is server-driven and changes over time: a slug the
         // account no longer offers (e.g. the retired `gpt-5.1-codex`) is
         // rejected on the very first turn. Only honour a recalled ChatGPT slug
@@ -934,22 +943,11 @@ commit_provider_switch(Model& m, std::string_view spec,
     m.s.smart_turn_model = ModelId{};
     m.s.smart_turn_role.reset();
 
-    // (4) Re-clamp the reasoning-effort tier to what the (possibly new)
-    //     active model supports — a stale Xhigh/High carried onto a model
-    //     without that tier (or a non-reasoning model) would otherwise show a
-    //     bogus chip and get silently dropped only at request time. When the
-    //     new model isn't known yet (local, empty id) this is a no-op until
-    //     ModelsLoaded, which is fine — the wire path re-clamps regardless.
-    //     Uniform for ChatGPT too: gpt-5.x decodes through Family::Gpt with
-    //     an exact ladder, so the same clamp keeps chip == wire everywhere.
-    //     EMPTY id = model unknown → do NOT clamp (resolved_caps("") has no
-    //     effort support, so clamping would WIPE the user's tier rather than
-    //     no-op; this is why ChatGPT — whose id is empty until ModelsLoaded —
-    //     used to be excluded here). ModelsLoaded re-clamps with the real id.
-    if (!m.d.model_id.value.empty())
-        m.d.effort = clamp_effort(
-            m.d.effort, resolved_caps(m.d.model_id.value));
-
+    // (4) Effort is NOT rewritten here. m.d.effort is what the user picked;
+    //     the picker, the badge and the wire each clamp it to the current
+    //     model. Rewriting it on every switch lost the pick for good (off
+    //     became low on a model that always thinks, and stayed low after
+    //     switching back).
     // (5) Persist the FULL settings shape (provider + per-provider model +
     //     effort + favorites) through the one owner so effort is never
     //     dropped on a hop, then swap the Deps auth and refetch models.

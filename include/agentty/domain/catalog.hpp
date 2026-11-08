@@ -407,6 +407,21 @@ struct ModelCapabilities {
     // How "off" is said for this model (catalog_reasoning_off_for, then a
     // family fallback in resolved_caps). Not set by from_id.
     std::uint8_t reasoning_off    = 0;   // ReasoningOff, stored raw: declared below
+    // Anthropic thinking.type values the model accepts, as /v1/models
+    // declares them (capabilities.thinking.types). 0 = not declared, so the
+    // id rules in the helpers below decide. Set by resolved_caps.
+    static constexpr std::uint8_t kThinkDeclared     = 1u << 0;
+    static constexpr std::uint8_t kThinkEnabled      = 1u << 1;
+    static constexpr std::uint8_t kThinkAdaptive     = 1u << 2;
+    static constexpr std::uint8_t kThinkDisabled     = 1u << 3;
+    static constexpr std::uint8_t kThinkBetweenTools = 1u << 4;
+    std::uint8_t thinking_types   = 0;
+    [[nodiscard]] constexpr bool thinking_declared() const noexcept {
+        return (thinking_types & kThinkDeclared) != 0;
+    }
+    [[nodiscard]] constexpr bool accepts_thinking(std::uint8_t t) const noexcept {
+        return (thinking_types & t) != 0;
+    }
 
     [[nodiscard]] constexpr bool is_haiku()  const noexcept { return family == Family::Haiku; }
     [[nodiscard]] constexpr bool is_sonnet() const noexcept { return family == Family::Sonnet; }
@@ -496,6 +511,8 @@ struct ModelCapabilities {
     // Unknown ids default to adaptive (every current flagship is 4.6+; a
     // stale-guess 400 self-heals — but see transport.cpp for the exact wire).
     [[nodiscard]] constexpr bool uses_adaptive_thinking() const noexcept {
+        if (thinking_declared())
+            return accepts_thinking(kThinkAdaptive) || !accepts_thinking(kThinkEnabled);
         if (family == Family::Fable || family == Family::Mythos)
             return generation >= 5;
         if (family == Family::Opus || family == Family::Sonnet)
@@ -505,31 +522,44 @@ struct ModelCapabilities {
         return generation >= 5;
     }
 
-    // Opus 5 and Haiku 5.5 think when a request leaves `thinking` out, so
-    // "off" has to be said: thinking:{type:"disabled"}. Earlier models
-    // treat a missing field as off. Fable and Mythos also think by default
-    // but reject "disabled" with a 400, so they're excluded (it can't be
-    // turned off there). Opus 5.5 is the same: it 400s on "disabled".
+    // How to say "off". When /v1/models declared the model's thinking types
+    // we follow them; otherwise the id rules below, which match Anthropic's
+    // per-model table (thinking-troubleshooting docs, checked live).
+    //
+    // Claude 5+ models think when a request leaves `thinking` out, so "off"
+    // has to be said: thinking:{type:"disabled"}. 4.x treats a missing field
+    // as off. A model that rejects "disabled" anyway is retried by the
+    // transport and the fact is learned.
     [[nodiscard]] constexpr bool needs_explicit_thinking_off() const noexcept {
-        if (family == Family::Opus)  return generation == 5 && revision == 0;
-        if (family == Family::Haiku) return generation == 5 && revision == 5;
+        if (thinking_declared()) return accepts_thinking(kThinkDisabled);
+        if (thinking_always_on() || supports_between_tools_thinking())
+            return false;
+        if (family == Family::Opus || family == Family::Sonnet
+            || family == Family::Haiku)
+            return generation >= 5;
         return false;
     }
 
-    // Models that think by default and 400 on "disabled". The closest we can
-    // get to off is the lowest effort, so thinking can't eat the whole turn.
+    // Models that think by default and 400 on "disabled" (and have no
+    // between_tools). The closest to off is the lowest effort.
     [[nodiscard]] constexpr bool thinking_always_on() const noexcept {
+        if (thinking_declared())
+            return accepts_thinking(kThinkAdaptive | kThinkEnabled)
+                && !accepts_thinking(kThinkDisabled | kThinkBetweenTools);
         if (family == Family::Fable || family == Family::Mythos)
-            return generation >= 5;
+            return true;   // every Fable/Mythos, Mythos Preview included
         if (family == Family::Opus)
             return generation > 5 || (generation == 5 && revision > 0);
         return false;
     }
 
     // Sonnet 5.5 can't disable thinking either, but has a lowest setting,
-    // thinking:{type:"between_tools"}, which skips thinking on plain replies.
-    // The others 400 on it (checked live).
+    // thinking:{type:"between_tools"}: no up-front thinking, still thinks
+    // between tool calls. Only used when "disabled" isn't accepted.
     [[nodiscard]] constexpr bool supports_between_tools_thinking() const noexcept {
+        if (thinking_declared())
+            return accepts_thinking(kThinkBetweenTools)
+                && !accepts_thinking(kThinkDisabled);
         return family == Family::Sonnet && generation == 5 && revision == 5;
     }
 
@@ -1340,6 +1370,51 @@ namespace catalog_reasoning_off_detail {
 inline Registry<std::uint8_t>& reg() { static Registry<std::uint8_t> r; return r; }
 } // namespace catalog_reasoning_off_detail
 
+// What Anthropic's own /v1/models says a model accepts: thinking.type values
+// (ModelCapabilities::kThink* bits) and effort levels (effort_bit mask, 0 =
+// none declared). First-party, so it beats id rules and models.dev. Also
+// written when a request is rejected for a thinking type, so a wrong guess
+// is made once per session at most. Keyed "anthropic/<model>".
+struct AnthropicDecl {
+    std::uint8_t thinking = 0;
+    std::uint8_t effort   = 0;
+    bool operator==(const AnthropicDecl&) const = default;
+};
+namespace anthropic_decl_detail {
+inline Registry<AnthropicDecl>& reg() { static Registry<AnthropicDecl> r; return r; }
+} // namespace anthropic_decl_detail
+
+inline void set_anthropic_decls(std::vector<std::pair<std::string, AnthropicDecl>> all) {
+    Registry<AnthropicDecl>::Batch b;
+    for (auto& [id, d] : all)
+        b.sets.emplace_back(scoped_caps_key(id, "anthropic"), d);
+    anthropic_decl_detail::reg().commit(std::move(b));
+    bump_caps_epoch();
+}
+[[nodiscard]] inline std::optional<AnthropicDecl> anthropic_decl_for(
+        std::string_view model_id, std::string_view scope = {}) {
+    if (!anthropic_decl_detail::reg().any()) return std::nullopt;
+    const std::string s = scope.empty() ? caps_provider_scope() : std::string{scope};
+    if (s != "anthropic") return std::nullopt;
+    return anthropic_decl_detail::reg().find(scoped_caps_key(model_id, s), {});
+}
+// The API rejected thinking.type `rejected` for this model; `instead` is the
+// type it named (0 = none). Starts from the model's current thinking facts so
+// the rest stay as they were.
+inline void learn_anthropic_thinking(std::string_view model_id,
+                                     std::uint8_t current,
+                                     std::uint8_t rejected,
+                                     std::uint8_t instead) {
+    const std::string key = scoped_caps_key(model_id, "anthropic");
+    AnthropicDecl d = anthropic_decl_detail::reg().find(key, {}).value_or(AnthropicDecl{});
+    std::uint8_t t = (d.thinking ? d.thinking : current) | 1u;   // kThinkDeclared
+    t = static_cast<std::uint8_t>((t & ~rejected) | instead);
+    if (t == d.thinking) return;
+    d.thinking = t;
+    anthropic_decl_detail::reg().set(key, d);
+    bump_caps_epoch();
+}
+
 inline void set_catalog_reasoning_off(std::string model_id, ReasoningOff v) {
     bump_caps_epoch();
     catalog_reasoning_off_detail::reg().set(norm_caps_key(model_id),
@@ -1970,8 +2045,22 @@ learned_effort_sets_snapshot() {
     }
     // Claude/GPT are family-gated; overrides only touch the compat lane so we
     // never fabricate their max/xhigh ladder or disturb tier/context logic.
-    if (caps.is_known_family() || caps.family == ModelCapabilities::Family::Gpt)
+    if (caps.is_known_family() || caps.family == ModelCapabilities::Family::Gpt) {
+        // Anthropic's own declaration for this model, when we have it.
+        if (caps.family != ModelCapabilities::Family::Gpt)
+            if (const auto d = anthropic_decl_for(model_id, scope)) {
+                caps.thinking_types = d->thinking;
+                if (d->effort != 0 && !caps.effort_set_known) {
+                    caps.effort_set       = d->effort;
+                    caps.effort_set_known = true;
+                }
+            }
+        // Thinking is mandatory on these: no "off" in the picker, and a
+        // stored off reads as the lowest effort.
+        if (caps.thinking_always_on())
+            caps.reasoning_off = static_cast<std::uint8_t>(ReasoningOff::Impossible);
         return caps;
+    }
     // Declared (models.dev / publishing provider) effort enums — compat lane
     // only: family ladders are already exact, and third-party metadata for
     // Claude/GPT expresses different wire semantics (adaptive thinking).

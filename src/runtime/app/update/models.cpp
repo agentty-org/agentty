@@ -474,10 +474,7 @@ Cmd switch_to_model_ref(Model& m, const ModelRef& ref, bool record = true) {
         m.s.smart_turn_model = ModelId{};
         m.s.smart_turn_role.reset();
         m.s.context_max = resolved_context_max(m, ref.provider_id);
-        if (!m.d.model_id.value.empty())
-            m.d.effort = clamp_effort(m.d.effort,
-                                      resolved_caps(m.d.model_id.value,
-                                                    ref.provider_id));
+        // m.d.effort stays as picked; display and wire clamp it per model.
         auto save = persist_settings(m);
         auto mru  = record ? record_recent(m, ref.provider_id, ref.model_id)
                            : Cmd::none();
@@ -991,13 +988,6 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                 label = "reasoning: auto (catalog default)";
             }
             auto save = save_record(m);
-            // m.d.effort is the ACTIVE model's tier. Re-clamp it only when
-            // the row is the active model; toggling another row must not
-            // change what the current conversation sends.
-            if (row.provider_id == active_provider_id(m)
-                && id == m.d.model_id.value)
-                m.d.effort = clamp_effort(m.d.effort,
-                                          resolved_caps(id, row.provider_id));
             auto toast = set_status_toast(m, label);
             return Cmd::batch(std::move(save), std::move(toast));
         },
@@ -1271,16 +1261,20 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                 // keep naming the OLD model after the catalog corrected it.
                 m.s.smart_turn_model = ModelId{};
                 m.s.smart_turn_role.reset();
-                // The new model may not support the effort tier in use, so
-                // the chip and the wire agree only after a clamp. Scoped to the
-                // active provider, as every other clamp in this file.
-                m.d.effort = clamp_effort(m.d.effort,
-                                          resolved_caps(id.value, active_provider_id(m)));
                 proven_save = Cmd::batch(std::move(proven_save), persist_settings(m));
             };
-            if (exact || m.d.available_models.empty()) {
+            // A local server (Ollama, LM Studio) lists exactly what it has
+            // loaded, so a model it doesn't list can't run there. Typically a
+            // recall left over from another provider.
+            const bool list_is_complete =
+                m.d.selection.row && m.d.selection.row->is_local;
+            // Ollama serves `llama3` as `llama3:latest`.
+            const bool listed_as_latest = list_is_complete && !want.empty()
+                && std::any_of(m.d.available_models.begin(), m.d.available_models.end(),
+                               [&](const ModelInfo& mi) { return mi.id.value == want + ":latest"; });
+            if (exact || listed_as_latest || m.d.available_models.empty()) {
                 // Offered as-is (or nothing to compare against): leave it.
-            } else if (want.empty()) {
+            } else if (want.empty() || (list_is_complete && !same_model)) {
                 // No model chosen yet for this host. A raw /v1/models dump
                 // starts with whatever sorts first (SovereignEG: a 4k-window
                 // Qwen3-0.6B, then embedding models), so pick the first one
@@ -1297,6 +1291,12 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                     if (pick) break;
                 }
                 adopt(pick ? pick->id : m.d.available_models.front().id);
+                if (!want.empty())
+                    unlisted_note = set_status_toast(m,
+                        ui::pretty_model_label(want) + " isn't on "
+                            + provider::provider_display_name(m.d.selection)
+                            + " \xc2\xb7 using " + ui::pretty_model_label(m.d.model_id.value),
+                        std::chrono::seconds{6});
             } else if (same_model) {
                 // Offered under another spelling or window: switch only when
                 // the one we hold is a `[1m]` this account can't use. A plain

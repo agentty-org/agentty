@@ -135,8 +135,12 @@ maya::Element model_badge_config(const Model& m) {
     // chip then reads as a footnote on the model rather than a third peer
     // in the row, and the two are no longer glued into one "◇xhigh" word.
     Element effort_chip = text("");
-    if (m.d.effort != Effort::None && !model.empty()) {
-        const auto caps = resolved_caps(model);
+    const auto chip_caps = model.empty() ? ModelCapabilities{} : resolved_caps(model);
+    // The pick clamped to this model: off on a model that always thinks
+    // shows its floor, and an unsupported tier shows what's sent.
+    const Effort shown = model.empty() ? Effort::None : clamp_effort(m.d.effort, chip_caps);
+    if (shown != Effort::None) {
+        const auto& caps = chip_caps;
         if (effort_capable(caps))
             effort_chip = h(text("  "),
                             text("\xe2\x9c\xa6 ", fg_of(ui::role_brand)),
@@ -149,7 +153,7 @@ maya::Element model_badge_config(const Model& m) {
                             // The sigil keeps the accent and carries the
                             // eye; the tier only has to be READABLE once
                             // the eye arrives, so plain muted is the floor.
-                            text(std::string{effort_label(m.d.effort)},
+                            text(std::string{effort_label(shown)},
                                  fg_of(muted))).build();
     }
 

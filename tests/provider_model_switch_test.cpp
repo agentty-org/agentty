@@ -2139,3 +2139,15 @@ TEST_CASE("accounts: list from the view, removal promotes the newest other") {
     CHECK(al4->rows[0].label == "home");
     CHECK(al4->rows[0].active);
 }
+
+// Recalls are saved under the canonical id; a legacy spec must still find them.
+TEST_CASE("model recall: legacy provider spellings find the saved model") {
+    agentty::store::Settings s;
+    s.provider_models["openai"] = "gpt-5.4";
+    CHECK(app::detail::model_for_provider(s, "openai") == "gpt-5.4");
+    CHECK(app::detail::model_for_provider(s, "codex") == "gpt-5.4");
+    // An entry an older build saved under the raw spec still counts.
+    agentty::store::Settings old;
+    old.provider_models["codex"] = "gpt-5.4-mini";
+    CHECK(app::detail::model_for_provider(old, "codex") == "gpt-5.4-mini");
+}

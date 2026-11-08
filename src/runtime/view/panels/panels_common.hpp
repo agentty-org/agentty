@@ -253,9 +253,11 @@ reasoning_effort_footer(const Model& m, std::string_view model_id,
         // accented), then the global ^R show/hide toggle. ←/→ cycles the tier.
         std::vector<Element> parts;
         parts.push_back(text("reasoning ", fg_dim(muted)));
+        // What this model will actually get for the user's pick.
+        const Effort shown = clamp_effort(m.d.effort, caps);
         for (Effort lvl : available_efforts(caps)) {
             const std::string lbl{effort_label(lvl)};
-            if (lvl == m.d.effort) {
+            if (lvl == shown) {
                 parts.push_back(text("\xe2\x80\xb9", fg_of(accent)));      // ‹
                 parts.push_back(text(lbl, fg_bold(accent)));
                 parts.push_back(text("\xe2\x80\xba ", fg_of(accent)));   // ›

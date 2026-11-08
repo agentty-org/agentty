@@ -446,7 +446,8 @@ namespace detail {
         Effort e, int n, const ModelCapabilities& caps) noexcept {
     Effort ladder[7];
     int nl = 0;
-    ladder[nl++] = Effort::None;            // "off" is always a rung
+    ladder[nl++] = Effort::None;            // "off" is a rung unless the model always thinks
+    if (always_reasons(caps)) nl = 0;
     const std::uint8_t set = effort_set_of(caps);
     for (Effort lv : {Effort::Minimal, Effort::Low, Effort::Medium,
                       Effort::High, Effort::Xhigh, Effort::Max})
@@ -521,7 +522,7 @@ namespace detail {
     // Same single primitive as effort_for_complexity — identical output at the
     // tier boundary is a property of sharing the stepper, not a coincidence.
     auto step = [&](E e, int n) { return detail::effort_step(e, n, caps); };
-    if (cx.tier == Complexity::Trivial) return E::None;
+    if (cx.tier == Complexity::Trivial) return clamp_effort(E::None, caps);
 
     // The saturation margin is a PARAMETER, not a getenv() read. It is user
     // configurable now, and a value read from the environment here could not

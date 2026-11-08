@@ -1544,13 +1544,16 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     auto creds = auth::resolve(IoAccess::grant(), args.cli_key);
     startup::mark("creds resolved");
 
-    // Persist -m as the new default — but NOT in ACP mode, where the model
-    // is an ephemeral per-subprocess override (handled below) that must not
-    // clobber the TUI's saved model.
+    // Persist -m as the new default, but only for the interactive TUI. A
+    // headless `run`, `acp` or `mcp-serve` takes -m for that process only;
+    // saving it would change the model the TUI opens on.
+    const bool interactive = args.subcommand.empty();
     if (!args.cli_model.empty() && args.subcommand != "acp") {
-        auto s = persistence::load_settings(::agentty::IoAccess::grant());
-        s.model_id = ModelId{args.cli_model};
-        persistence::save_settings(::agentty::IoAccess::grant(), cap, s);
+        if (interactive) {
+            auto s = persistence::load_settings(::agentty::IoAccess::grant());
+            s.model_id = ModelId{args.cli_model};
+            persistence::save_settings(::agentty::IoAccess::grant(), cap, s);
+        }
         // An explicit --model binds every role, not just the main turn. Set
         // here so the TUI's init() sees it too -- it takes no argv (#70).
         smart::tuning::model_pinned() = true;
@@ -1852,7 +1855,9 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         // host proves itself by answering the model fetch. -m recall gets
         // the same treatment (filed with the spec on proof).
         const bool is_preset = provider::preset_for(provider_spec) != nullptr;
-        if (is_preset) {
+        if (!interactive) {
+            // Headless: this process runs on the spec, nothing is saved.
+        } else if (is_preset) {
             auto s = persistence::load_settings(::agentty::IoAccess::grant());
             s.provider = provider_spec;
             if (args.cli_model.empty()) {
