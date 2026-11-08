@@ -47,6 +47,25 @@ std::vector<std::string_view> wrap_rows(std::string_view s, int w) {
     if (out.empty()) out.push_back(std::string_view{});
     return out;
 }
+
+// `s` cut to `w` columns, with "…" when it was cut.
+std::string fit_cols(std::string_view s, int w) {
+    if (w <= 0) return {};
+    if (string_width(s) <= w) return std::string{s};
+    std::size_t i = 0;
+    int cols = 0;
+    while (i < s.size()) {
+        std::size_t next = i;
+        const char32_t cp = maya::decode_utf8(s, next);
+        const int cw = maya::unicode::char_width(cp);
+        if (cols + cw > w - 1) break;
+        cols += cw;
+        i = next;
+    }
+    std::string out{s.substr(0, i)};
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out + "\xe2\x80\xa6";
+}
 } // namespace
 
 Element tool_output_panel(const Model& m) {
@@ -90,8 +109,17 @@ Element tool_output_panel(const Model& m) {
         // hues read as a vertical colour strip.
         int badge_w = 0;
         for (const auto& e : o->entries)
-            badge_w = std::max(badge_w, string_width(e.title));
+            badge_w = std::max(badge_w, e.is_live ? string_width("\xe2\x97\x8f LIVE")
+                                                  : string_width(e.title));
         ++badge_w;   // the widest name still gets a gap before its detail
+        // Room for the detail: the overlay is 4 columns in, then border (2),
+        // padding (4), scrollbar gutter (1), cursor bar (2), the badge plus
+        // its 1-column gap, and the 2-column gap before the status. The
+        // detail gives way so the status is never cut.
+        const int row_w = std::max(10, panel_terminal_cols() - 4 - 2 - 4 - 1 - 2 - 1);
+        auto fit_detail = [&](const std::string& lead, const std::string& trail) {
+            return fit_cols(lead, row_w - badge_w - string_width(trail) - 2);
+        };
 
         cfg.items.reserve(o->entries.size());
         for (int i = 0; i < sz; ++i) {
@@ -109,7 +137,8 @@ Element tool_output_panel(const Model& m) {
                     badge.append(static_cast<std::size_t>(badge_w - live_w), ' ');
                 row.badge          = std::move(badge);
                 row.badge_style    = fg_bold(cat_hue);
-                row.leading        = e.title + (e.detail.empty() ? "" : "  " + e.detail);
+                row.leading        = fit_detail(e.title + (e.detail.empty() ? "" : "  " + e.detail),
+                                                e.trailing);
                 row.leading_style  = fg_of(fg);
                 row.trailing       = e.trailing;
                 row.trailing_style = fg_dim(cat_hue);
@@ -127,7 +156,7 @@ Element tool_output_panel(const Model& m) {
             row.badge_style    = e.failed ? fg_bold(danger)
                                           : fg_bold(cat_hue);
             row.leading        = e.detail.empty() ? std::string{"\xe2\x80\xa6"}
-                                                  : e.detail;
+                                                  : fit_detail(e.detail, e.trailing);
             row.leading_style  = e.failed ? fg_of(danger) : fg_of(fg);
             row.trailing       = e.trailing;
             row.trailing_style = e.failed ? fg_of(danger) : fg_dim(muted);

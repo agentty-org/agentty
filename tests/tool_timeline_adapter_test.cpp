@@ -20,6 +20,9 @@
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 #include "maya/widget/tool_body_preview.hpp"
+#include <maya/render/canvas.hpp>
+#include <maya/render/renderer.hpp>
+#include <maya/style/theme.hpp>
 
 namespace A = agentty;
 namespace U = agentty::ui;
@@ -838,6 +841,43 @@ TEST_CASE("tool output viewer: never taller than the terminal") {
                               + ": " + std::to_string(sz.height.value) + " rows");
                 }
         }
+}
+
+TEST_CASE("tool output viewer: list keeps the status whole") {
+    A::tool_output::Entry e;
+    e.name = "shell";
+    e.title = "Shell";
+    e.detail = "cmake --build build --target " + std::string(150, 'q');
+    e.trailing = "failed \xc2\xb7 41.2s \xc2\xb7 128 KB";
+    e.output = "x";
+    e.call = make_tool("shell", A::ToolUse::Done{{}, {}, "x"});
+    A::Model m;
+    auto live = e;
+    live.is_live = true;
+    live.trailing = "running \xc2\xb7 3.0s \xc2\xb7 128 KB";
+    for (bool is_live : {false, true}) {
+    m.ui.panel.descend(A::ui::panel::ToolOutput{{{is_live ? live : e}, 0, false}});
+    for (int cols : {50, 80, 120}) {
+        setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+        setenv("LINES", "30", 1);
+        auto el = U::tool_output_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(cols - 4, 30, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        std::string all;
+        for (int y = 0; y < 30; ++y) {
+            for (int x = 0; x < cols - 4; ++x) {
+                const char32_t ch = canvas.get(x, y).character;
+                all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+            }
+            all += '\n';
+        }
+        check(all.find("128 KB") != std::string::npos,
+              std::string{is_live ? "live " : ""} + "status whole at "
+                  + std::to_string(cols) + " cols");
+    }
+    }
 }
 
 TEST_CASE("tool output viewer: long lines wrap inside the pane") {
