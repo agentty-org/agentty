@@ -1,12 +1,12 @@
 ---
-title: "How to use Groq for blazing-fast coding with agentty"
+title: "How to use Groq for fast coding with agentty"
 description: "Use Groq's ultra-fast inference as your coding agent backend with agentty — step-by-step setup for low-latency, high-throughput terminal coding."
 competitor: "Groq coding agent"
 verdict: "Point agentty at Groq for extremely low-latency inference — great for fast, iterative edits where responsiveness matters more than frontier reasoning."
 updated: "2026-08-19"
 ---
 
-# How to use Groq for blazing-fast coding with agentty
+# How to use Groq for fast coding with agentty
 
 Groq's LPU inference is exceptionally fast. Paired with agentty's native binary and built-in retrieval, you get a snappy, low-latency coding loop.
 

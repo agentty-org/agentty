@@ -1,11 +1,9 @@
-<h1 align="center">agentty</h1>
+# agentty
 
-<p align="center">
-  <b>A blazing-fast agent harness for your terminal.</b><br>
-  One small native binary. Use the Claude, ChatGPT or Copilot plan you already pay for, or any model, even local.
-</p>
+**An agent harness for your terminal.** Ready to type in 47 ms, 21 MB of memory while idle.<br>
+One small native binary. Use the Claude, ChatGPT or Copilot plan you already pay for, or any model, even local.
 
-<p align="center">
+<p>
   <a href="https://github.com/agentty-org/agentty/releases/latest"><img src="https://img.shields.io/github/v/release/agentty-org/agentty?style=flat-square&color=blue" alt="Release" /></a>
   <a href="https://github.com/agentty-org/agentty/stargazers"><img src="https://img.shields.io/github/stars/agentty-org/agentty?style=flat-square&color=f1c40f&labelColor=555555" alt="Stars" /></a>
   <a href="https://github.com/agentty-org/agentty/releases"><img src="https://img.shields.io/github/downloads/agentty-org/agentty/total?style=flat-square&color=brightgreen" alt="Downloads" /></a>
@@ -14,7 +12,7 @@
   <a href="https://web.libera.chat/#agentty"><img src="https://img.shields.io/badge/IRC-%23agentty-0b2b8a?style=flat-square" alt="IRC" /></a>
 </p>
 
-<p align="center">
+<p>
   <a href="https://agentty.org">Website</a> ·
   <a href="https://agentty.org/docs/">Docs</a> ·
   <a href="https://agentty.org/benchmarks/">Benchmarks</a> ·
@@ -22,7 +20,7 @@
   <a href="https://agentty.org/changelog/">Changelog</a>
 </p>
 
-<p align="center">
+<p>
   <img src="https://raw.githubusercontent.com/agentty-org/agentty/master/agentty.gif" alt="agentty fixing a failing test: plan, run tests, search, read, edit, write a test, re-run, review" width="780" />
   <br><sub>A real session, replayed from the terminal.</sub>
 </p>
@@ -101,43 +99,43 @@ The same line updates agentty later. Other ways to install are under [Installati
 <tr>
 <td width="50%" valign="top">
 
-### ⚡ Fast all the way through
+### Fast all the way through
 A ~2.6 ms cold start and a prompt on screen in under 50 ms. Independent tool calls run in
 parallel, and read-only tools start while the model is still writing, so tool-heavy turns finish
 sooner.
 
-### 🔌 Any model, any plan
+### Any model, any plan
 Subscriptions you already pay for, API keys for ten more providers, any OpenAI-compatible
 endpoint, or local Ollama. One model picker across every provider you're signed into. [Providers ↓](#providers)
 
-### 🛡️ Sandboxed by default
+### Sandboxed by default
 Shell and build commands run inside **claybin**: seccomp, Landlock and cgroups on Linux, seatbelt
 on macOS, AppContainer and job objects on Windows. Credential files are masked, file tools refuse
 paths outside your workspace, and network goes through a proxy that refuses your LAN, `localhost`
 and cloud metadata. [`docs/SANDBOX.md`](docs/SANDBOX.md)
 
-### 🌐 Air-gapped mode
+### Air-gapped mode
 `agentty airgap user@host` runs a session on a machine with no internet; your laptop relays the
 traffic over SSH with TLS pinned end to end.
 
 </td>
 <td width="50%" valign="top">
 
-### 🔧 A full tool suite
+### A full tool suite
 read · edit · write · apply_patch · shell · grep · glob · outline · find_definition · repo_map ·
 git · test · diagnostics · web · search_code · search_docs · task · todo · remember — each with a
 purpose-built widget in the UI.
 
-### 🧠 Learns your codebase
+### Learns your codebase
 A fully local retrieval engine (keyword plus embeddings, code-aware chunking and reranking),
 Agent Skills compatible with Claude Code's format, and `remember` / `forget` memory across
 sessions. [Retrieval ↓](#retrieval)
 
-### 🎯 Smart Mode
+### Smart Mode
 A flagship model plans; cheaper models do the legwork. Effort scales to each turn, and the router
 learns your repo across sessions. Off is a strict no-op. [Smart Mode ↓](#smart-mode)
 
-### 🤖 Scripts and CI
+### Scripts and CI
 `agentty run "fix the failing test"` runs one prompt with tools and prints the answer. `--json`,
 `--timeout`, `--events jsonl`, clear exit codes, and `--read-only --no-network` for untrusted
 code. [Docs ↗](https://agentty.org/docs/cli/#agentty-run)
