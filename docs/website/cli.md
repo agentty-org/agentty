@@ -138,7 +138,13 @@ Type `/` at the start of the composer for a menu of everything you can run by na
 
 ## Options
 
-These mirror `agentty --help` exactly.
+These mirror `agentty --help`, which prints:
+
+```run
+agentty --help
+```
+
+In detail:
 
 | Flag | Effect |
 |---|---|
@@ -155,7 +161,11 @@ These mirror `agentty --help` exactly.
 
 ## Air-gap flags
 
-Passed to `agentty airgap` — see `agentty airgap --help`.
+Passed to `agentty airgap`:
+
+```run
+agentty airgap --help
+```
 
 | Flag | Effect |
 |---|---|

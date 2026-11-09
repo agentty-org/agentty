@@ -8,7 +8,11 @@ slug: storage
 
 Everything agentty writes, where it goes, how long it stays, and how to move it.
 
-`agentty config` prints this for your machine, with real paths and sizes.
+`agentty config` prints this for your machine, with real paths and sizes. On a fresh install it looks like this:
+
+```run
+agentty config
+```
 
 | command | what it does |
 |---|---|

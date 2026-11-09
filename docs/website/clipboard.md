@@ -278,6 +278,10 @@ reaches your laptop's clipboard through ssh and tmux.
 
 ## Commands
 
+```run
+agentty paste help
+```
+
 | Command | What it does |
 |---------|--------------|
 | `agentty paste [-o DIR]` | Print text, or save images and files and print their paths. |
