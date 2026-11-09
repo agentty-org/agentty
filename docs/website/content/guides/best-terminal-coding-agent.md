@@ -3,7 +3,7 @@ title: "The best terminal AI coding agent in 2026"
 description: "A rundown of terminal-first AI coding agents in 2026 — and why agentty (native C++26, one static binary, multi-provider, sandboxed) is a top pick for the command line."
 competitor: "terminal coding agent"
 verdict: "For a terminal-first AI coding agent in 2026, agentty stands out: a single native binary with millisecond startup, multi-provider support, built-in retrieval, and a sandbox by default."
-updated: "2026-08-19"
+updated: "2026-11-09"
 ---
 
 # The best terminal AI coding agent in 2026
@@ -32,7 +32,7 @@ agentty was built to hit all of the above:
 
 ## Other options
 
-Depending on your workflow, Aider (mature git flow), OpenCode (open TUI), and vendor CLIs (Claude Code, Codex CLI, Gemini CLI) are all worth knowing. See our honest [comparisons](/compare) and [alternatives](/alternatives).
+Depending on your workflow, Aider (mature git flow), opencode (open TUI with a big community), jcode (multi-agent swarms) and the vendor CLIs (Claude Code, Codex CLI, Gemini CLI) are all worth knowing. We measured launch time, memory and disk for all of them on one machine: see the [benchmarks](/benchmarks/), our honest [comparisons](/compare) and [alternatives](/alternatives).
 
 ## Install in one line
 

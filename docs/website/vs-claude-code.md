@@ -6,37 +6,42 @@ nav_order: 15
 slug: vs-claude-code
 ---
 
-**Short version:** agentty is a drop-in [claude-code](https://github.com/anthropics/claude-code) alternative that targets the *same workflow* — a coding agent in your terminal — but ships as a single native **C++26** binary instead of a Node.js app, starts in **under a millisecond**, sandboxes every shell call by default, and is **bring-your-own-model**: run it with an API key, a subscription sign-in (Claude Pro/Max, ChatGPT, GitHub Copilot, or Kimi), or a local Ollama model. It works with **any model** (Claude, GPT, DeepSeek, Kimi, Gemini, Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, or local Ollama), not Claude only.
+**Short version:** agentty is a drop-in [claude-code](https://github.com/anthropics/claude-code) alternative that targets the *same workflow*, a coding agent in your terminal, but ships as a {{sizeMB}} native **C++26** binary instead of a {{bench.claude.disk}} bundled JavaScript runtime. It is ready to type in **{{bench.agentty.ready}}** (Claude Code: {{bench.claude.ready}}), idles at **{{bench.agentty.rss}}** of memory (Claude Code: {{bench.claude.rss}}), sandboxes every shell call by default, and is **bring-your-own-model**: run it with an API key, a subscription sign-in (Claude Pro/Max, ChatGPT, GitHub Copilot, or Kimi), or a local Ollama model. It works with **any model** (Claude, GPT, DeepSeek, Kimi, Gemini, Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, or local Ollama), not Claude only.
 
 If you already like Claude Code's workflow but want it faster, dependency-free, model-agnostic, and sandboxed, agentty is built for you.
 
 **You don't start from scratch.** Your Claude Code conversations show up in agentty's thread list ([[Ctrl+J]]), and you can open one and keep going, on Claude or any other model. Your `CLAUDE.md` files, `.claude/` skills, subagents and slash commands are read from where Claude Code keeps them, and `agentty mcp import --from claude` copies your MCP servers. See [Coming from Codex or Claude Code](/docs/switching).
 
+## Measured
+
+Both installed the official way on the same machine, fresh home directory, no login. Median of 10 launches, measured {{bench.date}} against Claude Code {{bench.claude.version}}.
+
+:::bench claude
+
 ## At a glance
 
 | | agentty | Claude Code |
 |---|---|---|
-| **Runtime** | Single static C++26 binary | Node.js app (`npm install -g`) |
-| **Cold start** | a few ms | ~hundreds of ms (Node boot) |
-| **Install size** | {{sizeMB}}, one file | Node runtime + `node_modules` |
-| **Dependencies** | None (no Node, Python, Electron, npm) | Node.js ≥ 18 |
+| **Runtime** | Single static C++26 binary | JavaScript app compiled into a native executable with its own runtime |
+| **Launch → ready to type** | {{bench.agentty.ready}} | {{bench.claude.ready}} |
+| **Memory while idle** | {{bench.agentty.rss}} | {{bench.claude.rss}} |
+| **On disk** | {{bench.agentty.disk}}, one file | {{bench.claude.disk}} |
 | **Models** | Claude, OpenAI, DeepSeek, Kimi, Gemini, Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, local Ollama, any OpenAI-compatible host | Claude only |
 | **Auth** | Any provider API key, local Ollama (no key), *or* subscription OAuth (Claude Pro/Max, ChatGPT, GitHub Copilot, Kimi) | Claude Pro/Max OAuth or API key |
-| **Shell sandbox** | On by default, enforced by the kernel | Permission prompts, no OS sandbox |
-| **Editor integration** | Runs inside Zed over [ACP](/docs/acp) | Terminal + IDE extensions |
+| **Shell sandbox** | On by default, enforced by the operating system | Permission prompts; an OS sandbox you can switch on |
+| **Editor integration** | Runs inside Zed and JetBrains over [ACP](/docs/acp) | Terminal + IDE extensions |
 | **Air-gapped hosts** | One-command [SSH air-gap](/docs/airgap) | — |
-| **Platforms** | Linux, macOS, Windows (x86_64 + aarch64), Termux/Android | macOS, Linux, Windows (WSL) |
+| **Platforms** | Linux and macOS (x86_64 + aarch64), Windows x86_64, Termux/Android | macOS, Linux, Windows |
 | **License** | MIT (open source) | Proprietary |
-| **MCP tools** | Yes | Yes |
+| **MCP tools** | Yes, client and server | Yes |
 | **Your Claude Code history** | Open any past Claude Code (or Codex) session and continue it, on any model | — |
 | **Compaction cost** | Background summarization runs on the cheapest capable model on your provider | Not publicly documented |
-| **Tool execution** | Independent calls run in parallel; read-only tools start speculatively mid-stream ([details](/docs/performance#speculative-tool-execution)) | Sequential per turn |
 
 ## Where agentty is different
 
-### It's a native binary, not a Node app
+### It's a small native binary
 
-Claude Code is distributed as an npm package and boots a Node.js runtime on every invocation. agentty is a single statically-linked C++26 executable ({{sizeMB}}) — `curl | sh` and you have one file with **no runtime dependencies**. Cold start is under a millisecond, and the TUI never pauses for garbage collection mid-stream. No version drift between machines, no `npm install`, no `node_modules`.
+Claude Code ships as a {{bench.claude.disk}} executable that carries its own JavaScript runtime. agentty is a single statically-linked C++26 executable ({{sizeMB}}): `curl | sh` and you have one file with **no runtime dependencies**. It is ready to type in {{bench.agentty.ready}}, prints `--version` in {{bench.agentty.start}}, and the TUI never pauses for garbage collection mid-stream. No version drift between machines, no `npm install`, no `node_modules`.
 
 ### Any model, bring your own key
 
@@ -44,7 +49,7 @@ agentty is model-agnostic — run it with an API key for **OpenAI, DeepSeek, Goo
 
 ### Sandboxed by default, not as an afterthought
 
-Every shell and build command agentty runs is wrapped in a sandbox the operating system enforces — so it holds even if the command tries to break out. Your project is writable, system libraries are read-only, and your SSH keys, cloud credentials and other projects aren't reachable at all. It's the default, not an opt-in. See [Sandboxing](/docs/sandboxing).
+Every shell and build command agentty runs is wrapped in a sandbox the operating system enforces, so it holds even if the command tries to break out. Your project is writable, system libraries are read-only, and your SSH keys, cloud credentials and other projects aren't reachable at all. It's the default, not an opt-in; Claude Code has a sandbox too, but you have to turn it on. See [Sandboxing](/docs/sandboxing).
 
 ### Cost-aware by design
 
@@ -60,7 +65,7 @@ When a conversation fills the window, agentty can **[fork](/docs/fork)** it into
 
 ### Lives inside your editor over ACP
 
-`agentty acp` runs the exact same engine as the TUI as an [Agent Client Protocol](/docs/acp) agent inside **Zed** — streaming responses, inline diffs, native permission prompts, session reload — over JSON-RPC on stdio. Any ACP client works.
+`agentty acp` runs the exact same engine as the TUI as an [Agent Client Protocol](/docs/acp) agent inside **Zed** or **JetBrains** IDEs: streaming responses, inline diffs, native permission prompts, session reload, over JSON-RPC on stdio. Any ACP client works.
 
 ## Where Claude Code is still ahead
 
@@ -71,7 +76,7 @@ Being honest: Claude Code is a mature, first-party Anthropic product with a larg
 Choose agentty if you want:
 
 - A **single-binary coding agent** with zero runtime dependencies.
-- **Startup in a few milliseconds** and a TUI that never GC-pauses.
+- **Ready to type in {{bench.agentty.ready}}** and a TUI that never GC-pauses.
 - **Your choice of model** — Claude, GPT, DeepSeek, Kimi, or a local Ollama model — behind one client.
 - Shell calls **sandboxed by default**.
 - To drive an agent on an **air-gapped host** over SSH.

@@ -1,9 +1,9 @@
 ---
 title: "An open-source alternative to OpenAI Codex CLI (2026)"
-description: "agentty is a native, open-source terminal coding agent and an alternative to the OpenAI Codex CLI — one static binary, multi-provider (not just OpenAI), sandboxed, MIT-licensed."
+description: "agentty is a native, open-source terminal coding agent and an alternative to the OpenAI Codex CLI: one {{sizeMB}} binary, any model (not just OpenAI), sandboxed, MIT-licensed."
 competitor: "Codex CLI"
-verdict: "The Codex CLI ties you to OpenAI. agentty runs against OpenAI too — plus Claude, Groq, OpenRouter, Cerebras, and local Ollama — from a single native binary with a sandbox by default."
-updated: "2026-11-01"
+verdict: "The Codex CLI is built around OpenAI. agentty signs in with the same ChatGPT plan, and also runs Claude, Copilot, Kimi, any API key or local Ollama, from a single native binary with a sandbox by default."
+updated: "2026-11-09"
 ---
 
 # An open-source alternative to the OpenAI Codex CLI
@@ -14,15 +14,19 @@ If you like the Codex CLI's terminal workflow but want to **use more than one pr
 
 - You don't want to be **locked to a single provider**.
 - You want an **open-source** agent you can read and self-host.
-- You want a **native binary** with millisecond startup instead of a Node runtime.
+- You want a **lighter install**: Codex through npm takes {{bench.codex.disk}} on disk with Node.js and {{bench.codex.ready}} to be ready.
 
 ## How agentty compares
 
-- **Provider-agnostic** — OpenAI, Claude Pro/Max, Groq, OpenRouter, Cerebras, or local Ollama.
-- **Single static binary** — {{sizeMB}}, starts in a few milliseconds.
+:::bench codex
+
+- **Provider-agnostic** — sign in with the Claude Pro/Max, ChatGPT, GitHub Copilot or Kimi plan you have, use an API key for OpenAI, DeepSeek, Gemini, Grok, Mistral, Groq or OpenRouter, or run a local model through Ollama.
+- **Single static binary** — {{sizeMB}}, ready to type in {{bench.agentty.ready}}, idles at {{bench.agentty.rss}}.
 - **Sandboxed by default**; one-command SSH air-gap.
 - **Retrieval built in** so only relevant code is sent to the model.
-- **Open source (MIT)**, MCP-capable, runs in Zed over ACP.
+- **Open source (MIT)**, MCP-capable, runs in Zed or JetBrains over ACP.
+
+Full side-by-side: [agentty vs Codex CLI](/compare/agentty-vs-codex-cli).
 
 ## Bring your Codex sessions with you
 

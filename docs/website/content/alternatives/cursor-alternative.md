@@ -3,7 +3,7 @@ title: "An open-source Cursor alternative for the terminal (2026)"
 description: "Prefer the terminal to an IDE fork? agentty is an open-source, native coding agent — one static binary, multi-provider, sandboxed — a terminal-first alternative to Cursor."
 competitor: "Cursor"
 verdict: "Cursor is a polished AI IDE (a VS Code fork). agentty is terminal-first: no editor lock-in, a single native binary, multi-provider, and it plugs into Zed over ACP. Pick agentty if you live in the terminal and want provider freedom."
-updated: "2026-08-19"
+updated: "2026-11-09"
 ---
 
 # An open-source Cursor alternative for the terminal
@@ -18,9 +18,9 @@ Cursor is an AI-native IDE. agentty is for developers who'd rather stay in the *
 
 ## How agentty compares
 
-- **Terminal-first, editor-agnostic.** Use it standalone, or inside Zed over ACP.
+- **Terminal-first, editor-agnostic.** Use it standalone, or inside Zed or JetBrains over ACP.
 - **Single native binary** — millisecond startup, no Electron, no Node.
-- **Multi-provider** — Claude, OpenAI, Groq, OpenRouter, Cerebras, Ollama.
+- **Multi-provider** — sign in with the Claude Pro/Max, ChatGPT, GitHub Copilot or Kimi plan you have, use an API key for OpenAI, DeepSeek, Gemini, Grok, Mistral, Groq or OpenRouter, or run a local model through Ollama.
 - **Sandboxed by default**, SSH air-gap in one command.
 - **Open source (MIT).**
 

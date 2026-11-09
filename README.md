@@ -52,8 +52,12 @@ you steer it from. agentty is that harness, written in C++26 and shipped as a si
 - **Open source (MIT).**
 
 Coming from another tool? [vs Claude Code](https://agentty.org/compare/agentty-vs-claude-code/) ·
-[vs Aider](https://agentty.org/compare/agentty-vs-aider/) ·
+[vs Codex CLI](https://agentty.org/compare/agentty-vs-codex-cli/) ·
+[vs Gemini CLI](https://agentty.org/compare/agentty-vs-gemini-cli/) ·
 [vs opencode](https://agentty.org/compare/agentty-vs-opencode/) ·
+[vs jcode](https://agentty.org/compare/agentty-vs-jcode/) ·
+[vs Aider](https://agentty.org/compare/agentty-vs-aider/) ·
+[vs Cursor](https://agentty.org/compare/agentty-vs-cursor/) ·
 [all alternatives](https://agentty.org/alternatives/)
 
 ## Benchmarks
