@@ -1552,6 +1552,12 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         if (interactive) {
             auto s = persistence::load_settings(::agentty::IoAccess::grant());
             s.model_id = ModelId{args.cli_model};
+            // init() starts on the provider's recalled model, so -m must be
+            // that recall too or it's ignored. With --provider the block
+            // further down files it (custom hosts only once they answer).
+            if (args.cli_provider.empty())
+                s.provider_models[provider::parse_selection(s.provider).catalog_id()] =
+                    args.cli_model;
             persistence::save_settings(::agentty::IoAccess::grant(), cap, s);
         }
         // An explicit --model binds every role, not just the main turn. Set
