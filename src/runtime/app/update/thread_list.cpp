@@ -53,6 +53,26 @@ void merge_foreign(Model& m) {
         std::ranges::stable_sort(m.d.threads, std::greater<>{}, &Thread::updated_at);
 }
 
+// The thread you're leaving goes into the list straight away, the way it
+// will read once the background reload finds it on disk. Without this the
+// list (loaded once at startup) doesn't have threads made this session, so
+// Alt+←/→ said "no other threads yet" or "only one thread" until something
+// reloaded it.
+void remember_leaving(Model& m) {
+    if (m.d.current.messages.empty()) return;
+    Thread h = persistence::thread_header(m.d.current);
+    if (const auto it = std::ranges::find(m.d.threads, h.id, &Thread::id); it != m.d.threads.end()) {
+        if (it->renamed_at > h.renamed_at) {   // a rename that the save hasn't caught up with
+            h.title = it->title; h.renamed_at = it->renamed_at; h.name_is_auto = it->name_is_auto;
+        }
+        *it = std::move(h);
+    } else {
+        m.d.threads.push_back(std::move(h));
+    }
+    std::ranges::stable_sort(m.d.threads, std::greater<>{}, &Thread::updated_at);
+    ++m.d.threads_rev;
+}
+
 // The session behind an imported thread: does its file look changed since?
 // Compared against the last scan, not the disk, so the reducer stays pure.
 [[nodiscard]] bool session_moved_on(const Model& m, const Thread& t) {
@@ -704,6 +724,8 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                 return cmd;
             }
             if (m.s.thread_loading) return Cmd::none();
+            // The open thread may be newer than the list (made this session).
+            remember_leaving(m);
             const int sz = static_cast<int>(m.d.threads.size());
             if (sz == 0) {
                 // History not loaded yet (or genuinely empty) — kick a
@@ -766,6 +788,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             // everything after this policy decision.
             Cmd save = m.d.current.messages.empty()
                          ? Cmd::none() : save_current_whole(m);
+            remember_leaving(m);
             auto reset = reset_to_fresh_thread(m);
             return Cmd::batch(std::move(save), std::move(reset));
         },
@@ -835,6 +858,15 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                     if (const auto it = std::ranges::find(m.d.threads, t.id, &Thread::id);
                         it != m.d.threads.end())
                         t.summary_tried = it->summary_tried;
+            // A thread left this session may still be on its way to disk (the
+            // writer is async): keep its row rather than let the reload drop it.
+            // Only rows saved this session qualify, so a thread deleted
+            // elsewhere doesn't come back.
+            for (auto& t : m.d.threads)
+                if (!t.foreign_only && t.updated_at >= m.wall_epoch
+                    && std::ranges::find(e.threads, t.id, &Thread::id) == e.threads.end())
+                    e.threads.push_back(std::move(t));
+            std::ranges::stable_sort(e.threads, std::greater<>{}, &Thread::updated_at);
             m.d.threads = std::move(e.threads);
             merge_foreign(m);
             ++m.d.threads_rev;
