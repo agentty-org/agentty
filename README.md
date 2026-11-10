@@ -21,8 +21,8 @@ One small native binary. Use the Claude, ChatGPT or Copilot plan you already pay
 </p>
 
 <p>
-  <img src="https://raw.githubusercontent.com/agentty-org/agentty/master/agentty.gif" alt="agentty fixing a failing test: plan, run tests, search, read, edit, write a test, re-run, review" width="780" />
-  <br><sub>A real session, replayed from the terminal.</sub>
+  <img src="https://agentty.org/agentty.gif" alt="agentty fixing a failing test: plan, map the repo, run the tests, search, read, send a subagent, edit, patch, write a test, re-run, review" width="780" />
+  <br><sub>A real session with the current release, replayed from the terminal.</sub>
 </p>
 
 ```bash
