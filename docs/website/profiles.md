@@ -20,7 +20,7 @@ The default tier. Every tool runs without prompting so agentty can move fast —
 
 ## Ask
 
-Read-only tools still run automatically, but writes, shell calls, and network calls each prompt before running. Cycle here with [[S-Tab]] when you want to eyeball each change before it lands — handy in an unfamiliar repo.
+Read-only tools still run automatically, but writes, shell calls, and network calls each [prompt before running](clip:permission-prompt). Cycle here with [[S-Tab]] when you want to eyeball each change before it lands — handy in an unfamiliar repo.
 
 ## Minimal
 

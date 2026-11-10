@@ -26,7 +26,7 @@ Everything you can do without leaving the home row.
 | [[Ctrl+P]] | Provider picker (manage/switch LLM backends, hosts, accounts) |
 | [[Ctrl+S]] | Smart Mode overlay (routing + learning) |
 | [[Ctrl+G]] | Run a code block from the newest reply on your real terminal |
-| [[Ctrl+R]] | Review pending diffs |
+| [[Ctrl+R]] | [Review pending diffs](clip:diff-review) |
 | [[Ctrl+O]] | Browse the full text of a frozen retrieved-context card |
 | [[Ctrl+U]] | Expand / collapse the newest retrieved-context card (empty composer) |
 | [[Ctrl+L]] | Redraw the screen |

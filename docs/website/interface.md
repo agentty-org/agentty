@@ -20,7 +20,7 @@ The input box at the bottom. Type and press [[Enter]] to send. [[Alt+Enter]] ins
 
 Type while a turn is streaming and your message **queues** — it lands automatically when the current turn finishes. On an empty composer, press [[↑]] to recall every queued message back into the buffer for editing.
 
-The composer is project-aware: type [[@]] to mention a file, [[#]] to jump to a symbol, and [[/]] (on an empty composer) to open the command palette — the same fuzzy list as [[Ctrl+K]], with entries like *Compact context*, *Switch provider*, and *New thread*. Drop an image file's path, or press [[Ctrl+V]], to attach a PNG, JPEG, GIF, or WebP inline. [[Ctrl+V]] also pastes copied files (small text files as their text, others saved with their path typed in). Over ssh, run `agentty paste setup` once on your laptop, see [Clipboard & Images](/docs/clipboard).
+The composer is project-aware: type [[@]] to [mention a file](clip:file-mention), [[#]] to jump to a symbol, and [[/]] (on an empty composer) to open [the slash commands](clip:slash-commands) — the same fuzzy list as [the command palette](clip:command-palette) on [[Ctrl+K]], with entries like *Compact context*, *Switch provider*, and *New thread*. Drop an image file's path, or press [[Ctrl+V]], to attach a PNG, JPEG, GIF, or WebP inline. [[Ctrl+V]] also pastes copied files (small text files as their text, others saved with their path typed in). Over ssh, run `agentty paste setup` once on your laptop, see [Clipboard & Images](/docs/clipboard).
 
 ## Run code blocks (Ctrl+G)
 
@@ -34,7 +34,7 @@ When a thread fills the context window, **Fork thread** ([[Ctrl+K]] → palette)
 
 ## Reading the model picker
 
-[[Ctrl+/]] opens one list across every provider you're signed into. A row looks like this:
+[[Ctrl+/]] opens [one list across every provider](clip:model-picker) you're signed into. A row looks like this:
 
 ```
 ▎ anthropic   Claude Sonnet 4.6      200k  ★ ✦
@@ -63,7 +63,7 @@ The right-hand column is reference data, dimmed on purpose: the context window, 
 
 ## Reading the provider picker
 
-[[Ctrl+P]] lists backends rather than models, so its trailing chip is an auth status — it answers "can I use this row right now?":
+[[Ctrl+P]] [lists backends](clip:provider-picker) rather than models, so its trailing chip is an auth status — it answers "can I use this row right now?":
 
 | Chip | Meaning |
 |---|---|
@@ -89,7 +89,7 @@ Each tool gets a purpose-built widget — agentty doesn't just print raw JSON:
 - **Search results group by file**, each match on its own row with a right-aligned line number — a `grep` card reads as a table, not a wall of text. The line numbers are the file's true positions, derived from the match blocks.
 - **File reads keep true line numbers** — a `read` with an `offset`, a `start_line`, or a `symbol=` starts its gutter at the real line the slice begins on, not at 1, and the tool's own footer/header decorations are stripped from the numbered body. The card header names the symbol you read (`file.cpp · foo()`).
 - **Terminal output stays terminal-shaped** — `bash`, `test`, `diagnostics`, and the `process_start`/`poll`/`stop` trio share a tail-anchored view that surfaces the newest lines, shows **exit codes**, and lifts a one-line verdict out of test-runner summaries and compiler diagnostics when it can.
-- **todos become checklists** you can watch tick off.
+- **todos become checklists** you can watch tick off; [[Ctrl+T]] opens [the whole plan](clip:todo-plan).
 - **Head-heavy tools show their head** — `repo_map`, `outline`, `list_dir`, and the search tools front-load their answer, so their preview shows the top of the output instead of the pagination footer.
 
 ## Smooth streaming
