@@ -43,9 +43,9 @@
 namespace agentty::ui {
 
 // The display prefs a built turn bakes in (reasoning shown/collapsed/hidden,
-// tool output depth, timestamps, prose width). A turn cached under one value
-// must not be handed back under another, or changing the pref in Appearance
-// does nothing to what's already on screen.
+// tool output depth, timestamps, prose width), so the live tail rebuilds when
+// one changes. Frozen turns keep the shape they were built with on purpose:
+// their rows may already be in the terminal's scrollback.
 [[nodiscard]] static std::uint64_t content_prefs_key() {
     const auto p = agentty::ui_prefs::current();
     return (static_cast<std::uint64_t>(p.thinking) << 0)
