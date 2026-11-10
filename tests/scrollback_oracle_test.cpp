@@ -1240,6 +1240,40 @@ static bool deep_run_turn(Ctx& cx, int t, int H) {
     return settle_freeze_trim(cx, st);
 }
 
+// Unique uniq- markers on screen and in scrollback.
+static std::size_t unique_markers(const TermEmu& emu) {
+    std::vector<std::string> toks;
+    for (const auto& l : emu.transcript())
+        for (std::size_t p = l.find("uniq-"); p != std::string::npos; p = l.find("uniq-", p + 1)) {
+            std::size_t e = p;
+            while (e < l.size() && l[e] != ' ' && l[e] != '.') ++e;
+            toks.push_back(l.substr(p, e - p));
+        }
+    std::sort(toks.begin(), toks.end());
+    toks.erase(std::unique(toks.begin(), toks.end()), toks.end());
+    return toks.size();
+}
+
+// A height pref (compact turns) changes after turns froze, then a colour knob
+// (tier / polarity / syntax) rebuilds the frozen prefix in the new shape.
+// Scrollback must stay append-only and nothing may go missing.
+static bool knob_rebuild(Ctx& cx) {
+    cx.m->d.ui().compact_turns = !cx.m->d.ui().compact_turns;
+    const std::size_t before = unique_markers(*cx.emu);
+    agentty::app::detail::rebuild_rendered_content(*cx.m);
+    for (int f = 0; f < 4; ++f) {
+        tick();
+        if (cx.frame("knob-" + std::to_string(f))) return true;
+    }
+    if (const std::size_t after = unique_markers(*cx.emu); after < before) {
+        std::fprintf(err, "  FAIL[knob]: %zu markers before the rebuild, %zu after\n",
+                     before, after);
+        ++g_failures;
+        return true;
+    }
+    return false;
+}
+
 static int run_shape(int W, int H) {
     int master = -1, slave = -1;
     if (openpty(&master, &slave, nullptr, nullptr, nullptr) != 0) {
@@ -1304,6 +1338,9 @@ static int run_shape(int W, int H) {
     // And a follow-up turn right after it — the "text again after the
     // run" step where the prior run's cards showed broken.
     if (prose_turn(cx, 7, H)) goto done;
+
+    // A height pref changes, then a colour knob rebuilds the frozen prefix.
+    if (knob_rebuild(cx)) goto done;
 
     std::fprintf(err, "  [info] frames oracle-checked: %d\n", orc.frames_checked);
     std::fprintf(err, "  [info] scrollback gate recoveries this shape: %lu\n",

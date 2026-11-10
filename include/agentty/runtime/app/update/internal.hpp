@@ -310,6 +310,10 @@ void clear_frozen(Model& m);
 // it as a regression test.
 void restyle_sealed_turns(Model& m);
 
+// rebuild_rendered_content: rebuild what is already on screen after a pref
+// that changes built content (tier, polarity, syntax).
+void rebuild_rendered_content(Model& m);
+
 // The two row budgets, and why they are two numbers.
 //
 // frozen_row_budget  the LIVE canvas: what stays in m.ui.frozen for
