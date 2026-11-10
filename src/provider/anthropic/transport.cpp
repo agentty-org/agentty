@@ -148,7 +148,7 @@ json tool_spec_to_json(const ToolSpec& s) {
 // redact one and surface the visible thinking deltas in the UI.
 std::string select_betas(std::string_view model, bool is_oauth,
                          bool any_eager_streaming = false,
-                         bool show_reasoning = false) {
+                         bool thinking_on = false) {
     // Single decode site for all model-id introspection — see
     // ModelCapabilities::from_id for why we tokenise rather than
     // substring-match. Adding a new beta gated on a new family /
@@ -174,12 +174,10 @@ std::string select_betas(std::string_view model, bool is_oauth,
     //     thinking is AUTOMATIC — no beta header, and adding one is a no-op.
     //   • Legacy enabled-mode models (Opus/Sonnet 4.5 and earlier): the
     //     interleaved-thinking-2025-05-14 beta is what lets the model plan
-    //     between tool_use blocks. We add it ONLY on that path, and ONLY when
-    //     the user opted into visible reasoning (^R). We never add
-    //     redact-thinking, so the thinking deltas reach the wire and the
-    //     reasoning block has real text to render. Off by default → no
-    //     thinking beta → the dead-air-free default wire is unchanged.
-    if (show_reasoning && !caps.uses_adaptive_thinking())
+    //     between tool_use blocks. We add it ONLY on that path, and only when
+    //     thinking is on: it's about whether the model can think between
+    //     tools, not whether the text is shown.
+    if (thinking_on && !caps.uses_adaptive_thinking())
         b.emplace_back(headers::beta_interleaved_thinking);
     if (caps.binds_thinking_to_prefix()) b.emplace_back(headers::beta_thinking_binding);
 
@@ -449,19 +447,23 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             else if (req.effort == "xhigh")  budget = 24000;
             else if (req.effort == "max")    budget = 32000;
             // Keep the budget strictly under max_tokens (Anthropic requires
-            // budget_tokens < max_tokens on the enabled path; a budget that
-            // meets or exceeds it 400s). Leave a comfortable answer floor.
+            // budget_tokens < max_tokens on the enabled path). Leave a quarter
+            // of max_tokens for the answer; the old flat 8000 floor clamped
+            // every tier to 1024 at an 8k cap (headless run, subagents).
             if (req.max_tokens > 0) {
-                const int ceiling = std::max(1024, req.max_tokens - 8000);
-                if (budget > ceiling) budget = ceiling;
+                const int ceiling = std::max(1024, req.max_tokens - std::max(1024, req.max_tokens / 4));
+                // When the top tier wouldn't fit, scale every tier by the
+                // same factor so low < medium < high still holds.
+                if (ceiling < 32000)
+                    budget = std::max(1024, static_cast<int>(
+                        static_cast<long long>(ceiling) * budget / 32000));
             }
             json thinking = json{{"type", "enabled"},
                                  {"budget_tokens", budget}};
-            // display works in BOTH modes; on the enabled path thinking is
-            // visible (summarized) by default, but set it explicitly when the
-            // user asked to see reasoning so intent is unambiguous on the wire.
-            if (req.show_reasoning)
-                thinking["display"] = "summarized";
+            // display works in both modes. The enabled path returns the
+            // summary by default, so say "omitted" when the user hid it:
+            // same thinking, same bill, no text to drop.
+            thinking["display"] = req.show_reasoning ? "summarized" : "omitted";
             body["thinking"] = std::move(thinking);
             // Opus 4.5 is the one extended-thinking-only model that ALSO honors
             // output_config.effort, which COMPOSES with budget_tokens (effort
@@ -471,12 +473,10 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
                 body["output_config"] = json{{"effort", req.effort}};
         } else {
             json thinking = json{{"type", "adaptive"}};
-            // VISIBLE reasoning: adaptive thinking REDACTS its text on the
-            // wire by default (thinking_delta.thinking arrives empty). When
-            // the user turned on "show reasoning" (^R), ask for the summarized
-            // thinking stream so the model's actual reasoning deltas reach us.
-            if (req.show_reasoning)
-                thinking["display"] = "summarized";
+            // Adaptive thinking omits its text by default on many models;
+            // ask for the summary when it will be shown, and say "omitted"
+            // otherwise so a model whose default is summarized doesn't send it.
+            thinking["display"] = req.show_reasoning ? "summarized" : "omitted";
             body["thinking"]      = std::move(thinking);
             body["output_config"] = json{{"effort", req.effort}};
         }
@@ -562,7 +562,7 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
         [](const auto& t){ return t.eager_input_streaming; });
     hreq.headers = build_request_headers(req.auth,
                                          select_betas(req.model, is_oauth, any_eager,
-                                                      req.show_reasoning),
+                                                      !req.effort.empty()),
                                          /*timeout_seconds=*/300,
                                          /*streaming=*/true,
                                          /*retry_count=*/req.retry_count);

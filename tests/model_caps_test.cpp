@@ -415,6 +415,21 @@ TEST_CASE("anthropic thinking: no off on a model that always thinks") {
     }
 }
 
+TEST_CASE("anthropic thinking: budget-only models can turn thinking on") {
+    // Haiku/Sonnet 4.5 take no effort field but do take a thinking budget,
+    // which the transport maps low/medium/high onto. They had no ladder, so
+    // the picker could never turn their thinking on.
+    for (auto id : {"claude-haiku-4-5", "claude-sonnet-4-5"}) {
+        const auto c = resolved_caps(id, "anthropic");
+        CHECK(!c.supports_effort());   // no output_config.effort on the wire
+        const auto ladder = available_efforts(c);
+        CHECK(std::find(ladder.begin(), ladder.end(), Effort::High) != ladder.end());
+        CHECK(std::find(ladder.begin(), ladder.end(), Effort::Max) == ladder.end());
+        CHECK(std::find(ladder.begin(), ladder.end(), Effort::None) != ladder.end());
+        CHECK(effort_wire_for(Effort::High, c) == "high");
+    }
+}
+
 TEST_CASE("anthropic thinking mode: adaptive vs enabled by revision") {
     using agentty::ModelCapabilities;
     auto adaptive = [](const char* id) {

@@ -957,17 +957,16 @@ Cmd launch_stream(Model& m) {
     //                             review now), so the flag was frozen at
     //                             whatever settings.json last held. It could
     //                             only ever disagree with the strip.
-    //   ui.thinking != Hidden   — Appearance's display preference, which is
-    //                             about whether to RENDER a block we already
-    //                             have. Letting a render choice silently
-    //                             change what we REQUEST is how you get
-    //                             tokens paid for and dropped.
+    //   ui.thinking != Hidden   — Appearance's display preference. It must
+    //                             not change HOW MUCH the model thinks (effort
+    //                             does), but Hidden does stop the summary text
+    //                             coming back: thinking is billed the same
+    //                             either way, so there's no reason to fetch
+    //                             text that won't be shown.
     //
-    // Both are gone from the request path. `effort` alone decides, so the
-    // strip and the wire cannot drift: off there is off on the wire (see
-    // build_body — the `reasoning` field is omitted entirely with no tier).
-    // ui.thinking still governs DISPLAY of whatever comes back, which is
-    // the question Appearance is actually for.
+    // So `effort` alone decides whether the model thinks, and the strip and
+    // the wire cannot drift: off there is off on the wire. Hidden only maps
+    // to hide_reasoning below (display:"omitted" on Anthropic).
     //
     // Compaction is the one override: a mechanical summarise never wants
     // visible thinking regardless of tier. Both are applied at the single
@@ -1116,6 +1115,8 @@ Cmd launch_stream(Model& m) {
         std::string         effort;
         bool                no_reasoning = false;
         std::uint8_t        reasoning_off = 0;
+        // Appearance ▸ Thinking is Hidden: think, but don't ask for the text.
+        bool                hide_reasoning = false;
         std::optional<bool> model_supports_tools;
         std::optional<bool> model_supports_vision;
         // Resolved on the UI thread from `m.d.persisted`, not read from the
@@ -1294,7 +1295,10 @@ Cmd launch_stream(Model& m) {
         // Compaction forces effort empty just above, so this is already
         // false for it; the explicit `!compacting` stays as documentation
         // of the intent rather than a load-bearing term.
-        req.show_reasoning = !compacting && !req.effort.empty();
+        // Visible text only when there's thinking to show and the user hasn't
+        // hidden it. Hiding doesn't change how much the model thinks (effort
+        // does that), only whether the summary comes back to be shown.
+        req.show_reasoning = !compacting && !req.effort.empty() && !in.hide_reasoning;
         // Off is sent explicitly, including when Smart Mode routed this
         // turn to off: Claude 5 models think unless told not to. Compaction
         // is mechanical and never needs thinking, so it asks for off too.
@@ -1548,6 +1552,8 @@ Cmd launch_stream(Model& m) {
             .effort                  = std::move(effort),
             .no_reasoning            = no_reasoning,
             .reasoning_off           = reasoning_off,
+            .hide_reasoning          = m.d.ui().thinking
+                                           == ui_prefs::Thinking::Hidden,
             .model_supports_tools    = model_supports_tools,
             .model_supports_vision   = model_supports_vision,
             .org_blocks_vision       = detail::entitlement_blocked(

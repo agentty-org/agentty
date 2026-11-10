@@ -42,6 +42,18 @@
 
 namespace agentty::ui {
 
+// The display prefs a built turn bakes in (reasoning shown/collapsed/hidden,
+// tool output depth, timestamps, prose width). A turn cached under one value
+// must not be handed back under another, or changing the pref in Appearance
+// does nothing to what's already on screen.
+[[nodiscard]] static std::uint64_t content_prefs_key() {
+    const auto p = agentty::ui_prefs::current();
+    return (static_cast<std::uint64_t>(p.thinking) << 0)
+         | (static_cast<std::uint64_t>(p.tool_output) << 8)
+         | (static_cast<std::uint64_t>(p.timestamps) << 16)
+         | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.prose_width)) << 24);
+}
+
 namespace {
 
 // ── Cached markdown render. The ONE Element-returning helper kept in
@@ -2797,6 +2809,7 @@ maya::Turn::Config turn_config_for_assistant_run(
                 .add(std::string_view{"agentty.turn.subturn"})
                 .add(std::string_view{msgs[i].id.value})
                 .add(msgs[i].compute_render_key())
+                .add(content_prefs_key())
                 .build();
             cfg.body.emplace_back(maya::Turn{std::move(sub)}.build());
         } else {
@@ -2831,7 +2844,8 @@ maya::CacheId assistant_run_hash_id(
     const auto& msgs = m.d.current.messages;
     maya::CacheIdBuilder kb;
     kb.add(std::string_view{"agentty.turn.assistant_run"})
-      .add(static_cast<std::uint64_t>(run_end - run_start));
+      .add(static_cast<std::uint64_t>(run_end - run_start))
+      .add(content_prefs_key());
     for (std::size_t j = run_start; j < run_end && j < msgs.size(); ++j) {
         kb.add(std::string_view{msgs[j].id.value});
         kb.add(msgs[j].compute_render_key());

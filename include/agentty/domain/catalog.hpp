@@ -540,6 +540,15 @@ struct ModelCapabilities {
         return false;
     }
 
+    // Claude models whose only thinking mode is the legacy budget one, and
+    // which don't take output_config.effort either (Haiku/Sonnet 4.5).
+    // Opus 4.5 is budget-only too but does take effort, so it's not here.
+    [[nodiscard]] constexpr bool budget_thinking_only() const noexcept {
+        if (family == Family::Haiku)  return generation == 4 && revision == 5;
+        if (family == Family::Sonnet) return generation == 4 && revision == 5;
+        return false;
+    }
+
     // Models that think by default and 400 on "disabled" (and have no
     // between_tools). The closest to off is the lowest effort.
     [[nodiscard]] constexpr bool thinking_always_on() const noexcept {
@@ -2427,6 +2436,12 @@ enum class Effort : std::uint8_t { None, Minimal, Low, Medium, High, Xhigh, Max,
 [[nodiscard]] constexpr std::uint8_t effort_set_of(
         const ModelCapabilities& caps) noexcept {
     if (caps.effort_set_known) return caps.effort_set;
+    // Budget-only thinkers take no effort field, but the transport maps
+    // low/medium/high onto a thinking budget. Without this the picker had no
+    // way to turn their thinking on at all.
+    if (caps.budget_thinking_only())
+        return static_cast<std::uint8_t>(effort_bit(Effort::Low)
+            | effort_bit(Effort::Medium) | effort_bit(Effort::High));
     if (!caps.supports_effort()) return 0;
     if (caps.effort_high_only) return effort_bit(Effort::High);
     std::uint8_t s = static_cast<std::uint8_t>(

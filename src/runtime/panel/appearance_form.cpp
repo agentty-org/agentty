@@ -290,11 +290,11 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
         };
         static constexpr std::array<const char*, 3> kThinkBlurbs = {
             "reasoning inline",
-            "a line you can open",
-            "never shown · not requested",
+            "the last few lines, as it goes",
+            "not shown · the model still thinks at your effort",
         };
         enum_choice(b, kApThinking, "Thinking", kThink, p.thinking,
-                    "whether the model's reasoning is shown — and asked for",
+                    "whether the model's reasoning is shown (effort sets how much it thinks)",
                     kThinkBlurbs);
     }
     {

@@ -99,6 +99,31 @@ TEST_CASE("reasoning: unified accessor precedence") {
     check(a.has_reasoning(), "has_reasoning true when thinking present");
 }
 
+TEST_CASE("reasoning: changing the Thinking pref updates turns already on screen") {
+    // A settled sub-turn was cached under the pref in force when it was
+    // built, so switching Collapsed -> Shown in Appearance did nothing.
+    std::string thought;
+    for (int i = 0; i < 30; ++i) thought += "thinking line " + std::to_string(i) + " EARLY_" + std::to_string(i) + "\n\n";
+    Model m;
+    Message a = assistant("done ANSWER_MARKER");
+    a.thinking = thought;
+    m.d.current.messages.push_back(std::move(a));
+    m.s.phase = phase::Idle{};
+    auto set = [&](ui_prefs::Thinking t) {
+        m.d.ui().thinking = t;
+        auto p = ui_prefs::current(); p.thinking = t; ui_prefs::publish(p);
+    };
+    set(ui_prefs::Thinking::Collapsed);
+    const auto folded = render_text(m);
+    check(!has(folded, "EARLY_0"), "collapsed shows only the tail");
+    set(ui_prefs::Thinking::Shown);
+    const auto full = render_text(m);
+    check(has(full, "EARLY_0"), "switching to Shown shows the whole reasoning");
+    set(ui_prefs::Thinking::Hidden);
+    check(!has(render_text(m), "thinking line"), "switching to Hidden hides it");
+    set(ui_prefs::Thinking::Collapsed);
+}
+
 TEST_CASE("reasoning: settled turn shows the full reasoning, not a fold") {
     Model m;
     // Thinking::Collapsed (the default) SHOWS the block; only Hidden suppresses it.

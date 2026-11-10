@@ -24,6 +24,38 @@ static A::Model apply(A::Model m, A::msg::StreamMsg event) {
     return std::move(next);
 }
 
+TEST_CASE("thinking clock: starts at the block, stops when the turn ends") {
+    using namespace std::chrono_literals;
+    auto at = [](A::Model m, A::msg::StreamMsg ev, std::chrono::milliseconds t) {
+        m.now = agentty::app::kTestEpoch + t;
+        auto [next, cmd] = D::step(::agentty::app::detail::stream_update, std::move(m), std::move(ev));
+        (void)cmd;
+        return std::move(next);
+    };
+    A::Model m;
+    m.s.phase = A::phase::Streaming{};
+    A::Message a; a.role = A::Role::Assistant;
+    m.d.current.messages.push_back(std::move(a));
+    // Block opens at 0s with no text; the summary arrives in one burst at 3s.
+    m = at(std::move(m), A::StreamThinkingDelta{"", "", true}, 0ms);
+    CHECK(m.d.current.messages.back().thinking_open());
+    m = at(std::move(m), A::StreamThinkingDelta{"summary", ""}, 3000ms);
+    m = at(std::move(m), A::StreamTextDelta{"answer"}, 3100ms);
+    CHECK(!m.d.current.messages.back().thinking_open());
+    CHECK(m.d.current.messages.back().reasoning_ms >= 3000);
+
+    // A turn that errors mid-thought doesn't leave the clock running.
+    A::Model m2;
+    m2.s.phase = A::phase::Streaming{};
+    A::Message b; b.role = A::Role::Assistant;
+    m2.d.current.messages.push_back(std::move(b));
+    m2 = at(std::move(m2), A::StreamThinkingDelta{"hmm", ""}, 0ms);
+    A::StreamError err; err.message = "boom";
+    m2 = at(std::move(m2), std::move(err), 2000ms);
+    CHECK(!m2.d.current.messages.back().thinking_open());
+    CHECK(m2.d.current.messages.back().reasoning_ms == 2000);
+}
+
 TEST_CASE("tool stream snapshot") {
     {
         auto decoded = A::http::test::decode_chunked({

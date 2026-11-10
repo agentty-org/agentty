@@ -101,6 +101,20 @@ constexpr int kMaxTruncationRetries = 2;
 // drained.
 }  // namespace (close anon for the cross-TU helpers below)
 
+// Close an open thinking phase on the newest assistant message and add its
+// time to the total. Called when the answer starts, a tool starts, or the
+// turn ends some other way (finish, error, cancel), so the "Thinking" header
+// and its clock can't keep running on a turn that's over.
+static void seal_thinking(Model& m, std::chrono::steady_clock::time_point now) {
+    if (m.d.current.messages.empty()) return;
+    auto& msg = m.d.current.messages.back();
+    if (msg.role != Role::Assistant || msg.reasoning_started_ms == 0) return;
+    const std::int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    msg.reasoning_ms += std::max<std::int64_t>(0, now_ms - msg.reasoning_started_ms);
+    msg.reasoning_started_ms = 0;
+}
+
 // running_over_ssh() and reveal_end_glide_enabled() lived here as getenv
 // calls behind function-local statics. Both are launch facts now, read once
 // by init() into Model::env (runtime/app/env.cpp): m.env.remote and
@@ -1343,14 +1357,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // Accumulate and CLOSE, so reasoning that resumes later
                 // (interleaved thinking) opens a fresh phase and adds to the
                 // same total.
-                if (msg.reasoning_started_ms != 0) {
-                    const std::int64_t now_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()).count();
-                    msg.reasoning_ms += std::max<std::int64_t>(
-                        0, now_ms - msg.reasoning_started_ms);
-                    msg.reasoning_started_ms = 0;
-                }
+                seal_thinking(m, now);
                 const std::size_t in_flight =
                     msg.streaming_text.size() + msg.pending_stream.size();
                 if (in_flight < kMaxStreamingBytes) {
@@ -1424,14 +1431,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // turns) — seal before the tool's own timer starts. Same
                 // accumulate-and-close as the answer path: a turn that
                 // reasons again after the tool opens a new phase.
-                if (amsg.reasoning_started_ms != 0) {
-                    const std::int64_t now_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()).count();
-                    amsg.reasoning_ms += std::max<std::int64_t>(
-                        0, now_ms - amsg.reasoning_started_ms);
-                    amsg.reasoning_started_ms = 0;
-                }
+                seal_thinking(m, now);
                 ToolUse tc;
                 tc.id   = e.id;
                 tc.name = e.name;
@@ -1745,19 +1745,18 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     // never rendered (no msg.thinking append).
                     open_block().redacted_data = std::move(e.redacted_data);
                 }
+                // The thinking phase opens when a thinking block starts, not
+                // at its first text: summarised thinking often arrives in one
+                // burst at the end, so timing from the text read ~0s for
+                // seconds of real thinking. Sealed by the answer or a tool.
+                if ((e.block_boundary || !e.text.empty()) && msg.reasoning_started_ms == 0)
+                    msg.reasoning_started_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            m.now.time_since_epoch()).count();
                 if (!e.text.empty()) {
                     open_block().text += e.text;
                     msg.thinking      += e.text;
                     if (!e.wire_field.empty()) msg.reasoning_wire_field = e.wire_field;
-                    // Open a thinking phase on the first thinking text of
-                    // this phase (steady clock; sealed by the answer or a
-                    // tool call). Re-opens after a seal, which is what makes
-                    // interleaved thinking visible as thinking.
-                    if (msg.reasoning_started_ms == 0)
-                        msg.reasoning_started_ms =
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                m.now.time_since_epoch())
-                                .count();
                 }
                 if (!e.signature.empty()) {
                     auto& blk = open_block();
@@ -1942,6 +1941,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     active_provider_id(m));
                 if (!cm.empty()) ran_model = std::move(cm);
             }
+            seal_thinking(m, m.now);
             auto cmd = finalize_turn(m, e.stop_reason);
             // A local router loads the model on the first request, so only
             // now can it report the served window. Probe the model that just
@@ -1983,6 +1983,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return cmd;
         },
         [&](StreamError& e) -> Cmd {
+            seal_thinking(m, m.now);
             // THE seam where a failure becomes something the user sees.
             // Logged with the classification that drives what happens next
             // (retry vs surface vs drop to Idle), so a "why did it give up?"
@@ -3005,6 +3006,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return cmd::launch_stream(m);
         },
         [&](CancelStream) -> Cmd {
+            seal_thinking(m, m.now);
             // Esc — full synchronous teardown.
             if (auto* a = active_ctx(m.s.phase); a && a->cancel) a->cancel->cancel();
 
