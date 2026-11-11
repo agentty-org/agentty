@@ -91,17 +91,24 @@ struct DiffLine {
     std::vector<std::pair<std::size_t, std::size_t>> changed;
 };
 
-// Tokens for the word diff: runs of word chars, runs of spaces, single
-// punctuation.
+// Tokens for the word diff: runs of word chars, runs of spaces, and runs of
+// other symbols, so `==` -> `<=` is one changed operator, not one char.
 [[nodiscard]] std::vector<std::string_view> tokens(std::string_view s) {
     std::vector<std::string_view> out;
     auto word = [](unsigned char c) { return std::isalnum(c) || c == '_' || c >= 0x80; };
+    auto space = [](char c) { return c == ' ' || c == '\t'; };
+    auto bracket = [](char c) { return c == '(' || c == ')' || c == '[' || c == ']'
+                                     || c == '{' || c == '}' || c == ',' || c == ';'; };
     for (std::size_t i = 0; i < s.size();) {
         std::size_t j = i + 1;
-        if (word(static_cast<unsigned char>(s[i])))
+        const auto c = static_cast<unsigned char>(s[i]);
+        if (word(c))
             while (j < s.size() && word(static_cast<unsigned char>(s[j]))) ++j;
-        else if (s[i] == ' ' || s[i] == '\t')
-            while (j < s.size() && (s[j] == ' ' || s[j] == '\t')) ++j;
+        else if (space(s[i]))
+            while (j < s.size() && space(s[j])) ++j;
+        else if (!bracket(s[i]))   // an operator: = == <= -> += ...
+            while (j < s.size() && !word(static_cast<unsigned char>(s[j]))
+                   && !space(s[j]) && !bracket(s[j])) ++j;
         out.push_back(s.substr(i, j - i));
         i = j;
     }
