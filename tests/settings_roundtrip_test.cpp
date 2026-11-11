@@ -107,6 +107,16 @@ TEST_CASE("settings round-trip: every appearance pref survives a reload") {
     CHECK(back.ui == s.ui);
 }
 
+TEST_CASE("settings round-trip: commit attribution survives a reload") {
+    TmpHome home{"attrib"};
+    agentty::store::Settings s;
+    REQUIRE_FALSE(s.commit_attribution);   // off unless asked for
+    s.commit_attribution = true;
+    CHECK(save_and_reload(s).commit_attribution);
+    s.commit_attribution = false;
+    CHECK_FALSE(save_and_reload(s).commit_attribution);
+}
+
 TEST_CASE("settings round-trip: each scrollback level survives a reload") {
     // The reported field, every value -- including Full (0 rows) and Tiny,
     // the two ends of the enum where an off-by-one or a clamp would bite.

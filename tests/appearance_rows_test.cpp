@@ -5,8 +5,8 @@
 // LIVE. The pane is a preview — you change a row and judge the result on the
 // real UI, which only works if the change reaches what is ALREADY on screen.
 // Colour rows (scheme, tier, polarity, syntax) have to re-seal the frozen
-// transcript; the structural ones (density, compact turns) deliberately must
-// not, because re-sealing at a new height tears the scrollback ledger.
+// transcript; the structural ones (density, compact turns) deliberately do
+// not: they're forward-only, so old turns keep their shape.
 //
 // SOLE OWNER. "Is the model's reasoning shown" was asked in two places: this
 // pane's Thinking row, and a ^R toggle in the model picker. They could
@@ -81,9 +81,8 @@ TEST_CASE("appearance: every row the pane builds is a real, reachable setting") 
 TEST_CASE("appearance: a colour row restyles, a structural row does not") {
     // The split is not cosmetic. Colour is resolved when an Element is BUILT,
     // so a sealed turn keeps whatever theme it was sealed under until it is
-    // rebuilt — hence the re-seal. Height is different: re-sealing a frozen
-    // turn at a new height tears the inline scrollback ledger, so those rows
-    // are forward-only by design.
+    // rebuilt — hence the re-seal. Height is different: those rows are
+    // forward-only by choice, so old turns keep their shape.
     Model m;
     const auto form = pn::build_appearance_form(m.d.ui(), m.env.terminal);
 

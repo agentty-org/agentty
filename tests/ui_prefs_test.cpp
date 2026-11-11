@@ -756,9 +756,8 @@ TEST_CASE("appearance: a colour knob invalidates what is already rendered") {
 
     // The counterexample, and the reason this is a list rather than "always
     // invalidate": a STRUCTURAL knob must NOT do this. Density and compact
-    // turns change row HEIGHTS, and a sealed turn's height is load-bearing
-    // for the inline scrollback ledger — re-sealing at a new height tears
-    // it. Those settings are forward-only by design.
+    // turns change row HEIGHTS, and are forward-only by choice: old turns
+    // keep the shape they were sealed with.
     for (const Knob k : {Knob{ui::panel::kApDensity, "density"},
                          Knob{ui::panel::kApCompact, "compact turns"}}) {
         Model m = opened();

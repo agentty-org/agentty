@@ -126,8 +126,10 @@ void reproject(Model& m) {
 // A STRUCTURAL pref (density, compact turns) is different in kind: it
 // changes row HEIGHTS, which invalidates the ledger's recorded measurements
 // rather than their colours. Those stay forward-only — they apply to turns
-// rendered from then on, and are deliberately not retro-applied, because
-// re-sealing at a new height tears the ledger. See pull_field below.
+// rendered from then on, and are not retro-applied: old turns keep their
+// shape. (A re-seal at a new height doesn't tear scrollback — maya's gate
+// soft-repaints, see scrollback_oracle_test knob_rebuild — it's a choice.)
+// See pull_field below.
 void restyle_sealed_turns(Model& m) {
     // Publish the theme. That is now ALMOST the whole job.
     //
@@ -172,9 +174,8 @@ void restyle_sealed_turns(Model& m) {
     //
     // The one thing this path deliberately does NOT handle is a change to
     // row HEIGHTS (density, compact turns). Those are forward-only by
-    // design: re-sealing a frozen turn at a new height tears the scrollback
-    // ledger, so they take effect on turns rendered from then on rather
-    // than retroactively. See pull_field's note below.
+    // choice: they take effect on turns rendered from then on rather than
+    // reshaping what's already on screen. See pull_field's note below.
 }
 
 // Re-render what is already on screen, for a pref that changes the CONTENT
@@ -220,8 +221,8 @@ namespace {
 // nothing until the next turn redrew.
 //
 // The structural rows (density, compact turns) are deliberately NOT in this
-// set — see restyle_sealed_turns: they change row HEIGHTS, and re-sealing a
-// frozen turn at a new height tears the scrollback ledger.
+// set — see restyle_sealed_turns: they change row HEIGHTS, and stay
+// forward-only so old turns keep their shape.
 [[nodiscard]] bool pull_field(Model& m, const form::Field& f) {
     const auto idx = [&]() -> int {
         const auto* c = std::get_if<form::field::Choice>(&f.value);
@@ -280,8 +281,7 @@ namespace {
         // language is TRANSCRIPT text already settled -- which is the same
         // forward-only rule density and compact-turns follow, for the same
         // reason (docs/design/i18n.md): a translated row is a different
-        // width and often a different height, so re-sealing it at a new
-        // height tears the scrollback ledger.
+        // width and often a different height, so it applies from then on.
         return false;
     }
     else if (f.id == pn::kApPolarity)   { p.polarity = static_cast<up::Polarity>(idx());  return true; }

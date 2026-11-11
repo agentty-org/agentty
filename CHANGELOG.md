@@ -4,6 +4,20 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Credit the model in commits** (#59). Settings › General, off by
+  default. On, commits the agent makes end with
+  `Co-authored-by: agentty (<model>) <noreply@agentty.org>` (aider's
+  shape), naming the model that wrote that turn. Works in `agentty run`
+  and subagents too.
+- **The ^U reader shows what's known about the thinking** on its header
+  row: model, effort, full text or summary, time and tokens (the billed
+  count when the provider reports one). Turns now record their effort.
+
+### Fixed
+- **The ^U reader follows streaming thinking** while you're scrolled to
+  the bottom.
+
 ## [0.9.52] - 2026-11-11
 
 ### Added

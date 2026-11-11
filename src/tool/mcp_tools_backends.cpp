@@ -2383,6 +2383,12 @@ OneShotResult run_one_shot(const maya::unlocked& cap, const OneShotOptions& opts
     const bool fresh = prior.id.value.empty();
     if (fresh) prior.id = persistence::new_id();
     ctx.conversation = prior.id.value;
+    // #59: the same setting as the TUI. The run loop names each turn's own
+    // model, so this only switches it on.
+    try {
+        if (persistence::load_settings(IoAccess::grant()).commit_attribution)
+            ctx.commit_trailers = {attribution_trailer({})};
+    } catch (...) { /* unreadable settings: commits stay plain */ }
 
     mt::SubagentRequest sreq;
     sreq.prompt     = opts.prompt;
