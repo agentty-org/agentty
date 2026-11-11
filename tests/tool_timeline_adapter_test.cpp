@@ -1242,6 +1242,7 @@ TEST_CASE("thinking reader: says when it's thinking and when it's done") {
     auto& msg = m.d.current.messages.back();
     msg.reasoning_ms = 5'000;
     msg.reasoning_started_ms = 0;
+    m.now = maya::anim_now();   // the host's clock for this update
     agentty::app::detail::refresh_thinking_viewer(m, msg);
     auto done = screen();
     check(done.find("Done thinking") != std::string::npos, "just finished: says Done thinking");
@@ -1249,6 +1250,74 @@ TEST_CASE("thinking reader: says when it's thinking and when it's done") {
     check(done.find("5.0s") != std::string::npos, "with the final time");
     maya::testing::advance_anim_clock_ms(3'000);
     check(screen().find("Reasoned") != std::string::npos, "then settles to Reasoned");
+    maya::testing::unfreeze_anim_clock();
+}
+
+TEST_CASE("thinking reader: only the block you saw finish says Done") {
+    maya::testing::freeze_anim_clock(20'000'000);
+    const auto now_ms = [] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            maya::anim_now().time_since_epoch()).count();
+    };
+    A::Model m;
+    auto add = [&](A::Role r, std::string thinking, std::int64_t started) {
+        A::Message x;
+        x.role = r;
+        x.text = "x";
+        x.thinking = std::move(thinking);
+        x.reasoning_started_ms = started;
+        x.reasoning_ms = started ? 0 : 4'000;
+        x.id = A::MessageId{"m" + std::to_string(m.d.current.messages.size())};
+        m.d.current.messages.push_back(std::move(x));
+    };
+    add(A::Role::User, "", 0);
+    add(A::Role::Assistant, "OLD_BLOCK", 0);                // finished long ago
+    add(A::Role::User, "", 0);
+    add(A::Role::Assistant, "NEW_BLOCK", now_ms() - 1'000);  // thinking now
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "100", 1);
+    auto header = [&] {
+        auto el = U::tool_output_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(96, 30, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        std::string all;
+        for (int y = 0; y < 30; ++y)
+            for (int x = 0; x < 96; ++x) {
+                const char32_t ch = canvas.get(x, y).character;
+                all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+            }
+        return all;
+    };
+    auto seal = [&] {
+        auto& b = m.d.current.messages.back();
+        b.reasoning_ms = 2'000;
+        b.reasoning_started_ms = 0;
+        m.now = maya::anim_now();
+        agentty::app::detail::refresh_thinking_viewer(m, b);
+    };
+    auto step = [&](A::Msg x) { m = std::move(agentty::app::update(std::move(m), std::move(x)).first); };
+
+    // Seen finishing: Done. Then → to the old block within the flash: Reasoned.
+    step(A::OpenThinking{});
+    seal();
+    check(header().find("Done thinking") != std::string::npos, "the block you watched says Done");
+    step(A::ToolOutputStep{+1});
+    check(header().find("Done thinking") == std::string::npos
+          && header().find("Reasoned") != std::string::npos,
+          "an older block doesn't borrow the flash");
+
+    // Ended while the reader was shut: reopening shows Reasoned, no flash.
+    step(A::CloseToolOutput{true});
+    m.d.current.messages.back().reasoning_started_ms = now_ms();
+    step(A::OpenThinking{});
+    step(A::CloseToolOutput{true});
+    seal();   // reader closed: nothing to stamp
+    maya::testing::advance_anim_clock_ms(60'000);
+    step(A::OpenThinking{});
+    check(header().find("Done thinking") == std::string::npos,
+          "a block that ended while the reader was shut doesn't flash");
     maya::testing::unfreeze_anim_clock();
 }
 

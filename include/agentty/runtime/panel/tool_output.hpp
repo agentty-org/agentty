@@ -67,6 +67,9 @@ struct Entry {
     int         turn     = 0;   // the transcript's turn number, for thinking
     MessageId   source;         // the message a thinking entry came from
     bool        streaming = false;   // thinking still arriving
+    // When this block's thinking ended while the reader was open (steady
+    // clock ms), for the brief "Done thinking" flash. 0: not seen ending.
+    std::int64_t done_at_ms = 0;
     // Thinking: what's known about the block, as (label, value), shown above
     // the text (model, effort, time, tokens, blocks...).
     std::vector<std::pair<std::string, std::string>> facts;

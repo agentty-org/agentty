@@ -391,6 +391,13 @@ bool entry_running(const tool_output::Entry& e) { return e.is_live || e.streamin
 // new top entry. Otherwise it stays on the entry you're on, by identity,
 // and entries that land above are counted for the "↑ N new" pill.
 void reconcile(Model& m, tool_output::Open& o, std::vector<tool_output::Entry> fresh) {
+    // A fresh snapshot keeps each entry's "just finished" stamp.
+    for (auto& f : fresh)
+        for (const auto& old : o.entries)
+            if (old.done_at_ms && tool_output::entry_key(old) == tool_output::entry_key(f)) {
+                f.done_at_ms = old.done_at_ms;
+                break;
+            }
     const int sz = static_cast<int>(o.entries.size());
     const bool follow = viewer_following(m, o);
     const std::string was = (o.index >= 0 && o.index < sz)
@@ -448,7 +455,14 @@ void refresh_thinking_viewer(Model& m, const Message& msg) {
     for (auto& e : o->entries)
         if (e.source == msg.id) {
             const int turn = e.turn;
+            const bool was_streaming = e.streaming;
+            const auto done_at = e.done_at_ms;
             e = thinking_entry(m, msg, turn);
+            // Seen ending right now: the reader flashes "Done thinking".
+            e.done_at_ms = was_streaming && !e.streaming
+                ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                      m.now.time_since_epoch()).count()
+                : e.streaming ? 0 : done_at;
             arm_viewer_follow(m, *o);
             return;
         }

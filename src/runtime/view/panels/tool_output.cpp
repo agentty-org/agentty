@@ -300,17 +300,13 @@ Element tool_output_panel(const Model& m) {
         // The spinner wakes itself; the timer's next whole second does too.
         maya::anim::keep_animating_after(1000 - (thought_ms % 1000));
     }
-    // Just finished: say so loudly for a moment, then settle. Tracked per
-    // entry, so opening an old block doesn't flash.
-    static std::string was_live_key;
-    static std::int64_t done_at_ms = 0;
-    const std::string ekey{tool_output::entry_key(e)};
+    // Just finished: say so loudly for a moment, then settle. The reducer
+    // stamps the entry when it sees thinking end with the reader open, so
+    // another block, or one that ended while the reader was shut, never flashes.
     const std::int64_t now_anim = maya::anim_now_ms();
-    if (e.thinking && thinking_live) was_live_key = ekey;
-    else if (e.thinking && was_live_key == ekey) { was_live_key.clear(); done_at_ms = now_anim; }
-    const bool just_done = e.thinking && !thinking_live && done_at_ms != 0
-                           && now_anim - done_at_ms < 2500;
-    if (just_done) maya::anim::keep_animating_after(2500 - (now_anim - done_at_ms));
+    const bool just_done = e.thinking && !thinking_live && e.done_at_ms != 0
+                           && now_anim - e.done_at_ms < 2500;
+    if (just_done) maya::anim::keep_animating_after(2500 - (now_anim - e.done_at_ms));
     auto clock = [](std::int64_t ms) {
         return ms < 60'000 ? std::format("{}s", ms / 1000)
                            : std::format("{}m {:02}s", ms / 60'000, (ms / 1000) % 60);
