@@ -93,8 +93,9 @@ Element tool_output_panel(const Model& m) {
 
     if (!o->viewing) {
         // ── LIST stage ──
-        cfg.title    = " Tool Outputs \xc2\xb7 " + std::to_string(sz) + " ";
-        cfg.accent   = highlight;
+        cfg.title    = (o->thinking_only ? " Thinking \xc2\xb7 " : " Tool Outputs \xc2\xb7 ")
+                     + std::to_string(sz) + " ";
+        cfg.accent   = o->thinking_only ? Color{role_brand} : highlight;
         cfg.selected = sz == 0 ? -1 : cur;
         // LIST chrome is border+padding (4) plus blank+hint footer (2).
         // At truly tiny heights, drop the optional footer and devote every
@@ -154,12 +155,14 @@ Element tool_output_panel(const Model& m) {
             // before the label is even read. Failures go red on the
             // badge too: status outranks category.
             row.badge_style    = e.failed ? fg_bold(danger)
-                                          : fg_bold(cat_hue);
+                               : e.thinking ? fg_bold(role_brand)
+                                            : fg_bold(cat_hue);
             row.leading        = e.detail.empty() ? std::string{"\xe2\x80\xa6"}
                                                   : fit_detail(e.detail, e.trailing);
             row.leading_style  = e.failed ? fg_of(danger) : fg_of(fg);
             row.trailing       = e.trailing;
-            row.trailing_style = e.failed ? fg_of(danger) : fg_dim(muted);
+            row.trailing_style = e.failed ? fg_of(danger)
+                               : e.streaming ? fg_of(role_brand) : fg_dim(muted);
             cfg.items.push_back(std::move(row));
         }
         if (!compact_list) {
@@ -193,9 +196,15 @@ Element tool_output_panel(const Model& m) {
 
     // ── BODY stage ──
     const auto& e = o->entries[static_cast<std::size_t>(cur)];
-    const Color tool_hue = e.failed ? danger : tool_category_color(e.name);
-    cfg.title    = (e.is_live ? std::string(" \xe2\x97\x8f LIVE \xc2\xb7 ") + e.title
-                              : " " + e.title)
+    const Color tool_hue = e.failed ? danger
+                         : e.thinking ? Color{role_brand}
+                                      : tool_category_color(e.name);
+    // Still arriving: the body follows its newest line.
+    const bool following_kind = e.is_live || e.streaming;
+    const std::string title = e.thinking && e.turn > 0
+        ? e.title + " \xc2\xb7 turn " + std::to_string(e.turn) : e.title;
+    cfg.title    = (e.is_live ? std::string(" \xe2\x97\x8f LIVE \xc2\xb7 ") + title
+                              : " " + title)
                  + " \xc2\xb7 " + pos + " ";
     cfg.accent   = tool_hue;
     cfg.selected = -1;   // read-only — no cursor row; manual scroll rules
@@ -211,14 +220,17 @@ Element tool_output_panel(const Model& m) {
     cfg.viewport_h = std::max(1, body_term_rows);
 
     // Header: tool name, what it ran on, and how it went. The status never
-    // clips; the detail gives way first.
+    // clips; the detail gives way first. Thinking has no "ran on": its
+    // header is the turn and the size.
     if (!compact_body) {
+        const std::string detail = e.thinking ? std::string{} : e.detail;
         cfg.header.push_back(
             hstack().width(Dimension::percent(100))(
-                text(" " + e.title, fg_bold(tool_hue)) | clip | shrink(1.0f),
-                text(e.detail.empty() ? "" : "  " + e.detail, fg_of(fg))
+                text(" " + title, fg_bold(tool_hue)) | clip | shrink(1.0f),
+                text(detail.empty() ? "" : "  " + detail, fg_of(fg))
                     | clip | grow(1.0f) | shrink(50.0f),
-                text("  " + e.trailing + " ", e.failed ? fg_of(danger) : fg_dim(muted))
+                text("  " + e.trailing + " ", e.failed ? fg_of(danger)
+                                             : e.streaming ? fg_of(role_brand) : fg_dim(muted))
                     | clip | shrink(1.0f)
             ).build());
         cfg.header.push_back(sep);
@@ -241,6 +253,7 @@ Element tool_output_panel(const Model& m) {
         std::vector<Element> rows;
         std::vector<int>     hit_rows;   // row of each match, in order
         int           out_lines   = 0;   // output lines (pre-wrap)
+        std::size_t   words       = 0;   // thinking: word count
         bool          plain       = false;
     };
     static BodyCache cache;   // UI thread only, like the other pickers' statics
@@ -265,6 +278,7 @@ Element tool_output_panel(const Model& m) {
         cache.rows.clear();
         cache.hit_rows.clear();
         cache.out_lines = 0;
+        cache.words     = 0;
         cache.plain     = false;
 
         const Style hit_st = Style{}.with_fg(Color::slot(ThemeSlot::Background))
@@ -367,6 +381,55 @@ Element tool_output_panel(const Model& m) {
             } else {
                 cache.rows.push_back(std::move(body) | height(1)
                                      | overflow(Overflow::Hidden));
+            }
+        } else if (e.thinking && !shown.empty()) {
+            // Prose, the way the transcript draws it: the brand rail, word
+            // wrap, no line numbers. Headings and lines that are all bold
+            // (the model's "beats") stand out; a bare `**` is dropped.
+            const int text_w = std::max(10, pane_w - 3);
+            const Style prose = fg_of(fg);
+            const Style beat  = fg_bold(role_brand);
+            std::size_t lines = 0;
+            for (std::size_t p = 0; p <= shown.size();) {
+                auto nl = shown.find('\n', p);
+                if (nl == std::string::npos) nl = shown.size();
+                std::string_view ln{shown.data() + p, nl - p};
+                while (!ln.empty() && ln.back() == '\r') ln.remove_suffix(1);
+                ++lines;
+                std::string_view body = ln;
+                bool strong = false;
+                if (body.starts_with("#")) {
+                    while (!body.empty() && body.front() == '#') body.remove_prefix(1);
+                    while (!body.empty() && body.front() == ' ') body.remove_prefix(1);
+                    strong = true;
+                } else if (body.size() > 4 && body.starts_with("**") && body.ends_with("**")
+                           && body.substr(2, body.size() - 4).find("**") == std::string_view::npos) {
+                    body = body.substr(2, body.size() - 4);
+                    strong = true;
+                }
+                if (body.empty()) {
+                    cache.rows.push_back(text("\xe2\x94\x83", fg_dim(role_brand))   // ┃
+                                         | height(1) | overflow(Overflow::Hidden));
+                } else {
+                    for (auto v : wrap_rows(body, text_w)) {
+                        note_hits(v);
+                        cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                            text("\xe2\x94\x83 ", fg_dim(role_brand)),
+                            line_row(v, strong ? beat : prose, false)
+                                | grow(1.0f) | shrink(1.0f)
+                        ).build() | height(1) | overflow(Overflow::Hidden));
+                    }
+                }
+                if (nl == shown.size()) break;
+                p = nl + 1;
+            }
+            cache.plain     = true;
+            cache.out_lines = static_cast<int>(lines);
+            bool in = false;
+            for (const char ch : shown) {
+                const bool sp = ch == ' ' || ch == '\n' || ch == '\t';
+                if (!sp && !in) ++cache.words;
+                in = !sp;
             }
         } else if (!shown.empty()) {
             cache.plain = true;
@@ -473,13 +536,17 @@ Element tool_output_panel(const Model& m) {
         }
         if (cache.plain && cache.out_lines > 0) {
             if (!where.empty()) where += " \xc2\xb7 ";
-            where += std::to_string(cache.out_lines)
-                   + (cache.out_lines == 1 ? " line" : " lines");
+            if (e.thinking) {
+                where += std::to_string(cache.words) + (cache.words == 1 ? " word" : " words");
+            } else {
+                where += std::to_string(cache.out_lines)
+                       + (cache.out_lines == 1 ? " line" : " lines");
+            }
         }
-        if (e.is_live && m.ui.tool_viewer_tail && o->query.empty())
+        if (following_kind && m.ui.tool_viewer_tail && o->query.empty())
             where += where.empty() ? "following" : " \xc2\xb7 following";
         status.push_back(spacer());
-        status.push_back(text(where + "  ", fg_dim(e.is_live ? tool_hue : muted)) | clip);
+        status.push_back(text(where + "  ", fg_dim(following_kind ? tool_hue : muted)) | clip);
         c.footer.push_back(hstack().width(Dimension::percent(100))(std::move(status)).build()
                            | height(1) | overflow(Overflow::Hidden));
         if (!hints) return c;
@@ -498,10 +565,13 @@ Element tool_output_panel(const Model& m) {
                 {"/", "find", 5},
             };
             if (!o->query.empty()) viewer_hints.push_back({"n/N", "next/prev", 5});
-            if (e.is_live) viewer_hints.push_back({"End", "follow", 4});
-            viewer_hints.push_back({"\xe2\x86\x90\xe2\x86\x92", "other output", 4});   // ←→
+            if (following_kind) viewer_hints.push_back({"End", "follow", 4});
+            if (o->entries.size() > 1)
+                viewer_hints.push_back({"\xe2\x86\x90\xe2\x86\x92",   // ←→
+                                        o->thinking_only ? "older/newer" : "other output", 4});
             if (!e.is_live) viewer_hints.push_back({"y", "copy", 4});
-            viewer_hints.push_back({"Esc", o->query.empty() ? "back" : "clear", 3});
+            viewer_hints.push_back({"Esc", !o->query.empty() ? "clear"
+                                          : o->thinking_only ? "all blocks" : "back", 3});
         }
         c.footer.push_back(key_hints(std::move(viewer_hints)));
         return c;

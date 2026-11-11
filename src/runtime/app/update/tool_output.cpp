@@ -36,6 +36,8 @@ std::string as_cut_marker(std::string_view t) {
 } // namespace
 
 std::string display_text(const Entry& e) {
+    // Thinking is the model's own prose: nothing to clean.
+    if (e.thinking) return e.output;
     // Tools echo their own description as line 1; the header already says it.
     std::string_view s{e.output};
     if (e.call.args.is_object())
@@ -118,10 +120,24 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             m.ui.tool_viewer_tail = true;
             return Cmd::none();
         },
-        [&](CloseToolOutput) -> Cmd {
+        [&](OpenThinking) -> Cmd {
+            auto entries = collect_thinking_entries(m);
+            if (entries.empty())
+                return set_status_toast(m, "no thinking in this thread yet");
+            // Straight onto the newest block: that's almost always the one
+            // you want. Esc goes to the list of all of them.
+            tool_output::Open open{std::move(entries), 0, true};
+            open.thinking_only = true;
+            m.ui.panel.descend(pn::ToolOutput{std::move(open)});
+            m.ui.tool_viewer_scroll.y = 0;
+            m.ui.tool_viewer_tail = true;
+            return Cmd::none();
+        },
+        [&](CloseToolOutput& e) -> Cmd {
             // Esc semantics: an active search is cleared first; then body →
-            // back to the list; list → unwind one level.
-            if (auto* o = m.ui.panel.get<pn::ToolOutput>(); o && o->viewing) {
+            // back to the list; list → unwind one level. The open chord
+            // pressed again (`all`) skips the steps and closes.
+            if (auto* o = m.ui.panel.get<pn::ToolOutput>(); o && o->viewing && !e.all) {
                 if (!o->query.empty() || o->typing) {
                     o->query.clear();
                     o->typing = false;

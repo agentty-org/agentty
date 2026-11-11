@@ -1903,8 +1903,10 @@ std::optional<maya::Element> reasoning_slot(const Message& msg, const Model& m) 
     //
     // ROWS, so the block grows to 8 and then holds — it cannot shrink.
     if (agentty::ui_prefs::current().thinking
-            == agentty::ui_prefs::Thinking::Collapsed)
+            == agentty::ui_prefs::Thinking::Collapsed) {
         rcfg.live_tail_rows = 8;
+        rcfg.more_hint = "^U to read";
+    }
     maya::ReasoningStream rs{rcfg};
     rs.set_live(thinking_now);
     rs.set_char_hint(msg.reasoning_display_text().size());

@@ -13,7 +13,9 @@
 
 #include "agentty/domain/conversation.hpp"
 #include "agentty/runtime/model.hpp"
+#include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/app/update/internal.hpp"   // refresh_thinking_viewer
 #include "agentty/runtime/panel/tool_output.hpp"
 #include "agentty/runtime/view/panels.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_body_preview.hpp"
@@ -902,4 +904,98 @@ TEST_CASE("tool output viewer: long lines wrap inside the pane") {
         check(rows >= 500 / cols + 200 / cols + 2,
               "long lines wrap at " + std::to_string(cols) + " cols");
     }
+}
+
+TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
+    A::Model m;
+    auto msg = [&](A::Role r, std::string text, std::string thinking = {}) {
+        A::Message x;
+        x.role = r;
+        x.text = std::move(text);
+        x.thinking = std::move(thinking);
+        x.id = A::MessageId{"m" + std::to_string(m.d.current.messages.size())};
+        m.d.current.messages.push_back(std::move(x));
+    };
+    msg(A::Role::User, "first");
+    msg(A::Role::Assistant, "one", "**Old plan**\n\nOLD_THOUGHT about the bug");
+    msg(A::Role::User, "second");
+    msg(A::Role::Assistant, "two");   // no thinking
+    msg(A::Role::User, "third");
+    msg(A::Role::Assistant, "three", "NEW_THOUGHT " + std::string(400, 'w'));
+
+    auto key = [&](char32_t c, bool ctrl) {
+        maya::KeyEvent ev{maya::CharKey{c}, {}, {}};
+        ev.mods.ctrl = ctrl;
+        if (auto x = A::app::on_key(m, ev))
+            m = std::move(agentty::app::update(std::move(m), std::move(*x)).first);
+    };
+    auto sk = [&](maya::SpecialKey k) {
+        maya::KeyEvent ev{k, {}, {}};
+        if (auto x = A::app::on_key(m, ev))
+            m = std::move(agentty::app::update(std::move(m), std::move(*x)).first);
+    };
+    auto o = [&] { return m.ui.panel.get<A::ui::panel::ToolOutput>(); };
+
+    key(U'u', true);
+    check(o() && o()->thinking_only, "^U opens the thinking reader");
+    check(o() && o()->viewing && o()->index == 0, "straight onto the newest block");
+    check(o() && o()->entries.size() == 2, "one entry per message with thinking");
+    check(o() && o()->entries[0].output.starts_with("NEW_THOUGHT"), "newest first");
+    check(o() && o()->entries[0].turn == 3 && o()->entries[1].turn == 1,
+          "entries carry the transcript's turn numbers");
+    check(o() && o()->entries[1].detail.find("Old plan") != std::string::npos,
+          "the row says what the block is about, without the **");
+
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "80", 1);
+    sk(maya::SpecialKey::Right);
+    check(o() && o()->index == 1, "\xe2\x86\x92 goes to the older block");
+    auto el = U::tool_output_panel(m);
+    maya::StylePool pool;
+    maya::Canvas canvas(76, 30, &pool);
+    canvas.clear();
+    maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+    std::string all;
+    for (int y = 0; y < 30; ++y) {
+        for (int x = 0; x < 76; ++x) {
+            const char32_t ch = canvas.get(x, y).character;
+            all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+        }
+        all += '\n';
+    }
+    check(all.find("OLD_THOUGHT") != std::string::npos, "the older block's text is shown");
+    check(all.find("turn 1") != std::string::npos, "the title names the turn");
+    check(all.find("**") == std::string::npos, "a bold-only line drops its **");
+
+    key(U'u', true);
+    check(!o(), "^U again closes it from the body");
+
+    // Typing: ^U stays readline's kill-to-start.
+    m.ui.composer.text = "draft";
+    m.ui.composer.cursor = 5;
+    key(U'u', true);
+    check(!o(), "^U with a draft doesn't open the reader");
+}
+
+TEST_CASE("thinking reader: a streaming block updates in place") {
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.thinking = "first part";
+    a.reasoning_started_ms = 1;
+    a.id = A::MessageId{"a"};
+    m.d.current.messages = {u, a};
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    auto* o = m.ui.panel.get<A::ui::panel::ToolOutput>();
+    check(o && o->entries.size() == 1 && o->entries[0].streaming, "open block is marked streaming");
+    m.d.current.messages.back().thinking += " and more";
+    m.d.current.messages.back().reasoning_started_ms = 0;
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    o = m.ui.panel.get<A::ui::panel::ToolOutput>();
+    check(o && o->entries[0].output == "first part and more", "new text reaches the reader");
+    check(o && !o->entries[0].streaming, "a sealed block drops the streaming tag");
 }

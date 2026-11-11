@@ -738,7 +738,11 @@ struct CodeBlockResultDiscard {};
 // (or the body scroll in the viewing stage); Select enters the body
 // stage; Close = Esc (body → back to list, list → closed); Copy = y.
 struct OpenToolOutput {};
-struct CloseToolOutput {};
+// ^U on an empty composer: the same viewer, listing only thinking blocks
+// and opened straight onto the newest one.
+struct OpenThinking {};
+// `all`: the open chord pressed again closes it outright, from either stage.
+struct CloseToolOutput { bool all = false; };
 struct ToolOutputMove { int delta; int pages = 0; };   // pages: PgUp/PgDn
 struct ToolOutputSelect {};
 struct ToolOutputCopy {};
@@ -1460,7 +1464,7 @@ using ToolMsg = std::variant<
 // panel's reducer lives in its own file (update/tool_output.cpp), leaving
 // tool.cpp to the execution plumbing the name promises.
 using ToolOutputMsg = std::variant<
-    OpenToolOutput, CloseToolOutput,
+    OpenToolOutput, OpenThinking, CloseToolOutput,
     ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep,
     ToolOutputFind>;
 

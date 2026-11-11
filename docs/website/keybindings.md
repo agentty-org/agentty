@@ -28,7 +28,7 @@ Everything you can do without leaving the home row.
 | [[Ctrl+G]] | Run a code block from the newest reply on your real terminal |
 | [[Ctrl+R]] | [Review pending diffs](clip:diff-review) |
 | [[Ctrl+O]] | Browse the full text of a frozen retrieved-context card |
-| [[Ctrl+U]] | Expand / collapse the newest retrieved-context card (empty composer) |
+| [[Ctrl+U]] | Read thinking blocks in full, newest first; ←/→ for older ones (empty composer). Toggles the newest retrieved-context card instead while one is live |
 | [[Ctrl+L]] | Redraw the screen |
 | [[Ctrl+C]] | Quit (the only quit key) |
 

@@ -61,6 +61,12 @@ struct Entry {
     // + args + terminal output) keeps the overlay immune to transcript
     // mutation and the copy is bounded by the 256 KiB output clamp.
     ToolUse     call;
+    // A thinking block, not a tool output. `output` is the reasoning text,
+    // shown as prose (no line numbers, light markdown) in the brand hue.
+    bool        thinking = false;
+    int         turn     = 0;   // the transcript's turn number, for thinking
+    MessageId   source;         // the message a thinking entry came from
+    bool        streaming = false;   // thinking still arriving
 };
 
 struct Closed {};
@@ -75,6 +81,8 @@ struct Open {
     bool               typing  = false;   // the / prompt is open
     int                hit     = 0;       // current match (wraps; the view resolves it)
     int                hit_seq = 0;       // bumped on each jump; the view scrolls to it
+    // Opened with ^U: only thinking blocks are listed, so ←/→ walks them.
+    bool               thinking_only = false;
 };
 
 // What the viewer shows and copies for an entry: the output without the

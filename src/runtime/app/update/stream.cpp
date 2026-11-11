@@ -113,6 +113,7 @@ static void seal_thinking(Model& m, std::chrono::steady_clock::time_point now) {
         now.time_since_epoch()).count();
     msg.reasoning_ms += std::max<std::int64_t>(0, now_ms - msg.reasoning_started_ms);
     msg.reasoning_started_ms = 0;
+    refresh_thinking_viewer(m, msg);   // drop its "thinking…" tag
 }
 
 // running_over_ssh() and reveal_end_glide_enabled() lived here as getenv
@@ -1764,6 +1765,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     // Legacy mirror (persistence back-compat + old gates).
                     msg.thinking_signature = blk.signature;
                 }
+                if (!e.text.empty()) refresh_thinking_viewer(m, msg);
             }
             return Cmd::none();
         },

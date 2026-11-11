@@ -457,7 +457,10 @@ inline auto visual_parts(const Entry& e) {
     return std::make_tuple(visual::ref(e.name), visual::ref(e.title),
                            visual::ref(e.detail), visual::ref(e.trailing),
                            e.output.size(), e.failed, e.is_live,
-                           visual::exempt);   // call: immutable snapshot
+                           visual::exempt,   // call: immutable snapshot
+                           e.thinking, e.turn,
+                           visual::exempt,   // source: identity, not drawn
+                           e.streaming);
 }
 static_assert(visual::parts_cover_all<Entry>);
 

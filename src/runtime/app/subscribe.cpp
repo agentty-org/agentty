@@ -827,7 +827,12 @@ std::optional<Msg> on_tool_viewer(const Model& m, const KeyEvent& ev) {
     s.select    = [] { return Msg{ToolOutputSelect{}}; };
     s.move      = [](int d) { return Msg{ToolOutputMove{d}}; };
     s.page_step = 10;
-    s.toggle_close_chord = U'o';
+    // The chord that opened it closes it: ^O for tool outputs, ^U for the
+    // thinking reader. Matched here, before the shared grammar, so it
+    // closes from either stage rather than stepping back to the list.
+    const char32_t chord = (o && o->thinking_only) ? U'u' : U'o';
+    if (const auto v = nav::char_view(ev); v && v->ctrl && (v->c == chord || v->c == chord - 32))
+        return Msg{CloseToolOutput{true}};
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
             if (*sk == SpecialKey::Left)     return Msg{ToolOutputStep{-1}};
@@ -1460,19 +1465,20 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
                     default: break;
                 }
             }
-            // Ctrl+U on an EMPTY composer — expand / collapse the newest
-            // retrieved-context card (full passage text ↔ one-line snippet).
-            // Guarded on empty composer so it never steals Ctrl+U's
-            // readline "kill-to-start-of-line" meaning while typing; with
-            // no live card it simply falls through. Handled here (not
-            // on_global) because it needs the pre-computed target id.
-            if (composer_state.text_empty && live_retrieved_id
-                && ev.mods.ctrl && !ev.mods.alt) {
+            // Ctrl+U on an EMPTY composer. A live retrieved-context card
+            // takes it first (full passages ↔ snippet); otherwise it opens
+            // the thinking reader on the newest thinking block. Guarded on
+            // empty composer so it never steals readline kill-to-start.
+            // Handled here (not on_global) because it needs the target id.
+            if (composer_state.text_empty && ev.mods.ctrl && !ev.mods.alt) {
                 if (auto* ck = std::get_if<CharKey>(&ev.key)) {
                     char32_t c = ck->codepoint;
                     if (c >= 0x01 && c <= 0x1A) c = U'a' + (c - 1);
-                    if (c == U'u')
-                        return ToggleRetrievedExpanded{*live_retrieved_id};
+                    if (c == U'u') {
+                        if (live_retrieved_id)
+                            return ToggleRetrievedExpanded{*live_retrieved_id};
+                        return OpenThinking{};
+                    }
                 }
             }
             if (auto msg = on_global(ev)) return msg;

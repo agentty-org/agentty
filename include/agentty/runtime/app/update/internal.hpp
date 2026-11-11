@@ -413,6 +413,11 @@ void resync_live_tool_viewer(Model& m);
 // the panel's Open arm (update/tool_output.cpp) and by resync above.
 // Defined in tool.cpp beside the execution state it reads.
 [[nodiscard]] std::vector<tool_output::Entry> collect_viewer_entries(const Model& m);
+// The thread's thinking blocks as viewer entries, newest first (^U).
+[[nodiscard]] std::vector<tool_output::Entry> collect_thinking_entries(const Model& m);
+// Keep an open ^U reader in step with a thinking block that is still
+// streaming. No-op unless the reader is open.
+void refresh_thinking_viewer(Model& m, const Message& msg);
 
 // ── update/tool.cpp helpers ──────────────────────────────────────────────
 void apply_tool_output(Model& m, const ToolCallId& id,

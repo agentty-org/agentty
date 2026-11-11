@@ -31,6 +31,7 @@ enum class Command : std::uint8_t {
     OpenPlan,
     RunCodeBlock,
     InspectToolOutputs,
+    ReadThinking,
     CompactContext,
     RewindCheckpoint,
     ForkThread,
@@ -90,6 +91,7 @@ inline constexpr std::array kCommands = std::array{
     CommandDef{Command::OpenThreads,   "Open threads",       "Browse saved conversations", "Ctrl+J", Category::Navigate},
     CommandDef{Command::OpenPlan,      "Open plan",          "View task progress", "Ctrl+T", Category::Navigate},
     CommandDef{Command::InspectToolOutputs, "Inspect tool outputs", "Read tool outputs — the running tool is the live top row", "Ctrl+O", Category::Navigate},
+    CommandDef{Command::ReadThinking,  "Read thinking",      "Read any thinking block in full, newest first", "Ctrl+U", Category::Navigate},
     CommandDef{Command::RunCodeBlock,  "Run code block",     "Run a fenced block from the last reply", "Ctrl+G", Category::Navigate},
     // ── Config ──────────────────────────────────────────────────────────
     CommandDef{Command::CycleProfile,  "Cycle profile",      "Write → Ask → Minimal", "Shift+Tab", Category::Config},

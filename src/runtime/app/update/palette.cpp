@@ -104,6 +104,7 @@ template <class T, class V>
         add(Command::OpenThreads,      emit<OpenThreadList>());
         add(Command::OpenPlan,         emit<OpenTodoModal>());
         add(Command::InspectToolOutputs, emit<OpenToolOutput>());
+        add(Command::ReadThinking,     emit<OpenThinking>());
         add(Command::RunCodeBlock,     emit<OpenCodeBlocks>());
         // ── Config ──
         add(Command::CycleProfile,     emit<CycleProfile>());

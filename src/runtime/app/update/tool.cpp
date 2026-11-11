@@ -21,6 +21,7 @@
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 #include "agentty/runtime/view/host_escape.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
+#include "agentty/runtime/view/thread/turn/turn.hpp"   // turn_run_end
 #include "agentty/store/store.hpp"
 #include "agentty/tool/spec.hpp"
 #include "agentty/tool/util/utf8.hpp"
@@ -265,11 +266,122 @@ void arm_reconcile_cooldown(Model& m) {
     return out;
 }
 
+namespace {
+
+// "820", "1.2k", "18k" — the same ~4 chars/token estimate the block shows.
+std::string token_estimate(std::size_t chars) {
+    const std::size_t t = (chars + 3) / 4;
+    if (t < 1000) return std::to_string(t);
+    if (t < 10000) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%.1fk", static_cast<double>(t) / 1000.0);
+        return buf;
+    }
+    return std::to_string(t / 1000) + "k";
+}
+
+// First non-blank line, without markdown emphasis: what the block is about.
+std::string thinking_gist(std::string_view s) {
+    while (!s.empty()) {
+        auto nl = s.find('\n');
+        std::string_view ln = s.substr(0, nl);
+        while (!ln.empty() && (ln.front() == ' ' || ln.front() == '#' || ln.front() == '*'
+                               || ln.front() == '-' || ln.front() == '>'))
+            ln.remove_prefix(1);
+        while (!ln.empty() && (ln.back() == ' ' || ln.back() == '*' || ln.back() == '\r'))
+            ln.remove_suffix(1);
+        if (!ln.empty()) return std::string{ln.substr(0, 240)};
+        if (nl == std::string_view::npos) break;
+        s.remove_prefix(nl + 1);
+    }
+    return {};
+}
+
+tool_output::Entry thinking_entry(const Model& m, const Message& msg, int turn) {
+    tool_output::Entry e;
+    e.thinking  = true;
+    e.turn      = turn;
+    e.source    = msg.id;
+    e.streaming = msg.thinking_open();
+    e.name      = "thinking";
+    e.title     = "Thinking";
+    e.output    = std::string{msg.reasoning_display_text()};
+    e.detail    = (turn > 0 ? "turn " + std::to_string(turn) + "  " : std::string{})
+                + thinking_gist(e.output);
+    e.trailing  = "~" + token_estimate(e.output.size()) + " tok";
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        m.now.time_since_epoch()).count();
+    if (const auto ms = msg.thinking_elapsed_ms(now_ms); ms >= 100) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, " \xc2\xb7 %.1fs", static_cast<double>(ms) / 1000.0);
+        e.trailing += buf;
+    }
+    if (e.streaming) e.trailing += " \xc2\xb7 thinking\xe2\x80\xa6";
+    return e;
+}
+
+} // namespace
+
+[[nodiscard]] std::vector<tool_output::Entry> collect_thinking_entries(const Model& m) {
+    const auto& msgs = m.d.current.messages;
+    // Turn number per message, counted the way the transcript labels turns:
+    // one per assistant run.
+    std::vector<int> turn_of(msgs.size(), 0);
+    int turn = 0;
+    for (std::size_t k = 0; k < msgs.size();) {
+        const std::size_t end = ui::turn_run_end(msgs, k);
+        if (msgs[k].role == Role::Assistant) ++turn;
+        for (std::size_t j = k; j < end && j < msgs.size(); ++j) turn_of[j] = turn;
+        k = std::max(end, k + 1);
+    }
+    std::vector<tool_output::Entry> out;
+    std::size_t budget = tool_output::kSnapshotBudget;
+    for (std::size_t i = msgs.size(); i-- > 0;) {
+        const auto& msg = msgs[i];
+        if (msg.role != Role::Assistant || !msg.has_reasoning()) continue;
+        if (out.size() >= tool_output::kMaxEntries) break;
+        const auto size = msg.reasoning_display_text().size();
+        if (size > budget) continue;
+        budget -= size;
+        out.push_back(thinking_entry(m, msg, turn_of[i]));
+    }
+    return out;
+}
+
+void refresh_thinking_viewer(Model& m, const Message& msg) {
+    auto* o = m.ui.panel.get<pn::ToolOutput>();
+    if (!o || !o->thinking_only || !msg.has_reasoning()) return;
+    for (auto& e : o->entries)
+        if (e.source == msg.id) {
+            const int turn = e.turn;
+            e = thinking_entry(m, msg, turn);
+            return;
+        }
+    // A block the reader hasn't seen: list it on top. Keep the cursor on
+    // the entry it was on, unless the reader was on the newest one, in
+    // which case follow the new block.
+    auto fresh = collect_thinking_entries(m);
+    if (fresh.empty()) return;
+    const bool on_newest = o->index == 0;
+    const MessageId was = (o->index >= 0 && o->index < static_cast<int>(o->entries.size()))
+        ? o->entries[static_cast<std::size_t>(o->index)].source : MessageId{};
+    o->entries = std::move(fresh);
+    o->index = 0;
+    if (!on_newest)
+        for (std::size_t k = 0; k < o->entries.size(); ++k)
+            if (o->entries[k].source == was) { o->index = static_cast<int>(k); break; }
+    if (on_newest && o->viewing) {
+        m.ui.tool_viewer_scroll.y = 0;
+        m.ui.tool_viewer_tail = true;
+    }
+}
+
 // Keep the Ctrl+O snapshot synchronized from both stream.cpp (tool-input
 // deltas/snapshots) and this TU (execution progress/results).
 void resync_live_tool_viewer(Model& m) {
     auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return;
+    if (o->thinking_only) return;   // the ^U reader follows thinking, not tools
     // Anchor: remember which entry the user is on by identity, not index —
     // prepending/removing the live row shifts indices under them.
     const bool was_live_selected =
