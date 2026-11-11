@@ -406,13 +406,16 @@ Element diff_review(const Model& m) {
     // view when the files don't fit.
     {
         TabStrip tabs;
-        // editor-style file tabs: the open file is a filled chip
-        tabs.marker(TabMark::Editor);
+        // Files as pills: the open one is a soft rounded chip holding its
+        // status dot, name and diffstat; the rest sit plain beside it. On a
+        // 16-colour terminal the selection is plain blue, too loud under green
+        // and red, so it's the bold name between the chip's ends instead.
+        tabs.marker(TabMark::Pill);
         tabs.indent = 0;
         tabs.theme.active    = fg;
         tabs.theme.idle      = muted;
         tabs.theme.accent    = accent;
-        tabs.theme.active_bg = accent;
+        if (diff_bands_on()) tabs.theme.active_bg = Color::slot(ThemeSlot::Selection);
         for (const auto& f : files) {
             bool anyrej = false, anypend = false;
             for (const auto& hk : f.hunks) {
@@ -426,7 +429,8 @@ Element diff_review(const Model& m) {
             if (auto sl = name.rfind('/'); sl != std::string::npos) name = name.substr(sl + 1);
             tabs.tab(std::move(name))
                 .dot(status_color(roll), std::string(status_dot(roll)))
-                .detail(std::format("+{} \xe2\x88\x92{}", f.added, f.removed), muted);
+                .part(f.added ? std::format("+{}", f.added) : std::string{}, success)
+                .part(f.removed ? std::format("\xe2\x88\x92{}", f.removed) : std::string{}, danger);
         }
         tabs.active(fidx);
         rows.push_back(tabs.build());
