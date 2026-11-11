@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.53] - 2026-11-11
+
 ### Added
 - **Credit the model in commits** (#59). Settings › General, off by
   default. On, commits the agent makes end with
