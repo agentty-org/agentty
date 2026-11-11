@@ -340,7 +340,10 @@ Element tool_output_panel(const Model& m) {
     const int pane_w   = std::max(20, panel_terminal_cols() - 6 - (o->query.empty() ? 0 : 1));
     const void* entries_key = static_cast<const void*>(o->entries.data());
     const void* bytes_key   = static_cast<const void*>(e.output.data());
-    const auto call_key     = e.call.compute_render_key();
+    auto call_key           = e.call.compute_render_key();
+    // Thinking facts change on their own (time, tokens, status).
+    for (const auto& [k, v] : e.facts)
+        call_key = call_key * 1099511628211ull ^ std::hash<std::string>{}(k + '\x1f' + v);
     if (cache.entries_key != entries_key || cache.index != cur
         || cache.bytes_key != bytes_key || cache.bytes_len != e.output.size()
         || cache.call_key != call_key || cache.width != pane_w
@@ -484,6 +487,22 @@ Element tool_output_panel(const Model& m) {
                                      | overflow(Overflow::Hidden));
             }
         } else if (e.thinking && !shown.empty()) {
+            // The facts first: a label column and its values, then a rule.
+            if (!e.facts.empty()) {
+                std::size_t lw = 0;
+                for (const auto& [k, v] : e.facts) lw = std::max(lw, k.size());
+                for (const auto& [k, v] : e.facts) {
+                    std::string label = " " + k;
+                    label.resize(lw + 3, ' ');
+                    const bool live = k == "status";
+                    cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                        text(label, fg_dim(muted)),
+                        text(v, live ? fg_bold(role_brand) : fg_of(fg)) | clip | shrink(1.0f)
+                    ).build() | height(1) | overflow(Overflow::Hidden));
+                }
+                cache.rows.push_back(text("") | height(1));
+            }
+            cache.reveal_row0 = cache.rows.size();
             // Prose, the way the transcript draws it: the brand rail, word
             // wrap, no line numbers. Headings and lines that are all bold
             // (the model's "beats") stand out; a bare `**` is dropped.
@@ -665,8 +684,8 @@ Element tool_output_panel(const Model& m) {
         sc.max_y = std::max(0, total_rows - vh);
         sc.viewport_bounds.h = vh;   // page size for PgUp / PgDn
         sc.y = jump_to_hit ? cur_row - vh / 3 : y_before;
-        // A live entry follows its newest output unless the user scrolled up.
-        if (e.is_live && m.ui.tool_viewer_tail && o->query.empty()) sc.y = sc.max_y;
+        // A running entry follows its newest output unless the user scrolled up.
+        if ((e.is_live || e.streaming) && m.ui.tool_viewer_tail && o->query.empty()) sc.y = sc.max_y;
         sc.y = std::clamp(sc.y, 0, sc.max_y);
         const int first = sc.y;
         const int last  = std::min(total_rows, first + vh);

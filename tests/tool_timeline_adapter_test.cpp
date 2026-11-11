@@ -1101,6 +1101,68 @@ TEST_CASE("thinking reader: new text types in like the transcript") {
     maya::testing::unfreeze_anim_clock();
 }
 
+TEST_CASE("thinking reader: follows the bottom, shows what's known") {
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    for (int i = 0; i < 60; ++i) a.thinking += "line " + std::to_string(i) + "\n";
+    a.reasoning_started_ms = 1;
+    a.served_model = A::ModelId{"claude-opus-4-5"};
+    a.served_effort = "high";
+    a.id = A::MessageId{"a"};
+    m.d.current.messages = {u, a};
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "80", 1);
+    auto screen = [&] {
+        auto el = U::tool_output_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(76, 30, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        std::string all;
+        for (int y = 0; y < 30; ++y) {
+            for (int x = 0; x < 76; ++x) {
+                const char32_t ch = canvas.get(x, y).character;
+                all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+            }
+            all += '\n';
+        }
+        return all;
+    };
+    auto& sc = m.ui.tool_viewer_scroll;
+    (void)screen();
+    check(sc.y == sc.max_y && sc.max_y > 0, "opens at the bottom of a streaming block");
+
+    // More arrives while you're at the bottom: you stay at the bottom.
+    m.d.current.messages.back().thinking += "line NEW_TAIL\nline 61\nline 62\n";
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    const int before_max = sc.max_y;
+    (void)screen();
+    check(sc.max_y > before_max && sc.y == sc.max_y, "new text keeps it scrolled to the bottom");
+
+    // Scrolled up to read: new text doesn't pull you down.
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::ToolOutputMove{-5}}).first);
+    const int read_at = sc.y;
+    m.d.current.messages.back().thinking += "line 63\n";
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    (void)screen();
+    check(sc.y == read_at, "scrolled up: it stays where you are");
+
+    // The facts sit above the text.
+    sc.y = 0;
+    m.ui.tool_viewer_tail = false;
+    const auto top = screen();
+    if (std::getenv("THINKING_DUMP")) std::fputs(top.c_str(), stderr);
+    for (const char* want : {"model", "Opus", "effort", "high", "tokens", "kind", "full text",
+                             "thinking now"})
+        check(top.find(want) != std::string::npos, std::string{"shows "} + want);
+}
+
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
     A::Model m;
     auto msg = [&](A::Role r, std::string text, std::string thinking = {}) {

@@ -460,7 +460,7 @@ inline auto visual_parts(const Entry& e) {
                            visual::exempt,   // call: immutable snapshot
                            e.thinking, e.turn,
                            visual::exempt,   // source: identity, not drawn
-                           e.streaming);
+                           e.streaming, e.facts.size());
 }
 static_assert(visual::parts_cover_all<Entry>);
 

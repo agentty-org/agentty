@@ -1065,6 +1065,8 @@ Cmd launch_stream(Model& m) {
         m.s.smart_turn_model = compacting ? ModelId{} : m.d.model_id;
         m.s.smart_turn_role.reset();
     }
+    m.s.smart_turn_effort = compacting ? std::string{}
+                                       : std::string{effort_label(turn_profile.effort)};
 
     // Smart-channel telemetry. The `smart` log channel existed but NOTHING
     // wrote to it, so the only routing evidence in a debug file was whatever

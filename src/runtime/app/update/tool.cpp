@@ -22,6 +22,7 @@
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 #include "agentty/runtime/view/host_escape.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
+#include "agentty/runtime/view/helpers.hpp"   // pretty_model_label
 #include "agentty/runtime/view/thread/turn/turn.hpp"   // turn_run_end
 #include "agentty/store/store.hpp"
 #include "agentty/tool/spec.hpp"
@@ -319,6 +320,38 @@ tool_output::Entry thinking_entry(const Model& m, const Message& msg, int turn) 
         e.trailing += buf;
     }
     if (e.streaming) e.trailing += " \xc2\xb7 thinking\xe2\x80\xa6";
+
+    // What's known about the block, for the reader's header.
+    auto& f = e.facts;
+    const std::string& model = msg.served_model.value;
+    if (!model.empty()) f.emplace_back("model", ui::pretty_model_label(model));
+    if (!msg.served_effort.empty()) f.emplace_back("effort", msg.served_effort);
+    if (const auto ms = msg.thinking_elapsed_ms(now_ms); ms >= 100) {
+        char buf[32];
+        if (e.streaming)   // whole seconds: it only refreshes on new text
+            std::snprintf(buf, sizeof buf, "%llds so far", static_cast<long long>(ms / 1000));
+        else
+            std::snprintf(buf, sizeof buf, "%.1fs", static_cast<double>(ms) / 1000.0);
+        f.emplace_back("thought for", buf);
+    }
+    // Tokens: the provider's count when it reported one (Claude bills the
+    // full thinking even when it only shows a summary), else our estimate.
+    if (msg.telemetry && msg.telemetry->reasoning_tokens > 0)
+        f.emplace_back("tokens", std::to_string(msg.telemetry->reasoning_tokens)
+                                 + " billed \xc2\xb7 ~" + token_estimate(e.output.size()) + " shown");
+    else
+        f.emplace_back("tokens", "~" + token_estimate(e.output.size()));
+    // A summary is the provider's digest of the thinking, not the thinking.
+    f.emplace_back("kind", msg.thinking.empty() ? "summary" : "full text");
+    std::size_t shown = 0, redacted = 0;
+    for (const auto& b : msg.thinking_blocks)
+        (b.redacted_data.empty() ? shown : redacted) += 1;
+    if (shown + redacted > 1 || redacted > 0) {
+        std::string v = std::to_string(shown + redacted);
+        if (redacted > 0) v += " (" + std::to_string(redacted) + " redacted by the provider)";
+        f.emplace_back("blocks", std::move(v));
+    }
+    if (e.streaming) f.emplace_back("status", "thinking now");
     return e;
 }
 

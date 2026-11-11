@@ -1286,6 +1286,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 auto& last = m.d.current.messages.back();
                 last.served_model = m.s.smart_turn_model;
                 last.served_role  = m.s.smart_turn_role;
+                last.served_effort = m.s.smart_turn_effort;
                 m.ui.view_cache.drop(m.d.current.id, last.id);
             }
             return Cmd::none();
@@ -1903,9 +1904,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     }
                     if (e.output_tokens)
                         t.output_tokens = static_cast<std::uint32_t>(e.output_tokens);
-                    if (e.reasoning_output_tokens)
+                    if (e.reasoning_output_tokens) {
                         t.reasoning_tokens =
                             static_cast<std::uint32_t>(e.reasoning_output_tokens);
+                        refresh_thinking_viewer(m, last);   // its token count
+                    }
                 }
             }
             return Cmd::none();

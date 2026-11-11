@@ -474,6 +474,8 @@ json message_to_json(const Message& m) {
     // Only written when set, so non-Smart-Mode threads gain no bytes.
     if (!m.served_model.empty())
         j["served_model"] = m.served_model.value;
+    if (!m.served_effort.empty())
+        j["served_effort"] = m.served_effort;
     if (m.served_role)
         j["served_role"] = std::string{smart::role_wire_name(*m.served_role)};
     // Per-turn telemetry. One compact object, only when measured — a user
@@ -743,6 +745,7 @@ std::expected<Message, DeserializeError> message_from_json(const json& j) {
     // threads written before the field existed — the view falls back to the
     // live selection, which is what those turns used to render anyway.
     m.served_model = ModelId{j.value("served_model", "")};
+    m.served_effort = j.value("served_effort", "");
     // An unrecognised role reads as "no role" rather than failing the
     // load: a thread written by a build that knows a role this one
     // doesn't must still open, just without the accent tag.
@@ -2102,6 +2105,7 @@ static std::uint64_t message_fingerprint(const Message& m) {
     f.str(m.text);
     f.num(m.timestamp.time_since_epoch().count());
     f.str(m.served_model.value);
+    f.str(m.served_effort);
     f.num(m.served_role.has_value());
     if (m.served_role) f.num(static_cast<int>(*m.served_role));
     f.str(m.thinking);

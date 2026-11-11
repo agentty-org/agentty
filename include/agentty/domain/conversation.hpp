@@ -535,6 +535,9 @@ struct Message {
     // relabelled every turn already in the transcript. A turn's provenance is
     // a property OF THE TURN, so it lives on the turn.
     ModelId served_model;
+    // The effort it was asked to think at ("off", "low"..."max"). Empty
+    // on turns saved before this was recorded.
+    std::string served_effort;
     // Which role slot produced it. Drives the accent colour on the turn
     // header so delegation is visible at a glance. Absent when Smart Mode
     // was off — which is a different statement from "the empty role", and

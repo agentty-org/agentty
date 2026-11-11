@@ -649,6 +649,8 @@ struct StreamState {
     // to the live selection while idle.
     ModelId                         smart_turn_model;
     std::optional<smart::ModelRole> smart_turn_role;
+    // The effort label ("off", "high"...) this turn is sent with.
+    std::string                     smart_turn_effort;
     // Which summary shape the in-flight compaction is producing. Set at
     // CompactContext / fork kickoff, read by the wire builder to choose the
     // summarisation prompt. Defaults to Recoverable (the original behaviour).
