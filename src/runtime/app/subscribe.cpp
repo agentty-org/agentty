@@ -856,7 +856,8 @@ std::optional<Msg> on_tool_viewer(const Model& m, const KeyEvent& ev) {
             default:   return std::nullopt;
         }
     };
-    s.letter_verbs = { {U'y', [] { return Msg{ToolOutputCopy{}}; }} };
+    s.letter_verbs = { {U'y', [] { return Msg{ToolOutputCopy{}}; }},
+                       {U't', [] { return Msg{ToolOutputNewest{}}; }} };
     return nav::translate(s, ev);
 }
 

@@ -167,13 +167,17 @@ Element tool_output_panel(const Model& m) {
         }
         if (!compact_list) {
             cfg.footer.push_back(text(""));
-            cfg.footer.push_back(key_hints({
+            std::vector<Hint> list_hints{
                 {"\xe2\x86\x91\xe2\x86\x93", "move", 5},   // ↑↓
                 {"Enter", "view", 6},
                 {"/", "find", 4},
                 {"y", "copy", 4},
                 {"Esc", "close", 3},
-            }));
+            };
+            if (o->fresh_above > 0)
+                list_hints.insert(list_hints.begin() + 2,
+                    {"t", std::to_string(o->fresh_above) + " new above", 6});
+            cfg.footer.push_back(key_hints(std::move(list_hints)));
         }
         // Same rule as the body: never taller than the room the overlay has.
         const int budget = std::max(3, list_term_rows - 2);
@@ -546,6 +550,10 @@ Element tool_output_panel(const Model& m) {
         if (following_kind && m.ui.tool_viewer_tail && o->query.empty())
             where += where.empty() ? "following" : " \xc2\xb7 following";
         status.push_back(spacer());
+        // New entries landed above while you read. Say so; never jump.
+        if (o->fresh_above > 0)
+            status.push_back(text(" \xe2\x86\x91 " + std::to_string(o->fresh_above) + " new ",   // ↑
+                                  fg_bold(highlight)) | clip);
         status.push_back(text(where + "  ", fg_dim(following_kind ? tool_hue : muted)) | clip);
         c.footer.push_back(hstack().width(Dimension::percent(100))(std::move(status)).build()
                            | height(1) | overflow(Overflow::Hidden));
@@ -569,6 +577,7 @@ Element tool_output_panel(const Model& m) {
             if (o->entries.size() > 1)
                 viewer_hints.push_back({"\xe2\x86\x90\xe2\x86\x92",   // ←→
                                         o->thinking_only ? "older/newer" : "other output", 4});
+            if (o->fresh_above > 0) viewer_hints.push_back({"t", "newest", 6});
             if (!e.is_live) viewer_hints.push_back({"y", "copy", 4});
             viewer_hints.push_back({"Esc", !o->query.empty() ? "clear"
                                           : o->thinking_only ? "all blocks" : "back", 3});

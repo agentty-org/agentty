@@ -83,7 +83,18 @@ struct Open {
     int                hit_seq = 0;       // bumped on each jump; the view scrolls to it
     // Opened with ^U: only thinking blocks are listed, so ←/→ walks them.
     bool               thinking_only = false;
+    // Entries that arrived above the one you're on since you looked. The
+    // cursor stays put when they arrive; the view says they're there.
+    int                fresh_above = 0;
 };
+
+// What an entry is, across refreshes: the tool call, or the message for
+// thinking and retrieved context. A running tool and its finished entry
+// share it, so reading a tool survives it finishing.
+[[nodiscard]] inline std::string_view entry_key(const Entry& e) noexcept {
+    return e.source.value.empty() ? std::string_view{e.call.id.value}
+                                  : std::string_view{e.source.value};
+}
 
 // What the viewer shows and copies for an entry: the output without the
 // notes a tool writes for the model, ANSI escapes or a wrapping ``` fence.

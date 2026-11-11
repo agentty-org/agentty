@@ -167,6 +167,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
                 int sz = static_cast<int>(o->entries.size());
                 if (sz > 0)
                     o->index = std::clamp(o->index + e.delta + e.pages * 10, 0, sz - 1);
+                o->fresh_above = std::min(o->fresh_above, o->index);
             }
             return Cmd::none();
         },
@@ -193,10 +194,23 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             int next = std::clamp(o->index + e.delta, 0, sz - 1);
             if (next != o->index) {
                 o->index = next;
+                o->fresh_above = std::min(o->fresh_above, o->index);
                 m.ui.tool_viewer_scroll.y = 0;
+                m.ui.tool_viewer_tail = true;
                 // A search carries over: land on this output's first match.
                 if (!o->query.empty()) { o->hit = 0; ++o->hit_seq; }
             }
+            return Cmd::none();
+        },
+        [&](ToolOutputNewest) -> Cmd {
+            // `t`: jump to the top entry (the newest), in whichever stage.
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
+            if (!o || o->entries.empty() || o->index == 0) return Cmd::none();
+            o->index = 0;
+            o->fresh_above = 0;
+            m.ui.tool_viewer_scroll.y = 0;
+            m.ui.tool_viewer_tail = true;
+            if (!o->query.empty()) { o->hit = 0; ++o->hit_seq; }
             return Cmd::none();
         },
         [&](ToolOutputFind& e) -> Cmd {

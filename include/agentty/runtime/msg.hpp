@@ -746,6 +746,8 @@ struct CloseToolOutput { bool all = false; };
 struct ToolOutputMove { int delta; int pages = 0; };   // pages: PgUp/PgDn
 struct ToolOutputSelect {};
 struct ToolOutputCopy {};
+// `t` in the viewer: go to the newest entry (the top of the list).
+struct ToolOutputNewest {};
 // ←/→: in the body stage, jump straight to the previous/next entry's
 // output without bouncing through the list; in the list stage ←/→ are
 // unbound (the viewer swallows all keys while open, so they simply no-op).
@@ -1466,7 +1468,7 @@ using ToolMsg = std::variant<
 using ToolOutputMsg = std::variant<
     OpenToolOutput, OpenThinking, CloseToolOutput,
     ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep,
-    ToolOutputFind>;
+    ToolOutputFind, ToolOutputNewest>;
 
 using ProvidersMsg = std::variant<
     OpenProviders, CloseProviders, ProvidersMove,

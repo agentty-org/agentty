@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
 #include <utility>
 
 #include <maya/core/overload.hpp>
@@ -212,6 +213,7 @@ void arm_reconcile_cooldown(Model& m) {
                 tool_output::Entry e;
                 e.name   = "retrieved_context";
                 e.title  = "Retrieved context";
+                e.source = mit->id;
                 e.output = std::move(body);
                 e.failed = false;
                 // Detail: passage count (each source block starts with "[").
@@ -378,32 +380,43 @@ void refresh_thinking_viewer(Model& m, const Message& msg) {
 
 // Keep the Ctrl+O snapshot synchronized from both stream.cpp (tool-input
 // deltas/snapshots) and this TU (execution progress/results).
+//
+// The cursor stays on the entry you're on, by identity. A tool starting or
+// finishing never moves you; entries that land above are counted in
+// fresh_above so the view can say so (and Home / ← gets you there).
 void resync_live_tool_viewer(Model& m) {
     auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return;
     if (o->thinking_only) return;   // the ^U reader follows thinking, not tools
-    // Anchor: remember which entry the user is on by identity, not index —
-    // prepending/removing the live row shifts indices under them.
-    const bool was_live_selected =
-        o->index >= 0 && o->index < static_cast<int>(o->entries.size())
-        && o->entries[static_cast<std::size_t>(o->index)].is_live;
     auto fresh = collect_viewer_entries(m);
-    const bool has_live = !fresh.empty() && fresh.front().is_live;
-    if (fresh.empty()) { return; }   // keep the last snapshot rather than blank
-    // If the user was reading the live row, keep them pinned to row 0 (it
-    // either still lives there or has just settled into the newest entry).
-    if (was_live_selected) {
-        o->index = 0;
-    } else {
-        // Non-live selection: the live row's presence shifts everything by
-        // one. Adjust the index by the delta in live-row count so the same
-        // finished entry stays under the cursor.
-        const bool had_live = !o->entries.empty() && o->entries.front().is_live;
-        o->index += (has_live ? 1 : 0) - (had_live ? 1 : 0);
+    if (fresh.empty()) return;   // keep the last snapshot rather than blank
+
+    const int sz = static_cast<int>(o->entries.size());
+    const std::string was = (o->index >= 0 && o->index < sz)
+        ? std::string{tool_output::entry_key(o->entries[static_cast<std::size_t>(o->index)])}
+        : std::string{};
+    std::unordered_set<std::string_view> seen;
+    for (const auto& e : o->entries) seen.insert(tool_output::entry_key(e));
+
+    int at = -1;
+    for (std::size_t k = 0; k < fresh.size(); ++k)
+        if (!was.empty() && tool_output::entry_key(fresh[k]) == was) { at = static_cast<int>(k); break; }
+    if (at < 0) {
+        // Our entry left the snapshot (rare: the budget dropped it). Stay
+        // at the same distance from the bottom, which is what didn't move.
+        at = static_cast<int>(fresh.size()) - (sz - o->index);
     }
+    at = std::clamp(at, 0, std::max(0, static_cast<int>(fresh.size()) - 1));
+
+    // Entries above us that weren't there before. Nothing new while you sit
+    // on the top row: there you can see the list grow.
+    int added = 0;
+    for (int k = 0; k < at; ++k)
+        if (!seen.contains(tool_output::entry_key(fresh[static_cast<std::size_t>(k)]))) ++added;
+    o->fresh_above = at == 0 ? 0 : o->fresh_above + added;
+
     o->entries = std::move(fresh);
-    o->index = std::clamp(o->index, 0,
-                          std::max(0, static_cast<int>(o->entries.size()) - 1));
+    o->index = at;
 }
 
 void apply_tool_output(Model& m, const ToolCallId& id,

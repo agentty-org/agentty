@@ -906,6 +906,63 @@ TEST_CASE("tool output viewer: long lines wrap inside the pane") {
     }
 }
 
+TEST_CASE("tool output viewer: a new tool never moves you") {
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.id = A::MessageId{"a"};
+    auto done_tool = [](std::string id, std::string out) {
+        auto t = make_tool("read", A::ToolUse::Running{});
+        t.id = A::ToolCallId{std::move(id)};
+        t.settle_done(std::chrono::steady_clock::now(), std::move(out));
+        return t;
+    };
+    a.tool_calls = {done_tool("t1", "OLDEST"), done_tool("t2", "MIDDLE")};
+    m.d.current.messages = {u, a};
+
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenToolOutput{}}).first);
+    auto o = [&] { return m.ui.panel.get<A::ui::panel::ToolOutput>(); };
+    REQUIRE(o());
+    // Read the older one.
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::ToolOutputMove{+1}}).first);
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::ToolOutputSelect{}}).first);
+    auto on = [&] { return std::string{o()->entries[(std::size_t)o()->index].output}; };
+    check(on() == "OLDEST", "reading the oldest output");
+
+    // A new tool starts running, then finishes.
+    auto running = make_tool("shell", A::ToolUse::Running{});
+    running.id = A::ToolCallId{"t3"};
+    m.d.current.messages.back().tool_calls.push_back(running);
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(on() == "OLDEST", "a tool starting doesn't move you");
+    check(o()->viewing, "and you stay in the body");
+    m.d.current.messages.back().tool_calls.back().settle_done(
+        std::chrono::steady_clock::now(), "NEWEST");
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(on() == "OLDEST", "a tool finishing doesn't move you either");
+    check(o()->fresh_above == 1, "one new entry counted above");
+
+    // `t` goes to it and clears the count.
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::ToolOutputNewest{}}).first);
+    check(on() == "NEWEST" && o()->fresh_above == 0, "t jumps to the newest");
+
+    // Reading the live row: it settling keeps you on that tool.
+    auto live = make_tool("shell", A::ToolUse::Running{});
+    live.id = A::ToolCallId{"t4"};
+    m.d.current.messages.back().tool_calls.push_back(live);
+    agentty::app::detail::resync_live_tool_viewer(m);
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::ToolOutputNewest{}}).first);
+    check(o()->entries[0].is_live, "on the live row");
+    m.d.current.messages.back().tool_calls.back().settle_done(
+        std::chrono::steady_clock::now(), "SETTLED");
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(on() == "SETTLED", "the live row settles in place");
+}
+
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
     A::Model m;
     auto msg = [&](A::Role r, std::string text, std::string thinking = {}) {
