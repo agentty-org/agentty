@@ -294,14 +294,38 @@ Element tool_output_panel(const Model& m) {
     // clips; the detail gives way first. Thinking has no "ran on": its
     // header is the turn and the size.
     if (!compact_body) {
-        const std::string detail = e.thinking ? std::string{} : e.detail;
+        std::string detail = e.thinking ? std::string{} : e.detail;
+        std::string trailing = e.trailing;
+        // The border already names the turn; don't spend the row on it twice.
+        const std::string head = e.thinking ? e.title : title;
+        if (e.thinking) {
+            // The facts share the header row: model, effort, kind in the
+            // middle, time and tokens on the right. No extra rows. What
+            // doesn't fit is dropped whole, last first, never cut mid-word.
+            std::string time, tokens;
+            std::vector<std::string> mid;
+            for (const auto& [k, v] : e.facts) {
+                if (k == "thought for") time = v;
+                else if (k == "tokens") tokens = v;
+                else if (k != "status") mid.push_back(k == "blocks" ? v + " blocks" : v);
+            }
+            trailing = tokens.empty() ? time : time.empty() ? tokens : time + " \xc2\xb7 " + tokens;
+            if (e.streaming) trailing += " \xc2\xb7 thinking\xe2\x80\xa6";
+            const int room = panel_terminal_cols() - 8
+                           - maya::string_width(" " + head) - maya::string_width("  " + trailing + " ");
+            for (const auto& item : mid) {
+                const std::string next = detail.empty() ? item : detail + " \xc2\xb7 " + item;
+                if (maya::string_width("  " + next) > room) break;
+                detail = next;
+            }
+        }
         cfg.header.push_back(
             hstack().width(Dimension::percent(100))(
-                text(" " + title, fg_bold(tool_hue)) | clip | shrink(1.0f),
+                text(" " + head, fg_bold(tool_hue)) | clip | shrink(1.0f),
                 text(detail.empty() ? "" : "  " + detail, fg_of(fg))
                     | clip | grow(1.0f) | shrink(50.0f),
-                text("  " + e.trailing + " ", e.failed ? fg_of(danger)
-                                             : e.streaming ? fg_of(role_brand) : fg_dim(muted))
+                text("  " + trailing + " ", e.failed ? fg_of(danger)
+                                         : e.streaming ? fg_of(role_brand) : fg_dim(muted))
                     | clip | shrink(1.0f)
             ).build());
         cfg.header.push_back(sep);
@@ -340,10 +364,7 @@ Element tool_output_panel(const Model& m) {
     const int pane_w   = std::max(20, panel_terminal_cols() - 6 - (o->query.empty() ? 0 : 1));
     const void* entries_key = static_cast<const void*>(o->entries.data());
     const void* bytes_key   = static_cast<const void*>(e.output.data());
-    auto call_key           = e.call.compute_render_key();
-    // Thinking facts change on their own (time, tokens, status).
-    for (const auto& [k, v] : e.facts)
-        call_key = call_key * 1099511628211ull ^ std::hash<std::string>{}(k + '\x1f' + v);
+    const auto call_key     = e.call.compute_render_key();
     if (cache.entries_key != entries_key || cache.index != cur
         || cache.bytes_key != bytes_key || cache.bytes_len != e.output.size()
         || cache.call_key != call_key || cache.width != pane_w
@@ -487,21 +508,6 @@ Element tool_output_panel(const Model& m) {
                                      | overflow(Overflow::Hidden));
             }
         } else if (e.thinking && !shown.empty()) {
-            // The facts first: a label column and its values, then a rule.
-            if (!e.facts.empty()) {
-                std::size_t lw = 0;
-                for (const auto& [k, v] : e.facts) lw = std::max(lw, k.size());
-                for (const auto& [k, v] : e.facts) {
-                    std::string label = " " + k;
-                    label.resize(lw + 3, ' ');
-                    const bool live = k == "status";
-                    cache.rows.push_back(hstack().width(Dimension::percent(100))(
-                        text(label, fg_dim(muted)),
-                        text(v, live ? fg_bold(role_brand) : fg_of(fg)) | clip | shrink(1.0f)
-                    ).build() | height(1) | overflow(Overflow::Hidden));
-                }
-                cache.rows.push_back(text("") | height(1));
-            }
             cache.reveal_row0 = cache.rows.size();
             // Prose, the way the transcript draws it: the brand rail, word
             // wrap, no line numbers. Headings and lines that are all bold

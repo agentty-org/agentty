@@ -1153,14 +1153,41 @@ TEST_CASE("thinking reader: follows the bottom, shows what's known") {
     (void)screen();
     check(sc.y == read_at, "scrolled up: it stays where you are");
 
-    // The facts sit above the text.
+    // The facts share the header row: the body starts with the thinking.
     sc.y = 0;
     m.ui.tool_viewer_tail = false;
     const auto top = screen();
     if (std::getenv("THINKING_DUMP")) std::fputs(top.c_str(), stderr);
-    for (const char* want : {"model", "Opus", "effort", "high", "tokens", "kind", "full text",
-                             "thinking now"})
-        check(top.find(want) != std::string::npos, std::string{"shows "} + want);
+    const auto header_end = top.find('\n', top.find("Opus 4.5"));
+    const std::string header = top.substr(0, header_end);
+    for (const char* want : {"Opus 4.5", "high effort", "tok", "thinking"})
+        check(header.find(want) != std::string::npos, std::string{"header row shows "} + want);
+    check(header.find("full t") == std::string::npos || header.find("full text") != std::string::npos,
+          "a fact that doesn't fit is dropped whole, never cut");
+    check(top.find("line 0") < top.find('\n', header_end + 1) + 80 * 2,
+          "the thinking starts right under the header");
+    check(top.find("thought for") == std::string::npos && top.find("kind ") == std::string::npos,
+          "no label rows");
+
+    // Wide enough, every fact is on the one row.
+    setenv("COLUMNS", "140", 1);
+    auto el = U::tool_output_panel(m);
+    maya::StylePool pool;
+    maya::Canvas canvas(136, 30, &pool);
+    canvas.clear();
+    maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+    std::string wide;
+    for (int y = 0; y < 30; ++y) {
+        for (int x = 0; x < 136; ++x) {
+            const char32_t ch = canvas.get(x, y).character;
+            wide.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+        }
+        wide += '\n';
+    }
+    const auto wl = wide.find("Opus 4.5");
+    const std::string wrow = wide.substr(wl, wide.find('\n', wl) - wl);
+    check(wrow.find("full text") != std::string::npos, "wide: every fact fits on the row");
+    setenv("COLUMNS", "80", 1);
 }
 
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
