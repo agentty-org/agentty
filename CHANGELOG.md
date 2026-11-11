@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.52] - 2026-11-11
+
 ### Added
 - **^U reads thinking in full** (#123). On an empty composer it opens the
   newest thinking block over the screen; ←/→ go to older ones, Esc lists
