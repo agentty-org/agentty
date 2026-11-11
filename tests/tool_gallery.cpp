@@ -440,9 +440,14 @@ void render_panels(int cols) {
         auto a = diff::compute("src/auth/login.cpp", before, after);
         if (!a.hunks.empty()) a.hunks[0].status = Hunk::Status::Accepted;
         m.d.pending_changes.push_back(a);
-        m.d.pending_changes.push_back(diff::compute("README.md", "old\n", "new\nmore\n"));
-        m.d.pending_changes.push_back(diff::compute("src/net/http_client.cpp", "a\n", "b\n"));
-        m.ui.panel.descend(pn::DiffReview{{0, 1}});
+        // A real edit: lines changed in place, inside a function.
+        m.d.pending_changes.push_back(diff::compute("src/net/http_client.cpp",
+            "#include <string>\n\nint connect(const std::string& host, int port) {\n"
+            "    auto timeout = 30;\n    if (port == 0) port = 80;\n    return open_socket(host, port, timeout);\n}\n",
+            "#include <string>\n\nint connect(const std::string& host, int port) {\n"
+            "    auto timeout = config().connect_timeout_s;\n    if (port <= 0) port = 443;\n    return open_socket(host, port, timeout);\n}\n"));
+        m.d.pending_changes.push_back(diff::compute("README.md", "", "# notes\nnew file\n"));
+        m.ui.panel.descend(pn::DiffReview{{1, 0}});
         emit_element("diff review", ui::diff_review(m), cols);
     }
     {

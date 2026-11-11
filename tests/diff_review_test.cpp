@@ -15,6 +15,9 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/panel/common.hpp"
 #include "agentty/diff/diff.hpp"
+#include "agentty/runtime/view/diff_review.hpp"
+#include <maya/print.hpp>
+#include <cstdlib>
 
 #include <map>
 #include <optional>
@@ -93,6 +96,34 @@ FileChange make_change(const char* path, const std::string& before,
 int main() {
     const std::string before = "line one\nline two\nline three\n";
     const std::string after  = "line one\nline TWO\nline three\n";
+
+    // ── the reviewer marks the words that changed, not the whole line ──
+    {
+        setenv("COLORTERM", "truecolor", 1);
+        setenv("LINES", "40", 1);
+        setenv("COLUMNS", "100", 1);
+        Model m;
+        m.d.pending_changes.push_back(make_change("src/x.cpp",
+            "int f() {\n    a();\n    b();\n    c();\n    d();\n    auto timeout = 30;\n    return go(timeout);\n}\n",
+            "int f() {\n    a();\n    b();\n    c();\n    d();\n    auto timeout = config().limit;\n    return go(timeout);\n}\n"));
+        m.ui.panel.descend(agentty::ui::panel::DiffReview{{0, 0}});
+        const std::string out = maya::render_to_string_ansi(agentty::ui::diff_review(m), 100);
+        // The strong add band is the rail colour; find the runs that wear it.
+        std::string strong;
+        for (std::size_t p = out.find("\x1b["); p != std::string::npos; p = out.find("\x1b[", p + 1)) {
+            const auto end = out.find('m', p);
+            const std::string sgr = out.substr(p, end - p);
+            const auto txt_end = out.find("\x1b[", end);
+            const std::string txt = out.substr(end + 1, txt_end - end - 1);
+            if (sgr.find(";1;") != std::string::npos || sgr.starts_with("\x1b[1;"))
+                if (txt.find_first_not_of(" ") != std::string::npos) strong += txt + "|";
+        }
+        check(strong.find("config") != std::string::npos && strong.find("limit") != std::string::npos,
+              "changed words are marked: " + strong);
+        check(strong.find("timeout") == std::string::npos,
+              "unchanged words on a changed line aren't: " + strong);
+        check(out.find("int f()") != std::string::npos, "the change names its function");
+    }
 
     // ── population: a tool's FileChange lands in pending_changes ──────────
     {
