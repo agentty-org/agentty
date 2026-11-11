@@ -963,6 +963,95 @@ TEST_CASE("tool output viewer: a new tool never moves you") {
     check(on() == "SETTLED", "the live row settles in place");
 }
 
+TEST_CASE("tool output viewer: watching follows, scrolling up stops it") {
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.id = A::MessageId{"a"};
+    auto run = [](std::string id) {
+        auto t = make_tool("shell", A::ToolUse::Running{});
+        t.id = A::ToolCallId{std::move(id)};
+        return t;
+    };
+    a.tool_calls = {run("r1")};
+    m.d.current.messages = {u, a};
+    auto calls = [&]() -> std::vector<A::ToolUse>& { return m.d.current.messages.back().tool_calls; };
+    auto step = [&](A::Msg x) {
+        m = std::move(agentty::app::update(std::move(m), std::move(x)).first);
+    };
+    auto o = [&] { return m.ui.panel.get<A::ui::panel::ToolOutput>(); };
+    auto key = [&] { return std::string{A::tool_output::entry_key(o()->entries[(std::size_t)o()->index])}; };
+
+    step(A::OpenToolOutput{});
+    step(A::ToolOutputSelect{});
+    check(o()->following, "on the running top entry at its bottom: watching");
+
+    // It finishes, the next one starts: you go with it.
+    calls().back().settle_done(std::chrono::steady_clock::now(), "one");
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(key() == "r1", "still on r1 once it settles");
+    calls().push_back(run("r2"));
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(key() == "r2" && o()->fresh_above == 0, "watching moves to the new tool");
+
+    // Scroll up to read: the next tool doesn't take you.
+    m.ui.tool_viewer_tail = false;
+    calls().back().settle_done(std::chrono::steady_clock::now(), "two");
+    calls().push_back(run("r3"));
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(key() == "r2" && o()->fresh_above == 1, "scrolled up: you stay, it's counted");
+
+    // t back to the top, at the bottom: watching again.
+    step(A::ToolOutputNewest{});
+    check(key() == "r3" && o()->following, "t resumes watching on a running tool");
+
+    // Leaving the top entry stops it, even after coming back to a settled top.
+    calls().back().settle_done(std::chrono::steady_clock::now(), "three");
+    agentty::app::detail::resync_live_tool_viewer(m);
+    step(A::ToolOutputStep{+1});
+    step(A::ToolOutputStep{-1});
+    calls().push_back(run("r4"));
+    agentty::app::detail::resync_live_tool_viewer(m);
+    check(key() == "r3" && o()->fresh_above == 1,
+          "back on a finished top entry you're reading, not watching");
+}
+
+TEST_CASE("thinking reader: follows a new block only while watching") {
+    A::Model m;
+    auto add = [&](A::Role r, std::string thinking, bool open) {
+        A::Message x;
+        x.role = r;
+        x.text = "x";
+        x.thinking = std::move(thinking);
+        x.reasoning_started_ms = open ? 1 : 0;
+        x.id = A::MessageId{"m" + std::to_string(m.d.current.messages.size())};
+        m.d.current.messages.push_back(std::move(x));
+    };
+    add(A::Role::User, "", false);
+    add(A::Role::Assistant, "first", true);
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    auto o = [&] { return m.ui.panel.get<A::ui::panel::ToolOutput>(); };
+    check(o()->following, "on a streaming block at its bottom: watching");
+
+    m.d.current.messages.back().reasoning_started_ms = 0;
+    add(A::Role::User, "", false);
+    add(A::Role::Assistant, "second", true);
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    check(o()->entries[(std::size_t)o()->index].output == "second", "watching moves to the new block");
+
+    m.ui.tool_viewer_tail = false;   // scrolled up to read
+    m.d.current.messages.back().reasoning_started_ms = 0;
+    add(A::Role::User, "", false);
+    add(A::Role::Assistant, "third", true);
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    check(o()->entries[(std::size_t)o()->index].output == "second" && o()->fresh_above == 1,
+          "reading: you stay, the new block is counted");
+}
+
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
     A::Model m;
     auto msg = [&](A::Role r, std::string text, std::string thinking = {}) {

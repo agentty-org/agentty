@@ -350,6 +350,65 @@ tool_output::Entry thinking_entry(const Model& m, const Message& msg, int turn) 
     return out;
 }
 
+namespace {
+
+bool entry_running(const tool_output::Entry& e) { return e.is_live || e.streaming; }
+
+// Put a fresh snapshot in the viewer. Following: the cursor goes to the
+// new top entry. Otherwise it stays on the entry you're on, by identity,
+// and entries that land above are counted for the "↑ N new" pill.
+void reconcile(Model& m, tool_output::Open& o, std::vector<tool_output::Entry> fresh) {
+    const int sz = static_cast<int>(o.entries.size());
+    const bool follow = viewer_following(m, o);
+    const std::string was = (o.index >= 0 && o.index < sz)
+        ? std::string{tool_output::entry_key(o.entries[static_cast<std::size_t>(o.index)])}
+        : std::string{};
+
+    if (follow) {
+        const bool moved = fresh.empty() || was != tool_output::entry_key(fresh.front());
+        o.entries = std::move(fresh);
+        o.index = 0;
+        o.fresh_above = 0;
+        if (moved && o.viewing) {
+            m.ui.tool_viewer_scroll.y = 0;
+            m.ui.tool_viewer_tail = true;
+        }
+        return;
+    }
+
+    std::unordered_set<std::string_view> seen;
+    for (const auto& e : o.entries) seen.insert(tool_output::entry_key(e));
+    int at = -1;
+    for (std::size_t k = 0; k < fresh.size(); ++k)
+        if (!was.empty() && tool_output::entry_key(fresh[k]) == was) { at = static_cast<int>(k); break; }
+    if (at < 0) {
+        // Our entry left the snapshot (rare: the budget dropped it). Stay
+        // at the same distance from the bottom, which is what didn't move.
+        at = static_cast<int>(fresh.size()) - (sz - o.index);
+    }
+    at = std::clamp(at, 0, std::max(0, static_cast<int>(fresh.size()) - 1));
+    int added = 0;
+    for (int k = 0; k < at; ++k)
+        if (!seen.contains(tool_output::entry_key(fresh[static_cast<std::size_t>(k)]))) ++added;
+    o.fresh_above = at == 0 ? 0 : o.fresh_above + added;
+    o.entries = std::move(fresh);
+    o.index = at;
+    arm_viewer_follow(m, o);
+}
+
+} // namespace
+
+bool viewer_following(const Model& m, const tool_output::Open& o) {
+    return o.following && o.index == 0 && o.query.empty() && !o.typing
+        && (!o.viewing || m.ui.tool_viewer_tail);
+}
+
+void arm_viewer_follow(const Model& m, tool_output::Open& o) {
+    if (o.index == 0 && !o.entries.empty() && entry_running(o.entries.front())
+        && o.query.empty() && !o.typing && (!o.viewing || m.ui.tool_viewer_tail))
+        o.following = true;
+}
+
 void refresh_thinking_viewer(Model& m, const Message& msg) {
     auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o || !o->thinking_only || !msg.has_reasoning()) return;
@@ -357,66 +416,23 @@ void refresh_thinking_viewer(Model& m, const Message& msg) {
         if (e.source == msg.id) {
             const int turn = e.turn;
             e = thinking_entry(m, msg, turn);
+            arm_viewer_follow(m, *o);
             return;
         }
-    // A block the reader hasn't seen: list it on top. Keep the cursor on
-    // the entry it was on, unless the reader was on the newest one, in
-    // which case follow the new block.
+    // A block the reader hasn't seen yet.
     auto fresh = collect_thinking_entries(m);
-    if (fresh.empty()) return;
-    const bool on_newest = o->index == 0;
-    const MessageId was = (o->index >= 0 && o->index < static_cast<int>(o->entries.size()))
-        ? o->entries[static_cast<std::size_t>(o->index)].source : MessageId{};
-    o->entries = std::move(fresh);
-    o->index = 0;
-    if (!on_newest)
-        for (std::size_t k = 0; k < o->entries.size(); ++k)
-            if (o->entries[k].source == was) { o->index = static_cast<int>(k); break; }
-    if (on_newest && o->viewing) {
-        m.ui.tool_viewer_scroll.y = 0;
-        m.ui.tool_viewer_tail = true;
-    }
+    if (!fresh.empty()) reconcile(m, *o, std::move(fresh));
 }
 
 // Keep the Ctrl+O snapshot synchronized from both stream.cpp (tool-input
 // deltas/snapshots) and this TU (execution progress/results).
-//
-// The cursor stays on the entry you're on, by identity. A tool starting or
-// finishing never moves you; entries that land above are counted in
-// fresh_above so the view can say so (and Home / ← gets you there).
 void resync_live_tool_viewer(Model& m) {
     auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return;
     if (o->thinking_only) return;   // the ^U reader follows thinking, not tools
     auto fresh = collect_viewer_entries(m);
     if (fresh.empty()) return;   // keep the last snapshot rather than blank
-
-    const int sz = static_cast<int>(o->entries.size());
-    const std::string was = (o->index >= 0 && o->index < sz)
-        ? std::string{tool_output::entry_key(o->entries[static_cast<std::size_t>(o->index)])}
-        : std::string{};
-    std::unordered_set<std::string_view> seen;
-    for (const auto& e : o->entries) seen.insert(tool_output::entry_key(e));
-
-    int at = -1;
-    for (std::size_t k = 0; k < fresh.size(); ++k)
-        if (!was.empty() && tool_output::entry_key(fresh[k]) == was) { at = static_cast<int>(k); break; }
-    if (at < 0) {
-        // Our entry left the snapshot (rare: the budget dropped it). Stay
-        // at the same distance from the bottom, which is what didn't move.
-        at = static_cast<int>(fresh.size()) - (sz - o->index);
-    }
-    at = std::clamp(at, 0, std::max(0, static_cast<int>(fresh.size()) - 1));
-
-    // Entries above us that weren't there before. Nothing new while you sit
-    // on the top row: there you can see the list grow.
-    int added = 0;
-    for (int k = 0; k < at; ++k)
-        if (!seen.contains(tool_output::entry_key(fresh[static_cast<std::size_t>(k)]))) ++added;
-    o->fresh_above = at == 0 ? 0 : o->fresh_above + added;
-
-    o->entries = std::move(fresh);
-    o->index = at;
+    reconcile(m, *o, std::move(fresh));
 }
 
 void apply_tool_output(Model& m, const ToolCallId& id,

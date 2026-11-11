@@ -547,7 +547,10 @@ Element tool_output_panel(const Model& m) {
                        + (cache.out_lines == 1 ? " line" : " lines");
             }
         }
-        if (following_kind && m.ui.tool_viewer_tail && o->query.empty())
+        // Watching: you'll be taken to each new entry as it starts.
+        const bool watching = o->following && o->index == 0 && o->query.empty()
+                              && !o->typing && m.ui.tool_viewer_tail;
+        if ((following_kind || watching) && m.ui.tool_viewer_tail && o->query.empty())
             where += where.empty() ? "following" : " \xc2\xb7 following";
         status.push_back(spacer());
         // New entries landed above while you read. Say so; never jump.
@@ -573,7 +576,7 @@ Element tool_output_panel(const Model& m) {
                 {"/", "find", 5},
             };
             if (!o->query.empty()) viewer_hints.push_back({"n/N", "next/prev", 5});
-            if (following_kind) viewer_hints.push_back({"End", "follow", 4});
+            if (following_kind || o->following) viewer_hints.push_back({"End", "follow", 4});
             if (o->entries.size() > 1)
                 viewer_hints.push_back({"\xe2\x86\x90\xe2\x86\x92",   // ←→
                                         o->thinking_only ? "older/newer" : "other output", 4});

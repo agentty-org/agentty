@@ -86,6 +86,10 @@ struct Open {
     // Entries that arrived above the one you're on since you looked. The
     // cursor stays put when they arrive; the view says they're there.
     int                fresh_above = 0;
+    // Watching, not reading: you were on the top entry while it ran, at
+    // the bottom of its output. New entries take you along while this
+    // holds (see viewer_following). Moving to another entry clears it.
+    bool               following = false;
 };
 
 // What an entry is, across refreshes: the tool call, or the message for

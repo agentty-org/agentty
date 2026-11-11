@@ -108,6 +108,12 @@ namespace agentty::app::detail {
 using maya::overload;
 
 Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
+    // After the cursor moves to another entry: off the top you're reading,
+    // so stop following; on a running top entry you're watching again.
+    auto landed = [&](tool_output::Open& o) {
+        if (o.index != 0) o.following = false;
+        arm_viewer_follow(m, o);
+    };
     return std::visit(overload{
         [&](OpenToolOutput) -> Cmd {
             auto entries = collect_viewer_entries(m);
@@ -118,6 +124,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             m.ui.panel.descend(pn::ToolOutput{{std::move(entries), 0, false}});
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
+            if (auto* o = m.ui.panel.get<pn::ToolOutput>()) arm_viewer_follow(m, *o);
             return Cmd::none();
         },
         [&](OpenThinking) -> Cmd {
@@ -131,6 +138,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             m.ui.panel.descend(pn::ToolOutput{std::move(open)});
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
+            if (auto* o = m.ui.panel.get<pn::ToolOutput>()) arm_viewer_follow(m, *o);
             return Cmd::none();
         },
         [&](CloseToolOutput& e) -> Cmd {
@@ -163,11 +171,13 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
                 // auto-tail so the user can read earlier output; scrolling
                 // (or Ending) back to the bottom re-engages it.
                 m.ui.tool_viewer_tail = (sc.y >= sc.max_y);
+                arm_viewer_follow(m, *o);
             } else {
                 int sz = static_cast<int>(o->entries.size());
                 if (sz > 0)
                     o->index = std::clamp(o->index + e.delta + e.pages * 10, 0, sz - 1);
                 o->fresh_above = std::min(o->fresh_above, o->index);
+                landed(*o);
             }
             return Cmd::none();
         },
@@ -180,6 +190,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             o->viewing = true;
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
+            arm_viewer_follow(m, *o);
             return Cmd::none();
         },
         [&](ToolOutputStep& e) -> Cmd {
@@ -199,6 +210,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
                 m.ui.tool_viewer_tail = true;
                 // A search carries over: land on this output's first match.
                 if (!o->query.empty()) { o->hit = 0; ++o->hit_seq; }
+                landed(*o);
             }
             return Cmd::none();
         },
@@ -211,6 +223,7 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
             if (!o->query.empty()) { o->hit = 0; ++o->hit_seq; }
+            landed(*o);
             return Cmd::none();
         },
         [&](ToolOutputFind& e) -> Cmd {

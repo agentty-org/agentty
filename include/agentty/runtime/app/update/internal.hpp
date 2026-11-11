@@ -418,6 +418,12 @@ void resync_live_tool_viewer(Model& m);
 // Keep an open ^U reader in step with a thinking block that is still
 // streaming. No-op unless the reader is open.
 void refresh_thinking_viewer(Model& m, const Message& msg);
+// The viewers' follow rule. Following = you were on the top entry while it
+// ran and are still on it, at the bottom, not searching. New entries take
+// you along then; otherwise you stay put and they're counted.
+[[nodiscard]] bool viewer_following(const Model& m, const tool_output::Open& o);
+// Turn following on if you're on a running top entry at its bottom.
+void arm_viewer_follow(const Model& m, tool_output::Open& o);
 
 // ── update/tool.cpp helpers ──────────────────────────────────────────────
 void apply_tool_output(Model& m, const ToolCallId& id,
