@@ -4,6 +4,32 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **^U reads thinking in full** (#123). On an empty composer it opens the
+  newest thinking block over the screen; ←/→ go to older ones, Esc lists
+  them all, ^U closes. Collapsed blocks say `⋯ N lines above · ^U to read`,
+  and the palette has "Read thinking". A live retrieved-context card still
+  takes ^U first.
+
+### Changed
+- **The ^O and ^U viewers don't move under you.** On the newest entry while
+  it runs, scrolled to the bottom, you follow new tools or thinking blocks.
+  Anywhere else you stay put and new ones show as `↑ N new`; `t` goes to
+  the newest.
+- **Text arriving in those viewers types in** with the transcript's
+  typewriter and pacing. The Motion setting turns it off the same way.
+
+### Fixed
+- **Collapsed thinking counts its hidden lines right.** Long blocks said
+  "24 lines above" whatever their length.
+- **`-m` picks the model the TUI opens on.** It was saved but the
+  provider's saved model won at startup.
+- **Reasoning settings take effect** on the turn being written, the
+  "Reasoned · Ns" timer starts when thinking starts and stops on errors,
+  Hidden no longer fetches a summary it throws away, and Haiku/Sonnet 4.5
+  can think again.
+- **Alt+←/→ in threads includes threads made this session.**
+
 ## [0.9.51] - 2026-11-08
 
 ### Fixed
