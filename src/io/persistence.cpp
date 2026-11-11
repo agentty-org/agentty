@@ -3095,6 +3095,7 @@ store::Settings load_settings_from_disk() {
         s.show_reasoning     = j.value("show_reasoning", false);
         s.auto_title         = j.value("auto_title", true);
         s.auto_compact       = j.value("auto_compact", true);
+        s.commit_attribution = j.value("commit_attribution", false);
         if (j.contains("tool_loading") && j["tool_loading"].is_string())
             s.tool_loading = j["tool_loading"].get<std::string>();
 
@@ -3535,6 +3536,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
     // Only persisted when turned OFF (default is on).
     if (!s.auto_title)        j["auto_title"] = false;
     if (!s.auto_compact)      j["auto_compact"] = false;
+    if (s.commit_attribution) j["commit_attribution"] = true;
     // MCP tool loading: absent means auto.
     if (!s.tool_loading.empty() && s.tool_loading != "auto")
         j["tool_loading"] = s.tool_loading;

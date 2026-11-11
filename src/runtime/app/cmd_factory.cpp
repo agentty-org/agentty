@@ -1571,11 +1571,20 @@ std::uint64_t next_tool_exec_seq() noexcept {
     return seq.fetch_add(1, std::memory_order_relaxed) + 1;   // never 0
 }
 
+std::vector<std::string> commit_trailers_for(const Model& m, const Message& turn) {
+    if (!m.d.persisted.commit_attribution) return {};
+    // The turn's own model; the session's when an older turn didn't record one.
+    const std::string& model = !turn.served_model.value.empty()
+        ? turn.served_model.value : m.d.model_id.value;
+    return {tools::attribution_trailer(model)};
+}
+
 Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
                   http::CancelTokenPtr cancel, std::uint64_t exec_seq,
                   std::uint64_t approved_def_hash,
                   std::vector<std::string> active_skills,
-                  std::string conversation) {
+                  std::string conversation,
+                  std::vector<std::string> commit_trailers) {
     // task_isolated, NOT task: a tool that wedges (e.g. read on a hung NFS
     // mount, bash on a process that won't unblock) must not consume a slot
     // in the shared BG worker pool. With Cmd::task the pool's max workers
@@ -1591,13 +1600,15 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
            http::CancelTokenPtr cancel, std::uint64_t exec_seq,
            std::uint64_t approved_def_hash,
            std::vector<std::string> active_skills,
-           std::string conversation) {
+           std::string conversation,
+           std::vector<std::string> commit_trailers) {
             // Everything this call carries besides its arguments, handed to
             // the tool explicitly. The skills the model can already see were
             // derived by the reducer from the visible transcript.
             agentty::tools::CallContext ctx;
             ctx.active_skills = std::move(active_skills);
             ctx.conversation  = std::move(conversation);
+            ctx.commit_trailers = std::move(commit_trailers);
             // Every result this worker sends carries its exec_seq, so the
             // reducer can drop it if the call it was started for is gone.
             auto out = [exec_seq](ToolExecOutput o) {
@@ -1746,7 +1757,7 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
         },
         std::move(id), std::move(tool_name), std::move(args),
         std::move(cancel), exec_seq, approved_def_hash,
-        std::move(active_skills), std::move(conversation));
+        std::move(active_skills), std::move(conversation), std::move(commit_trailers));
 }
 
 namespace {
@@ -2283,7 +2294,8 @@ Cmd kick_pending_tools(Model& m) {
                                         std::move(cancel), seq,
                                         tc.approved_def_hash,
                                         std::move(active_skills),
-                                        m.d.current.id.value));
+                                        m.d.current.id.value,
+                                        commit_trailers_for(m, last)));
 
                 // Tool wall-clock watchdog removed at user request.
                 // Tools now run for as long as their worker takes;

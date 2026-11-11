@@ -1673,7 +1673,9 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                                               std::move(cancel), seq,
                                               /*approved_def_hash=*/0,
                                               std::move(active_skills),
-                                              m.d.current.id.value);
+                                              m.d.current.id.value,
+                                              cmd::commit_trailers_for(
+                                                  m, m.d.current.messages.back()));
                     }
                 }
             }

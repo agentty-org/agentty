@@ -299,6 +299,9 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
                 case se::Action::ToggleAutoCompact: {
                     return reenter(m, Msg{ToggleAutoCompact{}});
                 }
+                case se::Action::ToggleCommitAttribution: {
+                    return reenter(m, Msg{ToggleCommitAttribution{}});
+                }
                 case se::Action::CycleToolLoading: {
                     return reenter(m, Msg{CycleToolLoading{}});
                 }

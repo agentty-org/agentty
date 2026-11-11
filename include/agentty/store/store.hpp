@@ -319,6 +319,9 @@ struct Settings {
     // turn, or when idle before the prompt cache expires). Off leaves it to
     // /compact; requests are still trimmed to fit, so nothing overflows.
     bool                 auto_compact = true;
+    // Add a "Co-authored-by: agentty (<model>)" trailer to commits the
+    // agent makes, so `git log` tells them apart from yours (#59).
+    bool                 commit_attribution = false;
 };
 
 template <class S>

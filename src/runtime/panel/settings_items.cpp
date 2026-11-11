@@ -114,6 +114,17 @@ std::vector<Item> general(const Model& m) {
         out.push_back(std::move(i));
     }
     {
+        // #59. Off by default: it changes what lands in your repo.
+        Item i;
+        i.primary   = "Credit the model in commits";
+        i.secondary = m.d.persisted.commit_attribution
+            ? "on \xc2\xb7 agent commits end with Co-authored-by: agentty (model)"
+            : "off \xc2\xb7 agent commits look like yours";
+        i.hint      = "Enter: toggle";
+        i.action    = Action::ToggleCommitAttribution;
+        out.push_back(std::move(i));
+    }
+    {
         // #98. What each mode does, in the row, so nobody has to look it up.
         const auto mode = agentty::tools::plan::loading_from(m.d.persisted.tool_loading);
         Item i;

@@ -138,7 +138,14 @@ void soft_trim_to_ceiling(std::vector<Message>& v, int ceiling);
                                       std::vector<std::string> active_skills = {},
                                       // The thread the call serves, for
                                       // CallContext::conversation.
-                                      std::string conversation = {});
+                                      std::string conversation = {},
+                                      // Trailers for any commit the call
+                                      // makes (commit_trailers_for).
+                                      std::vector<std::string> commit_trailers = {});
+
+// The model-attribution trailer for tools run from `turn` when the setting
+// is on (#59), naming the model that wrote that turn. Empty when off.
+[[nodiscard]] std::vector<std::string> commit_trailers_for(const Model& m, const Message& turn);
 
 // Inspect the latest assistant turn and either fire off pending tool calls,
 // request permission, or kick the follow-up stream once tool results are in.

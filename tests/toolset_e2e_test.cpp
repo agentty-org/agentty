@@ -75,6 +75,8 @@ bool has(const tools::ExecResult& r, std::string_view needle) {
 // on Windows. A case that exercises shell SEMANTICS picks the spelling for
 // the shell that will actually run it; the assertions stay identical.
 #if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
 constexpr const char* posix_or_cmd(const char*, const char* cmd) { return cmd; }
 #else
 constexpr const char* posix_or_cmd(const char* posix, const char*) { return posix; }
@@ -88,6 +90,19 @@ void write_file(const fs::path& p, std::string_view body) {
 
 bool git_available() {
     return std::system("git --version >/dev/null 2>&1") == 0;
+}
+
+// stdout of `git -C root <args>`, for checking what a tool committed.
+std::string git_out(const fs::path& root, std::initializer_list<std::string_view> args) {
+    std::string cmd = "git -C \"" + root.string() + "\"";
+    for (auto a : args) { cmd += " \""; cmd += a; cmd += '"'; }
+    std::string out;
+    if (FILE* p = popen(cmd.c_str(), "r")) {
+        char buf[4096];
+        while (const auto n = std::fread(buf, 1, sizeof buf, p)) out.append(buf, n);
+        pclose(p);
+    }
+    return out;
 }
 
 } // namespace
@@ -982,6 +997,54 @@ int main() {
         auto blame = run("git_blame", {{"path", (root / "src" / "hello.txt").string()},
                                         {"start_line", 1}, {"end_line", 1}});
         check(has(blame, "changed content"), "git_blame: annotates a focused line range");
+
+        // #59: with attribution on, the commit names the model, once, in
+        // git's own trailer block.
+        {
+            write_file(root / "src" / "attrib.txt", "x\n");
+            const auto td = tools::find("git_commit");
+            agentty::tools::CallContext ctx;
+            ctx.commit_trailers = {agentty::tools::attribution_trailer("claude-opus-4-5")};
+            auto c = tool::DynamicDispatch::execute_with(
+                agtest::cap(), td, "git_commit",
+                json{{"message", "attributed commit\n\nbody line"},
+                     {"stage_all", true}, {"path", root.string()}}, ctx);
+            check(c.has_value(), "git_commit with a trailer commits");
+            const auto body = git_out(root, {"log", "-1", "--format=%B"});
+            // %B ends with the message's newline plus one git adds.
+            check(body == "attributed commit\n\nbody line\n\n"
+                          "Co-authored-by: agentty (claude-opus-4-5) <noreply@agentty.org>\n\n",
+                  "the trailer ends the message: [" + body + "]");
+            const auto parsed = git_out(root, {"log", "-1",
+                "--format=%(trailers:key=Co-authored-by,valueonly)"});
+            check(parsed.find("agentty (claude-opus-4-5)") != std::string::npos,
+                  "git parses it as a trailer");
+            const auto plain = git_out(root, {"log", "-2", "--skip=1", "--format=%B"});
+            check(plain.find("Co-authored-by") == std::string::npos,
+                  "commits without the setting stay plain");
+
+            // The model already wrote a trailer block: ours joins it, and an
+            // amend that keeps our trailer doesn't add a second.
+            write_file(root / "src" / "attrib.txt", "y\n");
+            const std::string trailer = agentty::tools::attribution_trailer("claude-opus-4-5");
+            auto c2 = tool::DynamicDispatch::execute_with(
+                agtest::cap(), td, "git_commit",
+                json{{"message", "two\n\nSigned-off-by: A <a@x>\n" + trailer},
+                     {"stage_all", true}, {"path", root.string()}}, ctx);
+            check(c2.has_value(), "git_commit with the trailer already there");
+            const auto two = git_out(root, {"log", "-1", "--format=%B"});
+            check(two == "two\n\nSigned-off-by: A <a@x>\n" + trailer + "\n\n",
+                  "no duplicate trailer: [" + two + "]");
+            write_file(root / "src" / "attrib.txt", "z\n");
+            auto c3 = tool::DynamicDispatch::execute_with(
+                agtest::cap(), td, "git_commit",
+                json{{"message", "three\n\nSigned-off-by: A <a@x>"},
+                     {"stage_all", true}, {"path", root.string()}}, ctx);
+            check(c3.has_value(), "git_commit into a trailer block");
+            const auto three = git_out(root, {"log", "-1", "--format=%B"});
+            check(three == "three\n\nSigned-off-by: A <a@x>\n" + trailer + "\n\n",
+                  "joins the existing trailer block: [" + three + "]");
+        }
     } else {
         std::printf("skip: git not available — git_* section skipped\n");
     }

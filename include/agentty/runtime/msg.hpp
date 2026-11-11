@@ -1311,6 +1311,7 @@ struct ToggleChangesStrip {};
 struct ToggleAutoTitle {};
 // Compact the context on its own when it nears the window.
 struct ToggleAutoCompact {};
+struct ToggleCommitAttribution {};
 // MCP tool loading: auto → load all → load on demand (#98).
 struct CycleToolLoading {};
 struct RestoreCheckpoint { CheckpointId id; };
@@ -1599,7 +1600,7 @@ using SandboxMsg = std::variant<
     SandboxEditList, SandboxListKey, SandboxListPaste, SandboxListClose>;
 
 using MetaMsg = std::variant<
-    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, CycleToolLoading,
+    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, CycleToolLoading,
     RestoreCheckpoint, CheckpointRestored,
     ToggleRetrievedExpanded,
     TerminalFocus,

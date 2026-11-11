@@ -1379,6 +1379,7 @@ provider::StreamResult run_one_completion(Thread& thread,
 
     Message asst;
     asst.role = Role::Assistant;
+    asst.served_model = ModelId{req.model};   // who wrote this turn
     StopReason stop = StopReason::Unspecified;
     // Usage can arrive more than once per request (start + delta), each one
     // cumulative, so keep the biggest and add it once at the end.
@@ -2034,6 +2035,10 @@ public:
                     // deadline, the parent's card for live output (as before).
                     CallContext tool_ctx = child;
                     tool_ctx.active_skills = skills::active_in(::agentty::visible_text(thread));
+                    // Attribution names the model that wrote this turn.
+                    if (!tool_ctx.commit_trailers.empty() && !thread.messages.empty())
+                        tool_ctx.commit_trailers = {attribution_trailer(
+                            thread.messages.back().served_model.value)};
                     auto res = tool::DynamicDispatch::execute(child.capability(), tc.name.value, tc.args, tool_ctx);
                     // Same tool.exec record the main loop emits, so a headless
                     // `agentty run` and a subagent turn are as diagnosable as

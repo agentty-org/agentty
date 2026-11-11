@@ -156,6 +156,9 @@ struct CallContext {
     // The thread the call serves. A subagent sends it as its gateway session
     // id, so its requests stick with the parent's (#118). Empty: none.
     std::string conversation;
+    // Trailers for any commit the call makes (the model attribution, #59).
+    // Empty: none. A subagent inherits its parent's.
+    std::vector<std::string> commit_trailers;
     // The call is cancelled when any of these stops (Esc, a newer turn,
     // shutdown, the enclosing subagent run).
     std::vector<std::stop_token> cancel;
@@ -424,6 +427,15 @@ struct Found {
 // race-prone. Cheap and synchronous; safe to call from the UI thread.
 void invalidate_mcp_catalog(Io);
 
+
+// The commit trailer naming the model behind an agent commit (#59), in
+// aider's shape so tools that read Co-authored-by understand it.
+[[nodiscard]] inline std::string attribution_trailer(std::string_view model) {
+    std::string m{model.empty() ? std::string_view{"unknown model"} : model};
+    // Keep the name from breaking the trailer: no newlines or angle brackets.
+    std::erase_if(m, [](char c) { return c == '\n' || c == '\r' || c == '<' || c == '>'; });
+    return "Co-authored-by: agentty (" + m + ") <noreply@agentty.org>";
+}
 
 } // namespace agentty::tools
 

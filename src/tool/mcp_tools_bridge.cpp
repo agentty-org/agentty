@@ -691,6 +691,7 @@ std::vector<ToolDef> build_mcp_tool_defs() {
             ::mcp::cap::Request req{tool_name, args};
             req.progress = ctx.progress;
             req.reader   = ctx.reader;
+            req.commit_trailers = ctx.commit_trailers;
             req.host     = &host;
             req.scope_workspace   = ctx.workspace;
             req.scope_extra_roots = ctx.extra_roots;
