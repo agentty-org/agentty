@@ -1158,12 +1158,18 @@ TEST_CASE("thinking reader: follows the bottom, shows what's known") {
     m.ui.tool_viewer_tail = false;
     const auto top = screen();
     if (std::getenv("THINKING_DUMP")) std::fputs(top.c_str(), stderr);
-    const auto header_end = top.find('\n', top.find("Opus 4.5"));
-    const std::string header = top.substr(0, header_end);
-    for (const char* want : {"Opus 4.5", "high effort", "tok", "thinking"})
+    const auto opus = top.find("Opus 4.5");
+    const auto header_start = top.rfind('\n', opus) + 1;
+    const auto header_end = top.find('\n', opus);
+    const std::string header = top.substr(header_start, header_end - header_start);
+    for (const char* want : {"Opus 4.5", "high effort", "tok", "Thinking"})
         check(header.find(want) != std::string::npos, std::string{"header row shows "} + want);
-    check(header.find("full t") == std::string::npos || header.find("full text") != std::string::npos,
-          "a fact that doesn't fit is dropped whole, never cut");
+    {
+        // "full text" is either whole or absent, never cut to "full t".
+        const bool whole = header.find("full text") != std::string::npos;
+        const bool cut   = !whole && header.find("full") != std::string::npos;
+        check(!cut, "a fact that doesn't fit is dropped whole, never cut");
+    }
     check(top.find("line 0") < top.find('\n', header_end + 1) + 80 * 2,
           "the thinking starts right under the header");
     check(top.find("thought for") == std::string::npos && top.find("kind ") == std::string::npos,
@@ -1188,6 +1194,62 @@ TEST_CASE("thinking reader: follows the bottom, shows what's known") {
     const std::string wrow = wide.substr(wl, wide.find('\n', wl) - wl);
     check(wrow.find("full text") != std::string::npos, "wide: every fact fits on the row");
     setenv("COLUMNS", "80", 1);
+}
+
+TEST_CASE("thinking reader: says when it's thinking and when it's done") {
+    maya::testing::freeze_anim_clock(10'000'000);
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.thinking = "working it out";
+    a.id = A::MessageId{"live-a"};
+    // Thinking opened 3 s ago on the animation clock.
+    a.reasoning_started_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        maya::anim_now().time_since_epoch()).count() - 3'000;
+    m.d.current.messages = {u, a};
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "100", 1);
+    auto screen = [&] {
+        auto el = U::tool_output_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(96, 30, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        std::string all;
+        for (int y = 0; y < 30; ++y) {
+            for (int x = 0; x < 96; ++x) {
+                const char32_t ch = canvas.get(x, y).character;
+                all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+            }
+            all += '\n';
+        }
+        return all;
+    };
+    auto live = screen();
+    check(live.find("Thinking") != std::string::npos && live.find("LIVE") != std::string::npos,
+          "while thinking: says Thinking, and LIVE on the border");
+    check(live.find("3s") != std::string::npos, "shows how long so far");
+    // The timer ticks with no new text.
+    maya::testing::advance_anim_clock_ms(2'000);
+    check(screen().find("5s") != std::string::npos, "the timer ticks without new text");
+
+    // It finishes.
+    auto& msg = m.d.current.messages.back();
+    msg.reasoning_ms = 5'000;
+    msg.reasoning_started_ms = 0;
+    agentty::app::detail::refresh_thinking_viewer(m, msg);
+    auto done = screen();
+    check(done.find("Done thinking") != std::string::npos, "just finished: says Done thinking");
+    check(done.find("LIVE") == std::string::npos, "and LIVE is gone");
+    check(done.find("5.0s") != std::string::npos, "with the final time");
+    maya::testing::advance_anim_clock_ms(3'000);
+    check(screen().find("Reasoned") != std::string::npos, "then settles to Reasoned");
+    maya::testing::unfreeze_anim_clock();
 }
 
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {

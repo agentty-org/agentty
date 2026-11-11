@@ -7,6 +7,7 @@
 
 #include <maya/anim/text_reveal.hpp>   // the transcript's typewriter
 #include <maya/core/animation.hpp>   // RateCursor
+#include <maya/widget/spinner.hpp>      // the transcript's spinner frames
 #include <maya/core/anim_clock.hpp>
 #include <maya/core/motion.hpp>      // keep_animating
 #include <maya/element/text.hpp>          // decode_utf8
@@ -272,12 +273,54 @@ Element tool_output_panel(const Model& m) {
                                       : tool_category_color(e.name);
     // Still arriving: the body follows its newest line.
     const bool following_kind = e.is_live || e.streaming;
+
+    // Thinking: is it still going, read from the message itself each frame
+    // (the entry is a snapshot from the last delta, so a quiet stretch would
+    // freeze it), and how long it's been. Same words and spinner as the
+    // transcript's block: "Thinking ⠋" while live, "Reasoned" once done.
+    bool thinking_live = false;
+    std::int64_t thought_ms = -1;
+    if (e.thinking) {
+        for (const auto& msg : m.d.current.messages)
+            if (msg.id == e.source) {
+                // The transcript block's clock: it advances every frame, the
+                // model's `now` only on a message.
+                const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    maya::anim_now().time_since_epoch()).count();
+                thinking_live = msg.thinking_open();
+                thought_ms = msg.thinking_elapsed_ms(now_ms);
+                break;
+            }
+    }
+    std::string spin;
+    if (thinking_live) {
+        constexpr auto f = maya::detail::get_spinner_frames<maya::SpinnerStyle::Dots>();
+        spin = std::string{f.frames[maya::anim::frame_index(
+            static_cast<std::size_t>(f.count), static_cast<double>(f.interval) * 1000.0)]};
+        // The spinner wakes itself; the timer's next whole second does too.
+        maya::anim::keep_animating_after(1000 - (thought_ms % 1000));
+    }
+    // Just finished: say so loudly for a moment, then settle. Tracked per
+    // entry, so opening an old block doesn't flash.
+    static std::string was_live_key;
+    static std::int64_t done_at_ms = 0;
+    const std::string ekey{tool_output::entry_key(e)};
+    const std::int64_t now_anim = maya::anim_now_ms();
+    if (e.thinking && thinking_live) was_live_key = ekey;
+    else if (e.thinking && was_live_key == ekey) { was_live_key.clear(); done_at_ms = now_anim; }
+    const bool just_done = e.thinking && !thinking_live && done_at_ms != 0
+                           && now_anim - done_at_ms < 2500;
+    if (just_done) maya::anim::keep_animating_after(2500 - (now_anim - done_at_ms));
+    auto clock = [](std::int64_t ms) {
+        return ms < 60'000 ? std::format("{}s", ms / 1000)
+                           : std::format("{}m {:02}s", ms / 60'000, (ms / 1000) % 60);
+    };
     const std::string title = e.thinking && e.turn > 0
         ? e.title + " \xc2\xb7 turn " + std::to_string(e.turn) : e.title;
-    cfg.title    = (e.is_live ? std::string(" \xe2\x97\x8f LIVE \xc2\xb7 ") + title
+    cfg.title    = (e.is_live || thinking_live ? std::string(" \xe2\x97\x8f LIVE \xc2\xb7 ") + title
                               : " " + title)
                  + " \xc2\xb7 " + pos + " ";
-    cfg.accent   = tool_hue;
+    cfg.accent   = just_done ? Color{success} : tool_hue;
     cfg.selected = -1;   // read-only — no cursor row; manual scroll rules
     // Normal BODY chrome is 9 rows: border+padding (4), header+separator
     // (2), blank+range+hints footer (3). Below 10 terminal rows there is
@@ -297,37 +340,51 @@ Element tool_output_panel(const Model& m) {
         std::string detail = e.thinking ? std::string{} : e.detail;
         std::string trailing = e.trailing;
         // The border already names the turn; don't spend the row on it twice.
-        const std::string head = e.thinking ? e.title : title;
+        // Thinking says what state it's in, the transcript's way.
+        const std::string head = !e.thinking ? title
+                               : thinking_live ? "Thinking " + spin
+                               : just_done     ? std::string{"\xe2\x9c\x93 Done thinking"}
+                                               : std::string{"\xe2\x9c\x93 Reasoned"};   // ✓
+        std::vector<std::string> mid;
         if (e.thinking) {
             // The facts share the header row: model, effort, kind in the
             // middle, time and tokens on the right. No extra rows. What
             // doesn't fit is dropped whole, last first, never cut mid-word.
             std::string time, tokens;
-            std::vector<std::string> mid;
             for (const auto& [k, v] : e.facts) {
-                if (k == "thought for") time = v;
-                else if (k == "tokens") tokens = v;
-                else if (k != "status") mid.push_back(k == "blocks" ? v + " blocks" : v);
+                if (k == "tokens") tokens = v;
+                else if (k != "status" && k != "thought for")
+                    mid.push_back(k == "blocks" ? v + " blocks" : v);
             }
+            // Live time, ticking every second; settled time to a tenth.
+            if (thought_ms >= 100)
+                time = thinking_live ? clock(thought_ms)
+                                     : std::format("{:.1f}s", static_cast<double>(thought_ms) / 1000.0);
             trailing = tokens.empty() ? time : time.empty() ? tokens : time + " \xc2\xb7 " + tokens;
-            if (e.streaming) trailing += " \xc2\xb7 thinking\xe2\x80\xa6";
-            const int room = panel_terminal_cols() - 8
-                           - maya::string_width(" " + head) - maya::string_width("  " + trailing + " ");
-            for (const auto& item : mid) {
-                const std::string next = detail.empty() ? item : detail + " \xc2\xb7 " + item;
-                if (maya::string_width("  " + next) > room) break;
-                detail = next;
-            }
         }
-        cfg.header.push_back(
-            hstack().width(Dimension::percent(100))(
-                text(" " + head, fg_bold(tool_hue)) | clip | shrink(1.0f),
-                text(detail.empty() ? "" : "  " + detail, fg_of(fg))
-                    | clip | grow(1.0f) | shrink(50.0f),
-                text("  " + trailing + " ", e.failed ? fg_of(danger)
-                                         : e.streaming ? fg_of(role_brand) : fg_dim(muted))
-                    | clip | shrink(1.0f)
-            ).build());
+        const Style head_st  = e.thinking && !thinking_live ? fg_bold(success) : fg_bold(tool_hue);
+        const Style trail_st = e.failed ? fg_of(danger)
+                             : thinking_live ? fg_of(role_brand) : fg_dim(muted);
+        // Built at the row's real width, so the facts that fit are chosen
+        // against what's actually there: whole ones, in order, never a cut word.
+        cfg.header.push_back(component(
+            [head, detail, trailing, mid, head_st, trail_st, fgc = fg](int w, int) -> Element {
+                std::string d = detail;
+                if (!mid.empty()) {
+                    const int room = w - string_width(" " + head) - string_width("  " + trailing + " ");
+                    for (const auto& item : mid) {
+                        const std::string next = d.empty() ? item : d + " \xc2\xb7 " + item;
+                        if (string_width("  " + next) > room) break;
+                        d = next;
+                    }
+                }
+                return hstack().width(Dimension::percent(100))(
+                    text(" " + head, head_st) | clip | shrink(1.0f),
+                    text(d.empty() ? "" : "  " + d, fg_of(fgc))
+                        | clip | grow(1.0f) | shrink(50.0f),
+                    text("  " + trailing + " ", trail_st) | clip | shrink(1.0f)
+                ).build();
+            }));
         cfg.header.push_back(sep);
     }
 
