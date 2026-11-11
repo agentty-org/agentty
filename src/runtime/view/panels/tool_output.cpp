@@ -5,6 +5,10 @@
 
 #include "panels_prologue.hpp"
 
+#include <maya/anim/text_reveal.hpp>   // the transcript's typewriter
+#include <maya/core/animation.hpp>   // RateCursor
+#include <maya/core/anim_clock.hpp>
+#include <maya/core/motion.hpp>      // keep_animating
 #include <maya/element/text.hpp>          // decode_utf8
 #include <maya/text/unicode_width.hpp>   // char_width
 #include <maya/widget/tool_body_preview.hpp>
@@ -12,6 +16,69 @@
 #include "agentty/runtime/panel/tool_output.hpp"
 
 namespace agentty::ui {
+
+namespace {
+
+// The overlay's reveal: the same RateCursor pacing and decorate_text_reveal
+// effect the transcript's StreamingMarkdown uses, on the overlay's own rows.
+// One per open entry; a different entry, or text that shrank, starts fresh
+// at the edge (only text arriving while you watch types in).
+struct OverlayReveal {
+    std::string            key;
+    maya::anim::RateCursor cursor{60.0, 0.55};
+    std::size_t            total_cp = 0;    // codepoints the entry has now
+    std::int64_t           last_us  = 0;
+    bool                   ramped   = false;   // finish deadline armed
+};
+
+OverlayReveal& overlay_reveal() {
+    static OverlayReveal r;   // UI thread only, like the body cache
+    return r;
+}
+
+// Byte offset of codepoint `cp` in `s` (s.size() when past the end).
+std::size_t cp_offset(std::string_view s, std::size_t cp) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < s.size(); ++i)
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) {
+            if (n == cp) return i;
+            ++n;
+        }
+    return s.size();
+}
+
+// Advance the reveal for `e` and return how many codepoints are typed.
+// Same pacing as the transcript: reasoning 60 cps / 0.55 s lag, adaptive
+// 45..280; tool output 45 / 0.40, adaptive 25..180.
+std::size_t advance_reveal(const tool_output::Entry& e, std::size_t total, bool running) {
+    auto& r = overlay_reveal();
+    const std::string key = std::string{tool_output::entry_key(e)};
+    const std::int64_t now_us = maya::anim_now_us();
+    if (key != r.key || total < r.total_cp) {
+        // Opened on this entry, or it was replaced: show what's there.
+        r = OverlayReveal{};
+        r.key = key;
+        if (e.thinking) {
+            r.cursor.set_pacing(60.0, 0.55);
+            r.cursor.set_adaptive(true, 45.0, 280.0);
+        } else {
+            r.cursor.set_pacing(45.0, 0.40);
+            r.cursor.set_adaptive(true, 25.0, 180.0);
+        }
+        r.cursor.set_pos(static_cast<double>(total));
+    }
+    r.total_cp = total;
+    const double dt = r.last_us == 0 ? 0.0
+        : std::min(0.120, static_cast<double>(now_us - r.last_us) / 1e6);
+    r.last_us = now_us;
+    // Settled: finish the glide quickly instead of at the live pace.
+    if (!running && !r.ramped) { r.cursor.set_deadline(0.25); r.ramped = true; }
+    if (running && r.ramped)   { r.cursor.clear_deadline(); r.ramped = false; }
+    const double pos = r.cursor.tick(static_cast<double>(total), dt);
+    return std::min(total, static_cast<std::size_t>(pos));
+}
+
+} // namespace
 
 namespace {
 // Split one line into rows of at most `w` columns. Breaks at spaces only
@@ -259,6 +326,12 @@ Element tool_output_panel(const Model& m) {
         int           out_lines   = 0;   // output lines (pre-wrap)
         std::size_t   words       = 0;   // thinking: word count
         bool          plain       = false;
+        // For the reveal: each row's text span in `shown`, in codepoints
+        // (len 0 for rows with no text), and the total. Filled for plain
+        // and thinking bodies only; empty = this body doesn't reveal.
+        std::vector<std::size_t> row_cp_begin, row_cp_len;
+        std::size_t   total_cp    = 0;
+        std::size_t   reveal_row0 = 0;   // first body row (after the $ command)
     };
     static BodyCache cache;   // UI thread only, like the other pickers' statics
 
@@ -284,6 +357,9 @@ Element tool_output_panel(const Model& m) {
         cache.out_lines = 0;
         cache.words     = 0;
         cache.plain     = false;
+        cache.row_cp_begin.clear();
+        cache.row_cp_len.clear();
+        cache.total_cp  = 0;
 
         const Style hit_st = Style{}.with_fg(Color::slot(ThemeSlot::Background))
                                     .with_bg(Color::slot(ThemeSlot::Warning)).with_bold();
@@ -367,6 +443,27 @@ Element tool_output_panel(const Model& m) {
                 || bp.kind == Kind::FileRead || bp.kind == Kind::FileWrite
                 || bp.kind == Kind::TodoList);
         const std::string shown = tool_output::display_text(e);
+        // Codepoint position of a byte in `shown`, walked forward as rows are
+        // built (rows come in order, so this is linear overall).
+        std::size_t walk_byte = 0, walk_cp = 0;
+        auto cp_at = [&](const char* p) {
+            const auto b = static_cast<std::size_t>(p - shown.data());
+            for (; walk_byte < b && walk_byte < shown.size(); ++walk_byte)
+                if ((static_cast<unsigned char>(shown[walk_byte]) & 0xC0) != 0x80) ++walk_cp;
+            return walk_cp;
+        };
+        auto note_span = [&](std::string_view v) {
+            cache.row_cp_begin.push_back(cp_at(v.data()));
+            std::size_t n = 0;
+            for (const char c : v)
+                if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++n;
+            cache.row_cp_len.push_back(n);
+        };
+        auto note_blank = [&](const char* p) {
+            cache.row_cp_begin.push_back(cp_at(p));
+            cache.row_cp_len.push_back(0);
+        };
+        cache.reveal_row0 = cache.rows.size();
 
         if (structured) {
             bp.show_all   = true;       // the full output, no "⋯ N more"
@@ -412,11 +509,13 @@ Element tool_output_panel(const Model& m) {
                     strong = true;
                 }
                 if (body.empty()) {
+                    note_blank(ln.data());
                     cache.rows.push_back(text("\xe2\x94\x83", fg_dim(role_brand))   // ┃
                                          | height(1) | overflow(Overflow::Hidden));
                 } else {
                     for (auto v : wrap_rows(body, text_w)) {
                         note_hits(v);
+                        note_span(v);
                         cache.rows.push_back(hstack().width(Dimension::percent(100))(
                             text("\xe2\x94\x83 ", fg_dim(role_brand)),
                             line_row(v, strong ? beat : prose, false)
@@ -429,6 +528,7 @@ Element tool_output_panel(const Model& m) {
             }
             cache.plain     = true;
             cache.out_lines = static_cast<int>(lines);
+            cache.total_cp  = cp_at(shown.data() + shown.size());
             bool in = false;
             for (const char ch : shown) {
                 const bool sp = ch == ' ' || ch == '\n' || ch == '\t';
@@ -460,6 +560,7 @@ Element tool_output_panel(const Model& m) {
                 bool first = true;
                 for (auto v : wrap_rows(lines[i], text_w)) {
                     note_hits(v);
+                    if (v.empty()) note_blank(lines[i].data()); else note_span(v);
                     cache.rows.push_back(hstack().width(Dimension::percent(100))(
                         text(first ? " " + num + " " : blank_gutter, fg_dim(muted)),
                         text(first ? "\xe2\x94\x82 " : "\xe2\x94\x8a ", fg_dim(pipe_hue)),   // │ ┊
@@ -470,6 +571,7 @@ Element tool_output_panel(const Model& m) {
                     first = false;
                 }
             }
+            cache.total_cp = cp_at(shown.data() + shown.size());
         } else if (!e.is_live) {
             cache.rows.push_back(text("  (no output)", fg_italic(muted))
                                  | height(1) | overflow(Overflow::Hidden));
@@ -494,6 +596,68 @@ Element tool_output_panel(const Model& m) {
     const int y_before = sc.y;
 
     const Panel::Config base = std::move(cfg);
+
+    // ── Reveal ── the transcript's typewriter on text arriving while you
+    // watch: rows past the cursor are blank, the row at the cursor gets
+    // decorate_text_reveal with the transcript's own tunables. Gated by the
+    // same Motion pref and env switches. Only plain and thinking bodies.
+    const bool running = e.is_live || e.streaming;
+    const bool reveal_on = m.env.reveal && m.env.reveal_typewriter
+                           && agentty::ui_prefs::animations_on()
+                           && !cache.row_cp_begin.empty() && o->query.empty();
+    std::size_t typed = cache.total_cp;
+    if (reveal_on) typed = advance_reveal(e, cache.total_cp, running);
+    const bool revealing = reveal_on && typed < cache.total_cp;
+    if (revealing) maya::anim::keep_animating();
+    auto reveal_row = [&](int i, Element row) -> Element {
+        if (!revealing) return row;
+        const auto k = static_cast<std::size_t>(i) - cache.reveal_row0;
+        if (static_cast<std::size_t>(i) < cache.reveal_row0 || k >= cache.row_cp_begin.size())
+            return row;
+        const std::size_t b = cache.row_cp_begin[k], n = cache.row_cp_len[k];
+        if (n == 0 || b + n <= typed) return row;               // fully typed
+        if (b >= typed) return text("") | height(1);            // not yet
+        // The row with the cursor: clip its text leaf, then decorate it.
+        TextElement* leaf = nullptr;
+        std::function<void(Element&)> find = [&](Element& el) {
+            std::visit([&](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, TextElement>) leaf = &node;
+                else if constexpr (std::is_same_v<T, BoxElement>)
+                    for (auto& c : node.children) find(c);
+            }, el.inner);
+        };
+        find(row);
+        if (!leaf) return row;
+        const std::size_t keep_cp = typed - b;
+        const std::size_t cut = cp_offset(leaf->content, keep_cp);
+        std::erase_if(leaf->runs, [&](const maya::StyledRun& r) { return r.byte_offset >= cut; });
+        for (auto& r : leaf->runs)
+            r.byte_length = std::min(r.byte_length, cut - r.byte_offset);
+        maya::anim::TextRevealParams rp;
+        rp.ms_total     = maya::anim_now_ms();
+        rp.edge_age_ms  = 0;
+        rp.revealed_cp  = keep_cp;
+        rp.total_cp     = n;
+        rp.clip_active  = true;
+        rp.clipped_unrevealed_cp = n - keep_cp;
+        rp.line_bounded = true;
+        rp.scramble_glyph_safe = true;
+        rp.wrap_width   = 0;
+        // Speed-scaled like the transcript, so the shimmer covers the same
+        // spatial window at any rate.
+        const double rate = overlay_reveal().cursor.effective_rate();
+        const double scale = std::clamp(rate > 1.0 ? 45.0 / rate : 1.0, 0.35, 2.5);
+        rp.scramble_ms  = static_cast<std::int64_t>(rp.scramble_ms * scale);
+        rp.char_step_ms = static_cast<std::int64_t>(rp.char_step_ms * scale);
+        if (agentty::ui_prefs::reveal_decoration_on() && m.env.reveal_decorate)
+            (void)maya::anim::decorate_text_reveal(*leaf, rp);
+        else
+            leaf->content.resize(cut);
+        leaf->cached_width = -1;
+        return row;
+    };
+
     auto assemble = [&](int vh, bool hints, bool header) {
         Panel::Config c = base;
         if (!header) c.header.clear();
@@ -514,7 +678,7 @@ Element tool_output_panel(const Model& m) {
                     cache.rows[static_cast<std::size_t>(i)] | grow(1.0f) | shrink(1.0f)
                 ).build() | height(1) | overflow(Overflow::Hidden));
             else
-                c.prebuilt.push_back(cache.rows[static_cast<std::size_t>(i)]);
+                c.prebuilt.push_back(reveal_row(i, cache.rows[static_cast<std::size_t>(i)]));
         }
         if (total_rows == 0)
             c.prebuilt.push_back(text("  waiting for output\xe2\x80\xa6", fg_italic(muted))

@@ -22,6 +22,7 @@
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 #include "maya/widget/tool_body_preview.hpp"
+#include <maya/core/anim_clock.hpp>
 #include <maya/render/canvas.hpp>
 #include <maya/render/renderer.hpp>
 #include <maya/style/theme.hpp>
@@ -1050,6 +1051,54 @@ TEST_CASE("thinking reader: follows a new block only while watching") {
     agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
     check(o()->entries[(std::size_t)o()->index].output == "second" && o()->fresh_above == 1,
           "reading: you stay, the new block is counted");
+}
+
+TEST_CASE("thinking reader: new text types in like the transcript") {
+    maya::testing::freeze_anim_clock(5'000'000);
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.thinking = "FIRST_PART is already here.";
+    a.reasoning_started_ms = 1;
+    a.id = A::MessageId{"a"};
+    m.d.current.messages = {u, a};
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    setenv("LINES", "30", 1);
+    setenv("COLUMNS", "80", 1);
+    auto screen = [&] {
+        auto el = U::tool_output_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(76, 30, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        std::string all;
+        for (int y = 0; y < 30; ++y) {
+            for (int x = 0; x < 76; ++x) {
+                const char32_t ch = canvas.get(x, y).character;
+                all.push_back(ch > 0 && ch < 0x80 ? static_cast<char>(ch) : ' ');
+            }
+            all += '\n';
+        }
+        return all;
+    };
+    check(screen().find("FIRST_PART") != std::string::npos, "text already there shows at once");
+
+    m.d.current.messages.back().thinking += "\n\nSECOND_PART arrives while you watch it.";
+    agentty::app::detail::refresh_thinking_viewer(m, m.d.current.messages.back());
+    maya::testing::advance_anim_clock_ms(16);
+    check(screen().find("SECOND_PART arrives while you watch it.") == std::string::npos,
+          "new text doesn't land all at once");
+    for (int f = 0; f < 120; ++f) {
+        maya::testing::advance_anim_clock_ms(16);
+        (void)screen();
+    }
+    check(screen().find("SECOND_PART arrives while you watch it.") != std::string::npos,
+          "it finishes typing in");
+    maya::testing::unfreeze_anim_clock();
 }
 
 TEST_CASE("thinking reader: ^U opens the newest block, arrows walk, ^U closes") {
