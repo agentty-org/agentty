@@ -25,7 +25,7 @@ Your `~/.ssh` keys, `~/.aws` credentials, cloud tokens, and any `.env` file in y
 The startup banner tells you:
 
 ```
-agentty: sandbox: active (claybin)
+agentty: sandbox: active (claybin) · turn it off entirely with --sandbox off
 ```
 
 That line is a **real test, not a claim**. Before printing it, agentty actually tries to build a sandbox and watches whether the kernel allows it. A sandbox tool that's installed but can't run is reported as unavailable — because the worst possible failure here is confidently announcing protection you don't have.

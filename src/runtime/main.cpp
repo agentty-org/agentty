@@ -1816,8 +1816,12 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             framed += '\n';
             fputs_utf8(stderr, framed);
         } else {
-            std::fprintf(stderr, "agentty: %s\n",
-                         tools::util::sandbox::describe_state().c_str());
+            // When a wall is up, say how to take it down: people who hit it
+            // shouldn't have to dig for the switch.
+            std::fprintf(stderr, "agentty: %s%s\n",
+                         tools::util::sandbox::describe_state().c_str(),
+                         tools::util::sandbox::is_active()
+                             ? " \xc2\xb7 turn it off entirely with --sandbox off" : "");
         }
 
         // And say it plainly when the saved policy is not the thing running.
