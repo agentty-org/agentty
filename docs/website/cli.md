@@ -168,7 +168,7 @@ Type `/` at the start of the composer to get a menu of everything you can run by
 | Compaction depth | Set how full the context window gets before agentty compacts in the background: 75% Aggressive → 90% Balanced → 95% Deep. Higher values help on a 1M-context model (see [Providers](/docs/providers#1m-context-models)). Kept across restarts. |
 | Review changes | Open the diff review pane (also `^R`). |
 | Accept all / Reject all changes | Apply or discard every pending hunk. |
-| Rewind to checkpoint | Go back to an earlier turn's worktree snapshot through a diff-preview picker. Needs a git repo and an idle session. See [Checkpoints](/docs/threads#checkpoints--rewind). |
+| Rewind to checkpoint | Go back to an earlier turn's worktree snapshot through a diff-preview picker. Needs a git repo and an idle session. See [Checkpoints](/docs/threads#checkpoints-rewind). |
 | Cycle profile | Write → Ask → Minimal (also `S-Tab`). |
 | Open model picker / Switch provider | Change the model (`^/`) or the backend (`^P`). |
 | Open threads / Open plan | Browse saved conversations (`^J`) or view the todo plan (`^T`). |

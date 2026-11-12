@@ -40,7 +40,7 @@ No. agentty is a single static C++26 binary. No Node runtime, no `npm install`, 
 
 ## What platforms are supported?
 
-Linux, macOS and Windows, all built and tested daily. Prebuilt binaries ship for Linux (x86_64, aarch64) and Windows (x86_64); macOS builds from source in seconds. It also builds natively on **Termux/Android** (no root, no proot) — see [Installation](/docs/installation#termux--android).
+Linux, macOS and Windows, all built and tested daily. Prebuilt binaries ship for Linux (x86_64, aarch64) and Windows (x86_64); macOS builds from source in seconds. It also builds natively on **Termux/Android** (no root, no proot) — see [Installation](/docs/installation#termux-android).
 
 ## How is it sandboxed?
 

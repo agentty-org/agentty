@@ -189,6 +189,6 @@ On the result screen, [[Ctrl+A]] / [[a]] attaches the output to your next messag
 
 Some actions have no key. Open them from the command palette ([[Ctrl+K]]):
 
-- **Rewind to checkpoint** opens a picker with a diff preview over every checkpointed turn (git repo, no turn running). See [Checkpoints & rewind](/docs/threads#checkpoints--rewind).
+- **Rewind to checkpoint** opens a picker with a diff preview over every checkpointed turn (git repo, no turn running). See [Checkpoints & rewind](/docs/threads#checkpoints-rewind).
 - **Fork thread** starts a fresh thread from the current one with almost no context; the old transcript is read only when needed. Use it when the context window is full. See [Forking a Thread](/docs/fork).
 - **Compaction depth** sets how full the context window gets before agentty compacts it in the background (75/90/95%). See [Providers & Models](/docs/providers#1m-context-models).

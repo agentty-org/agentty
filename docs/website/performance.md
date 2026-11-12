@@ -38,7 +38,7 @@ For Anthropic, agentty marks the stable start of the conversation (system prompt
 
 In an agent session, the biggest cost is the number of model round-trips and the time spent waiting on tools. agentty overlaps that work:
 
-- **Parallel batches.** Independent tool calls in one turn run at the same time. Only calls that really conflict wait for each other. See [Tools → parallel & speculative execution](/docs/tools#parallel--speculative-execution).
+- **Parallel batches.** Independent tool calls in one turn run at the same time. Only calls that really conflict wait for each other. See [Tools → parallel & speculative execution](/docs/tools#parallel-speculative-execution).
 - **Speculative reads.** A read-only tool starts as soon as its arguments finish streaming, while the model is still writing the rest of the turn. File and search time hides inside the model's own generation.
 
 Neither changes the result. Tool-heavy turns just finish sooner.
