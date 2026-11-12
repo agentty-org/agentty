@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <cstdlib>
 #include <format>
 #include <string>
 #include <string_view>
@@ -371,11 +370,8 @@ Element diff_review(const Model& m) {
     // Room for the focused change: the terminal less this pane's chrome
     // (border+padding 4, summary 2, tabs 2, path 2, a row per change, blank +
     // progress + keys 4). Never under 6, so a short terminal still shows code.
-    const int term_rows = [] {
-        if (maya::have_render_context()) return maya::available_height();
-        if (const char* l = std::getenv("LINES")) if (const int n = std::atoi(l); n > 0) return n;
-        return 40;
-    }();
+    // The render context carries the size; outside a frame, assume 40 rows.
+    const int term_rows = maya::have_render_context() ? maya::available_height() : 40;
     const int chrome = 4 + 2 + 2 + 2 + static_cast<int>(fc.hunks.size()) + 4 + 2;
     const int body_rows = std::clamp(term_rows - chrome, 6, 60);
 

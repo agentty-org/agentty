@@ -73,7 +73,8 @@ static void diff_review_checks() {
     check(has(out, "login.cpp") && has(out, "README.md"),
           "diff: file rail shows every file");
     check(has(out, "reviewed"), "diff: overall hunk progress");
-    check(has(out, "hunk 1/"), "diff: labelled hunk dividers (not raw @@)");
+    check(has(out, "change 1 of") || has(out, "1 change"),
+          "diff: labelled change position (not raw @@)");
     check(!has(out, "@@ -"), "diff: raw git @@ headers are gone");
     check(has(out, "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"), "diff: has a rule");
     check(!has_mojibake(out), "diff: no mojibake");
@@ -92,7 +93,7 @@ static void diff_review_checks() {
     check(!has(done, "all reviewed"),
           "diff: no all-reviewed banner — the pane auto-closes instead");
     check(has(done, "reviewed"), "diff: progress counter still reads N/N");
-    check(has(done, "\xe2\x96\x88"), "diff: progress bar fills (\xe2\x96\x88) when done");
+    check(has(done, "\xe2\x94\x81"), "diff: progress bar fills (\xe2\x94\x81) when done");
 }
 
 int main() {

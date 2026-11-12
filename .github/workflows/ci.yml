@@ -539,7 +539,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Deps
-        run: pacman -Sy --noconfirm --needed git cmake ninja openssl libnghttp2
+        run: pacman -Syu --noconfirm --needed git cmake ninja openssl libnghttp2   # -Syu: Arch has no partial upgrades
       - name: makepkg --nobuild (fetch + prepare + configure)
         run: |
           # makepkg refuses to run as root.
