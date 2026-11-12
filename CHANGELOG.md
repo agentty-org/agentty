@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.54] - 2026-11-12
+
 ### Changed
 - **The review pane (^R) shows what changed in a line.** On an edited line only
   the changed words get the strong band (bold underline below 256 colours), so
