@@ -29,7 +29,8 @@ Everything you can do without leaving the home row.
 | [[Ctrl+R]] | [Review pending diffs](clip:diff-review) |
 | [[Ctrl+O]] | Browse the full text of a frozen retrieved-context card |
 | [[Ctrl+U]] | Read thinking blocks in full, newest first; ←/→ for older ones (empty composer). Toggles the newest retrieved-context card instead while one is live |
-| [[Ctrl+L]] | Redraw the screen |
+| [[Ctrl+L]] | Stats: tokens, cache, tools, latency for this thread |
+| [[Ctrl+Y]] | Redraw the screen (empty composer; in the composer it's redo) |
 | [[Ctrl+C]] | Quit (the only quit key) |
 
 > **Every open key toggles.** Pressing a modal's own open key again while
