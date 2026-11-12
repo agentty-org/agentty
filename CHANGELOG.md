@@ -4,6 +4,23 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The review pane (^R) shows what changed in a line.** On an edited line only
+  the changed words get the strong band (bold underline below 256 colours), so
+  `= 30` to `= config().timeout` reads at a glance. Each change names its
+  function when that line isn't already in view, new and deleted files say so,
+  the code window fills the terminal instead of 24 rows, and file tabs are
+  pills with green/red `+N −N`.
+- **The ^U reader makes it obvious when the model is thinking and when it's
+  done.** "Thinking ⠋" with `● LIVE` and a timer that ticks every second, then
+  "✓ Done thinking" in green for a moment, then "✓ Reasoned" with the final time.
+- **The startup line says how to turn the sandbox off**:
+  `agentty: sandbox: active (claybin) · turn it off entirely with --sandbox off`.
+- **The README is half the length**, and its key table is current.
+
+### Fixed
+- The keymap doc listed `Ctrl+L` as redraw; it's Stats, and redraw is `Ctrl+Y`.
+
 ## [0.9.53] - 2026-11-11
 
 ### Added
