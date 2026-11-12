@@ -20,14 +20,17 @@
 #include "agentty/provider/responses/responses.hpp"
 
 #include <maya/runtime.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <random>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -302,23 +305,43 @@ bool responses_available() {
     return ok;
 }
 
+std::string codex_client_version_for_test(std::string_view override_version) {
+    // Accept only dotted numeric versions, bounded for use in URL and headers.
+    if (override_version.empty() || override_version.size() > 32)
+        return OAuthConfig::codex_client_version;
+    int dots = 0;
+    bool digit = false;
+    for (char c : override_version) {
+        if (c >= '0' && c <= '9') digit = true;
+        else if (c == '.' && digit) { ++dots; digit = false; }
+        else return OAuthConfig::codex_client_version;
+    }
+    return dots == 2 && digit ? std::string(override_version) : OAuthConfig::codex_client_version;
+}
+
+static std::string codex_client_version() {
+    const char* value = std::getenv("AGENTTY_CODEX_CLIENT_VERSION");
+    return codex_client_version_for_test(value ? std::string_view(value) : std::string_view{});
+}
+
 // ── Live model catalog ────────────────────────────────────────────────────
 std::vector<CatalogModel> fetch_models(Io io, const maya::unlocked& cap) {
     auto creds = codex_fresh_credentials(cap);
     if (!creds || creds->access_token.empty()) return {};
 
+    const auto client_version = codex_client_version();
     http::Request hr;
     hr.method = http::HttpMethod::Get;
     hr.host   = "chatgpt.com";
     hr.port   = 443;
     hr.path   = std::string("/backend-api/codex/models?client_version=")
-              + OAuthConfig::codex_client_version;
+              + client_version;
     hr.headers = {
         {"authorization", "Bearer " + creds->access_token},
         {"accept",        "application/json"},
         {"openai-beta",   "responses=experimental"},
         {"originator",    OAuthConfig::originator},
-        {"user-agent",    std::string("codex_cli_rs/") + OAuthConfig::codex_client_version},
+        {"user-agent",    std::string("codex_cli_rs/") + client_version},
     };
     if (!creds->account_id.empty())
         hr.headers.push_back({"chatgpt-account-id", creds->account_id});
@@ -326,37 +349,65 @@ std::vector<CatalogModel> fetch_models(Io io, const maya::unlocked& cap) {
     http::Timeouts tos;
     tos.connect = std::chrono::milliseconds(8'000);
     tos.total   = std::chrono::milliseconds(15'000);
-    // The catalog is a small JSON list (~a few KB). Cap hard so a misbehaving
-    // proxy / replay loop can't stream us into OOM on a routine picker probe
-    // (parity with Anthropic's list_models).
-    hr.max_body_bytes = 1ull * 1024 * 1024;
+    // Catalogs can be large; bound the response to limit memory consumption.
+    hr.max_body_bytes = 2ull * 1024 * 1024;
 
     auto result = http::default_client(io).send(hr, tos);
     if (!result || result->status < 200 || result->status >= 300) return {};
 
+    return parse_models_payload_for_test(result->body);
+}
+
+std::vector<CatalogModel> parse_models_payload_for_test(std::string_view body) {
     std::vector<CatalogModel> out;
+    std::unordered_set<std::string> seen;
+    json j;
     try {
-        auto j = nlohmann::json::parse(result->body);
-        const auto& arr = j.contains("models") ? j["models"] : j;
-        if (!arr.is_array()) return {};
-        for (const auto& m : arr) {
-            // The catalog carries internal models the picker must not show
-            // (e.g. `codex-auto-review`, visibility="hide"). Mirror codex-rs:
-            // only surface models the account is meant to select. Anything not
-            // explicitly listed as visible is dropped.
-            const std::string vis = m.value("visibility", std::string{"list"});
-            if (vis == "hide" || vis == "hidden") continue;
-            CatalogModel cm;
-            cm.slug = m.value("slug", m.value("id", std::string{}));
-            if (cm.slug.empty()) continue;
-            cm.display_name   = m.value("display_name", cm.slug);
-            cm.context_window = m.value("context_window", 272000);
-            cm.is_default     = m.value("is_default", false);
-            out.push_back(std::move(cm));
-        }
-    } catch (...) {
-        return {};
+        j = json::parse(body.begin(), body.end(), nullptr, false);
+    } catch (const json::exception&) {
+        return out;
     }
+    if (j.is_discarded()) return out;
+    const auto& arr = j.is_object() && j.contains("models") ? j["models"] : j;
+    if (!arr.is_array()) return out;
+    for (const auto& m : arr) {
+        if (!m.is_object()) continue;
+        auto str = [&](const char* key, std::string fallback) {
+            auto it = m.find(key);
+            return it != m.end() && it->is_string() ? it->get<std::string>() : fallback;
+        };
+        auto boolean = [&](const char* key, bool fallback) {
+            auto it = m.find(key);
+            return it != m.end() && it->is_boolean() ? it->get<bool>() : fallback;
+        };
+        auto integer = [&](const char* key, int fallback, int lo, int hi) {
+            auto it = m.find(key);
+            if (it == m.end() || !it->is_number_integer()) return fallback;
+            if (it->is_number_unsigned()) {
+                const auto n = it->get<std::uint64_t>();
+                return n <= static_cast<std::uint64_t>(hi) &&
+                       (lo <= 0 || n >= static_cast<std::uint64_t>(lo))
+                    ? static_cast<int>(n) : fallback;
+            }
+            const auto n = it->get<std::int64_t>();
+            return n >= lo && n <= hi ? static_cast<int>(n) : fallback;
+        };
+        const auto vis = str("visibility", "list");
+        if (vis == "hide" || vis == "hidden") continue;
+        if (!boolean("supported_in_api", true)) continue;
+        CatalogModel cm;
+        cm.slug = str("slug", str("id", {}));
+        if (cm.slug.empty() || !seen.insert(cm.slug).second) continue;
+        cm.display_name = str("display_name", cm.slug);
+        cm.context_window = integer("context_window", cm.context_window, 1, 20000000);
+        cm.is_default = boolean("is_default", false);
+        // Invalid or absent priorities sort after every valid priority.
+        cm.priority = integer("priority", 1000001, -1000000, 1000000);
+        out.push_back(std::move(cm));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const CatalogModel& a, const CatalogModel& b) {
+        return a.priority < b.priority;
+    });
     return out;
 }
 

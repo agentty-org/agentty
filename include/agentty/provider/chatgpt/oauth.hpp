@@ -38,16 +38,11 @@ struct OAuthConfig {
     // Codex CLI (drives the simplified consent screen + org-in-id_token).
     static constexpr const char* originator = "codex_cli_rs";
 
-    // The Codex CLI version agentty impersonates on Codex backend requests.
-    // CRITICAL: the /backend-api/codex/models catalog endpoint gates the
-    // returned model list on `client_version` — an old/unknown version gets a
-    // 200 with an EMPTY `{"models":[]}` (the server withholds the catalog from
-    // stale clients). agentty's own version (0.2.x) is far below any codex
-    // minimum, so we MUST send a current codex version here (both the
-    // client_version query param and the codex_cli_rs/<ver> user-agent) or the
-    // picker falls back to a bundled guess and the first turn 400s on a slug
-    // the account no longer offers. Bump this when the catalog empties again.
-    static constexpr const char* codex_client_version = "0.145.0";
+    // The catalog is gated by client_version and older versions can silently
+    // return only a subset. Keep this aligned with a recent Codex release.
+    // AGENTTY_CODEX_CLIENT_VERSION may override this for catalog requests with
+    // a numeric major.minor.patch version; invalid values use this fallback.
+    static constexpr const char* codex_client_version = "0.167.0";
 
     // RFC-8693 token-exchange used to mint a usable OpenAI API key from the
     // signed id_token — this is what lets agentty call the API directly

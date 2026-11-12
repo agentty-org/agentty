@@ -22,10 +22,68 @@
 #include "agtest.hpp"
 
 #include "agentty/provider/chatgpt/provider.hpp"
+#include "agentty/provider/chatgpt/oauth.hpp"
 #include "agentty/provider/chatgpt/responses.hpp"
 
 using namespace agentty;
 namespace cc = agentty::provider::chatgpt;
+
+TEST_CASE("chatgpt catalog parsing filters and orders models") {
+    const auto models = cc::parse_models_payload_for_test(R"({"models":[
+        {"slug":"later","priority":20,"context_window":12345},
+        {"slug":"hidden","visibility":"hide"},
+        {"slug":"hidden2","visibility":"hidden"},
+        {"slug":"not-api","supported_in_api":false,"priority":4},
+        {"slug":"other","visibility":"internal","priority":5},
+        {"slug":"first","priority":1,"is_default":true},
+        {"slug":"first","priority":2},
+        {"id":"fallback","priority":3,"context_window":-1},
+        null, {"slug":42}
+    ]})");
+    REQUIRE(models.size() == 4);
+    CHECK(models[0].slug == "first");
+    CHECK(models[0].is_default);
+    CHECK(models[1].slug == "fallback");
+    CHECK(models[1].context_window == 272000);
+    CHECK(models[2].slug == "other");
+    CHECK(models[3].slug == "later");
+    CHECK(models[3].context_window == 12345);
+    CHECK(cc::parse_models_payload_for_test("not json").empty());
+    CHECK(cc::parse_models_payload_for_test(R"({"models":{}})").empty());
+    CHECK(cc::parse_models_payload_for_test(R"({"models":[{"slug":"bad","priority":1e1000}]})").empty());
+}
+
+TEST_CASE("chatgpt catalog prioritizes valid priorities before missing or invalid ones") {
+    const auto models = cc::parse_models_payload_for_test(R"({"models":[
+        {"slug":"missing"},
+        {"slug":"unsigned-overflow","priority":18446744073709551615,"context_window":18446744073709551615},
+        {"slug":"invalid","priority":"1"},
+        {"slug":"out-of-range","priority":1000001},
+        {"slug":"last-valid","priority":1000000},
+        {"slug":"first","priority":1},
+        {"slug":"equal","priority":1}
+    ]})");
+    REQUIRE(models.size() == 7);
+    CHECK(models[0].slug == "first");
+    CHECK(models[1].slug == "equal");
+    CHECK(models[2].slug == "last-valid");
+    CHECK(models[3].slug == "missing");
+    CHECK(models[4].slug == "unsigned-overflow");
+    CHECK(models[4].context_window == 272000);
+    CHECK(models[5].slug == "invalid");
+    CHECK(models[6].slug == "out-of-range");
+}
+
+TEST_CASE("chatgpt codex version override validation") {
+    const std::string fallback = cc::OAuthConfig::codex_client_version;
+    CHECK(cc::codex_client_version_for_test("") == fallback);
+    CHECK(cc::codex_client_version_for_test("1.2.3") == "1.2.3");
+    CHECK(cc::codex_client_version_for_test("1.2") == fallback);
+    CHECK(cc::codex_client_version_for_test("1..2.3") == fallback);
+    CHECK(cc::codex_client_version_for_test("1.2.3\r\nX:bad") == fallback);
+    CHECK(cc::codex_client_version_for_test("1.2.3&foo=bar") == fallback);
+    CHECK(cc::codex_client_version_for_test(std::string(33, '1')) == fallback);
+}
 
 TEST_CASE("chatgpt bundled model catalog") {
     const bool signed_in = cc::responses_available();

@@ -28,6 +28,7 @@ struct CatalogModel {
     std::string display_name;     // human label for the picker
     int         context_window = 272000;
     bool        is_default      = false;
+    int         priority        = 0;
 };
 
 // GET https://chatgpt.com/backend-api/codex/models?client_version=… with the
@@ -49,6 +50,8 @@ provider::StreamResult stream_responses(const maya::unlocked& cap, provider::Req
                                         provider::EventSink sink);
 
 // ── Test seams (pure, no network) ──────────────────────────────────────────
+[[nodiscard]] std::vector<CatalogModel> parse_models_payload_for_test(std::string_view body);
+[[nodiscard]] std::string codex_client_version_for_test(std::string_view override_version);
 // The Request → Responses-API JSON body the transport would POST.
 [[nodiscard]] nlohmann::json build_body_for_test(const provider::Request& req);
 // Stable per-conversation session id derived from a session_key (the value
