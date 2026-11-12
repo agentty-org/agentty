@@ -1,55 +1,81 @@
 ---
 title: Quick Start
-description: From install to your first agent turn in under a minute.
+description: Install agentty, connect a model, and ask your first question. About a minute.
 nav_section: Getting Started
-nav_order: 30
+nav_order: 20
 slug: quick-start
 ---
 
-Install, sign in, and run your first turn in under a minute.
+## 1. Install
 
-## 1. Launch in your project
-
-The current working directory is the workspace root — agentty's filesystem tools won't touch anything outside it.
+On Linux or macOS:
 
 ```bash
-cd path/to/your/project
+{{installOneLiner}}
+```
+
+On Windows (PowerShell):
+
+```powershell
+{{installOneLinerWindows}}
+```
+
+Run the same line again later to update. Prefer a package manager? See [Installation](/docs/installation).
+
+## 2. Start it in your project
+
+```bash
+cd your-project
 agentty
 ```
 
-## 2. Sign in
+agentty works inside the folder you start it in. It won't edit files outside it.
 
-First launch opens an auth modal. Pick one:
+## 3. Connect a model
 
-- **API key** — paste an Anthropic `sk-ant-…` token, or any provider's key. Saved to `~/.agentty/credentials/credentials.json` (mode `0600`). Unambiguously in-bounds, and works headless/over SSH.
-- **OAuth (Claude Pro/Max)** — opens your browser to sign in with your existing subscription; the callback writes the token to the same file.
+The first time, agentty asks how to connect. Pick whichever you already have:
+
+| You have | Pick |
+|---|---|
+| Claude Pro or Max | **2) OAuth via claude.ai** |
+| ChatGPT Plus or Pro | **3) Sign in with ChatGPT** |
+| GitHub Copilot | **5) Sign in with GitHub Copilot** |
+| Kimi | **6) Sign in with Kimi** |
+| An API key (Anthropic, OpenAI, DeepSeek, Gemini, ...) | **1) Paste an API key** |
+| Nothing, and you want it free and local | **4) Custom host**, then type `localhost:11434` (needs [Ollama](https://ollama.com)) |
+
+Sign-ins open your browser. No API key needed for those.
 
 :::tip
-No Anthropic account? Pick **4) Custom OpenAI-compatible host** on the sign-in modal — it works with llama.cpp, vLLM, LM Studio, or any remote server. For a fully local, no-key setup, type `localhost:11434` to use [Ollama](/docs/providers). The model picker opens automatically so you can pick a model and start coding. See [Authentication](/docs/authentication).
+Already have a key in your shell, like `OPENAI_API_KEY`? agentty skips this step and opens the provider list instead. Pick that provider and press [[Enter]].
 :::
 
-:::note
-Prefer a different model? Launch with `--provider` — e.g. `agentty --provider openai -m gpt-4o` or `agentty --provider ollama` for a local model. See [Providers & Models](/docs/providers).
-:::
+## Ask something
 
-## 3. Your first turn
-
-Type a request, hit [[Enter]]. agentty streams the reply and lands tool calls inline. Mid-stream typing queues your next message and sends it when the current turn finishes. [[Esc]] cancels.
+Type what you want and press [[Enter]]:
 
 ```text
-▌ add a --version flag that prints the build version and exits
+explain what this project does
 ```
 
-## 4. Pick a permission profile
+agentty reads your code, edits files and runs commands to get it done. You see each step as it happens. Press [[Esc]] to stop it.
 
-You start in **Write** (autonomous) — every tool runs without a prompt, kept in-bounds by the sandbox and workspace boundary. Press [[S-Tab]] to [cycle](clip:profiles) to **Ask** (writes, shell, and network prompt first) or **Minimal** (prompts for everything, reads included). Your choice persists.
+## Five keys worth knowing
 
-## Where to go next
+| Key | What it does |
+|---|---|
+| [[Ctrl+K]] | Everything else: search any command |
+| [[Ctrl+/]] | Switch model |
+| [[Ctrl+R]] | Review the changes it made, keep or undo each one |
+| [[Ctrl+J]] | Your past conversations |
+| [[Shift+Tab]] | Ask before it edits or runs anything |
 
-- **Coming from Codex or Claude Code?** Press [[Ctrl+J]]: your sessions there are in the list, ready to continue. See [Coming from Codex or Claude Code](/docs/switching).
-- **Better code search (optional):** with [Ollama](https://ollama.com) installed, `ollama pull qwen3-embedding:0.6b` lets agentty find code by meaning, not just keywords. Nothing else to set. See [Retrieval](/docs/retrieval).
-- [The Interface](/docs/interface) — what every part of the screen means.
-- [Keybindings](/docs/keybindings) — the full keymap.
-- [Providers & Models](/docs/providers) — Claude, GPT, Kimi, DeepSeek, Gemini, or a local model.
-- [Tools](/docs/tools) — what agentty can actually do.
-- [SSH Air-gap](/docs/airgap) — run on a box with no internet.
+:::note
+Commands run in a sandbox: your project is writable, your keys and `.env` files are hidden. If it gets in your way, start with `agentty --sandbox off`. [More](/docs/sandboxing)
+:::
+
+## Next
+
+- Used Claude Code or Codex before? Press [[Ctrl+J]]: your old conversations are there. [Coming from Codex or Claude Code](/docs/switching)
+- [The interface](/docs/interface): what each part of the screen is
+- [Providers & models](/docs/providers): every model it works with

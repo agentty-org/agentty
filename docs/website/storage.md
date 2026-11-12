@@ -1,8 +1,8 @@
 ---
 title: Storage
 description: Every file agentty writes, where it lives, how long it stays, and how to move it.
-nav_section: User Manual
-nav_order: 52
+nav_section: Advanced
+nav_order: 57
 slug: storage
 ---
 

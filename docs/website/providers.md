@@ -2,7 +2,7 @@
 title: Providers & Models
 description: Run agentty against Claude, ChatGPT, GitHub Copilot, Kimi, DeepSeek, Gemini, Grok, Mistral, Groq, or any OpenAI-compatible endpoint.
 nav_section: Getting Started
-nav_order: 50
+nav_order: 40
 slug: providers
 ---
 

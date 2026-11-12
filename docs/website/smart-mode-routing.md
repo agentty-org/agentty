@@ -1,8 +1,8 @@
 ---
 title: "Smart Mode: Roles & Routing"
 description: The three model roles, zero-config auto-fill, complexity-scaled effort, and the resolver that never checks a model name.
-nav_section: User Manual
-nav_order: 53
+nav_section: Advanced
+nav_order: 62
 slug: smart-mode-routing
 ---
 

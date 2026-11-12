@@ -2,7 +2,7 @@
 title: Coming from Codex or Claude Code
 description: Pick up your Codex and Claude Code conversations in agentty and keep going, on any model. Your CLAUDE.md, AGENTS.md, skills, commands and MCP servers come along too.
 nav_section: Getting Started
-nav_order: 17
+nav_order: 50
 slug: switching
 ---
 

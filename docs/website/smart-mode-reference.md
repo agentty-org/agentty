@@ -1,8 +1,8 @@
 ---
 title: "Smart Mode: Reference"
 description: Every toggle, settings.json key, on-disk store, and the design rationale behind Smart Mode.
-nav_section: User Manual
-nav_order: 56
+nav_section: Advanced
+nav_order: 64
 slug: smart-mode-reference
 ---
 

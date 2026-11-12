@@ -2,29 +2,40 @@
 title: Installation
 description: Install agentty in one line, or via your distro's package manager.
 nav_section: Getting Started
-nav_order: 20
+nav_order: 30
 slug: installation
 ---
 
-One line installs it. The same line updates it. Or use your package manager — deb, rpm, AUR, Homebrew, and Scoop are all published per release.
-
-## Latest release
-
-**{{versionLabel}}** · [release notes & checksums ↗]({{releasesLatest}})
-
-:::release-table
+Most people only need the first line below. Run it again later to update.
 
 ## One-line install (recommended)
+
+Linux and macOS:
 
 ```bash
 {{installOneLiner}}
 ```
 
-Detects your OS and arch, downloads the right binary from the latest release, verifies SHA256, and installs to `/usr/local/bin` (if root) or `~/.local/bin`. **Re-running the same command updates** to the newest release. No `apt`, no `brew`, no version drift.
+Windows (PowerShell):
 
-:::note
-Flags: `--prefix ~/somewhere`, `--version {{versionLabel}}`, `--no-verify`, `--build` (force a source build). Prebuilt binaries for Linux (x86_64, i686), macOS (Apple Silicon & Intel), and Windows (x86_64). On any other platform the script builds from source automatically. Works with `curl` or `wget`.
-:::
+```powershell
+{{installOneLinerWindows}}
+```
+
+That's it. Next: [Quick Start](/docs/quick-start).
+
+It picks the right build for your machine, checks its SHA256, and installs to `~/.local/bin` (or `/usr/local/bin` as root; on Windows, `%LOCALAPPDATA%\agentty`, added to your `PATH`).
+
+## Prefer a package manager?
+
+| System | Command |
+|---|---|
+| macOS / Linux (Homebrew) | `brew tap 1ay1/tap && brew install agentty` |
+| Windows | `winget install agentty` |
+| Arch | `yay -S agentty-bin` |
+| Debian / Ubuntu, Fedora, openSUSE | `.deb` / `.rpm`, [below](#debian--ubuntu) |
+
+Everything else (Nix, Snap, Gentoo, Termux, the MSI, raw binaries) is further down.
 
 ## Debian / Ubuntu
 
@@ -142,6 +153,16 @@ curl -fsSL https://github.com/agentty-org/agentty/releases/latest/download/agent
 ```
 
 Each release asset carries a published SHA256 (shown on the release page and verified automatically by the one-line installer).
+
+## Latest release
+
+**{{versionLabel}}** · [release notes & checksums ↗]({{releasesLatest}})
+
+:::release-table
+
+## Installer options
+
+`--prefix ~/somewhere`, `--version {{versionLabel}}`, `--no-verify`, `--build` (force a source build). Prebuilt binaries for Linux (x86_64, i686), macOS (Apple Silicon & Intel), and Windows (x86_64). On any other platform the script builds from source automatically. Works with `curl` or `wget`.
 
 :::tip
 Building from source? See [Building from Source](/docs/building) for the CMake flags and toolchain requirements.

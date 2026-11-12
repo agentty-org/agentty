@@ -1,41 +1,34 @@
 ---
 title: Introduction
-description: What agentty is, who it's for, and what makes it different.
+description: What agentty does, and where to start.
 nav_section: Getting Started
 nav_order: 10
 slug: ""
 ---
 
-agentty is a native C++26 terminal coding agent — a drop-in alternative to `claude-code` that ships as a single {{sizeMB}} static binary.
+agentty is a coding agent for your terminal. You tell it what you want, and it reads your code, edits files and runs commands to get it done. You see every step, and you can undo any change.
 
-It's **bring-your-own-model**: point it at **OpenAI, DeepSeek, Google Gemini, xAI Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks**, an `ANTHROPIC_API_KEY`, or a fully local **Ollama** model — or sign in with a subscription you already have: **Claude Pro/Max, ChatGPT, GitHub Copilot, or Kimi** (no API key), the same way Claude Code does. It runs every shell call in a sandbox by default, and can drive an agent on an air-gapped host through a single SSH command. No Node, no Python, no Electron, no `npm install`.
+It's one small program. No Node, no Python, nothing else to install. It works with the model you already pay for: Claude, ChatGPT, GitHub Copilot, Kimi, any API key, or a free local model.
 
-## Who it's for
+**New here?** [Quick Start](/docs/quick-start) gets you to your first answer in about a minute.
 
-- You want a **single-binary coding agent** with zero runtime dependencies.
-- You care about **cold-start speed** and a TUI that never pauses for GC.
-- You want **your choice of model** — Claude, GPT, DeepSeek, Kimi, Gemini, Grok, or a local Ollama model — behind one client.
-- You need to run an agent on an **air-gapped host** through an SSH tunnel.
-- You want shell calls **sandboxed by default**, not as an afterthought.
-- You want the agent to **find the right code by meaning**, locally: built-in [search](/docs/retrieval) that never sends your repo anywhere.
-- You're **coming from Codex or Claude Code** and want to keep your conversations and setup: [open them here and carry on](/docs/switching).
+## What you get
 
-:::tip
-Already convinced? Jump straight to [Installation](/docs/installation) or the [Quick Start](/docs/quick-start).
-:::
+- **Any model.** Sign in with a subscription you have, paste a key, or run one locally. Switch any time with [[Ctrl+/]].
+- **You stay in control.** Review every change before you keep it ([[Ctrl+R]]), or have it ask before each edit ([[Shift+Tab]]).
+- **Safe by default.** Commands run in a sandbox: your project is writable, your SSH keys and `.env` files are hidden.
+- **Fast.** Ready to type in about 50 ms, about 20 MB of memory.
+- **Your history comes along.** Conversations from Claude Code and Codex show up in agentty, ready to continue.
 
-## Design principles
+## Where to go next
 
-- **Native speed.** C++26, statically linked, `posix_spawn` everywhere. Spawns in microseconds, no GC pauses mid-stream.
-- **One static binary.** {{sizeMB}}. `curl | chmod +x | run`. No version drift between machines.
-- **Sandbox by default.** Every shell/build command runs inside a boundary the kernel enforces. Your project is writable, system libraries are read-only, and `~/.ssh`, `~/.aws` and your other projects simply aren't reachable.
-- **One-command SSH air-gap.** Relay bytes over SOCKS5-over-SSH; TLS pins end-to-end on the real upstreams.
-- **Reads like a single function.** The reducer is one `std::visit` over a closed event sum; the permission matrix is a `constexpr` with `static_assert`s — change a policy cell and the build breaks.
+| I want to... | Read |
+|---|---|
+| Get it running | [Quick Start](/docs/quick-start) |
+| Install with a package manager | [Installation](/docs/installation) |
+| Pick or switch models | [Providers & Models](/docs/providers) |
+| Move over from Claude Code or Codex | [Coming from Codex or Claude Code](/docs/switching) |
+| Learn the screen and keys | [The Interface](/docs/interface) · [Keybindings](/docs/keybindings) |
+| Fix something | [Troubleshooting](/docs/troubleshooting) · [FAQ](/docs/faq) |
 
-## How it works, in one paragraph
-
-agentty is a pure-functional update loop: `(Model, Msg) → (Model, Cmd)`. The view is a single function `Model → Element`, rendered by [maya](https://github.com/agentty-org/maya), a sister TUI engine. The Anthropic provider speaks HTTP/2 + SSE directly through an in-house `nghttp2` + OpenSSL stack. Subprocesses use `posix_spawn` + `poll(2)` with in-process kill deadlines. See [Architecture](/docs/architecture) for the full tour.
-
-## Project status
-
-Works on Linux, macOS, and Windows — all three actively tested and built daily. Prebuilt release binaries ship for Linux (x86_64, aarch64) and Windows (x86_64); macOS builds from source in seconds. Pre-1.0 and moving fast.
+Works on Linux, macOS and Windows. Free and open source (MIT).

@@ -2,11 +2,13 @@
 title: Authentication
 description: OAuth, API keys, and the credential override order.
 nav_section: Getting Started
-nav_order: 40
+nav_order: 45
 slug: authentication
 ---
 
-agentty is **bring-your-own-model**: point it at any provider with an API key — Anthropic, OpenAI, DeepSeek, Google Gemini, xAI Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks — or a fully local Ollama model that needs no key at all. It also supports signing in with an existing subscription: Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot, or **Kimi** — no API key needed. Pick whichever fits; they all flow through the same login path.
+You connect a model the first time you run agentty: it asks, and you pick. [Quick Start](/docs/quick-start#3-connect-a-model) has the short version. This page covers each way to sign in, and where your credentials are kept.
+
+You can sign in with a subscription you already have (Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot, Kimi), paste an API key from any provider, or use a local Ollama model with no key at all.
 
 ## API key (recommended, zero ambiguity)
 

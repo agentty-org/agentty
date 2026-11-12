@@ -2,7 +2,7 @@
 title: agentty vs Claude Code
 description: An honest comparison of agentty and Claude Code — the native C++26, single-binary, model-agnostic claude-code alternative. Startup speed, cost, sandboxing, air-gap, editor integration, and platform support side by side.
 nav_section: Getting Started
-nav_order: 15
+nav_order: 60
 slug: vs-claude-code
 ---
 

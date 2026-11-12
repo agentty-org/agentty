@@ -1,8 +1,8 @@
 ---
 title: "Smart Mode: Orchestration"
 description: The orchestrator-workers pattern — how the Strategic model delegates mechanical work to cheaper subagents, and the routing card that shows it.
-nav_section: User Manual
-nav_order: 54
+nav_section: Advanced
+nav_order: 63
 slug: smart-mode-orchestration
 ---
 
