@@ -70,9 +70,35 @@ agentty reads your code, edits files and runs commands to get it done. You see e
 | [[Ctrl+J]] | Your past conversations |
 | [[Shift+Tab]] | Ask before it edits or runs anything |
 
-:::note
-Commands run in a sandbox: your project is writable, your keys and `.env` files are hidden. If it gets in your way, start with `agentty --sandbox off`. [More](/docs/sandboxing)
+## Need full power? Turn the sandbox off
+
+By default, commands run in a sandbox. Your project is writable, and your SSH keys, cloud credentials and `.env` files are hidden. Some commands won't work there: reaching `localhost`, writing outside your project, or tools that need your credentials.
+
+If you need agentty to run anything you could run yourself, start it like this:
+
+```bash
+agentty --sandbox off
+```
+
+Commands can now reach every file your user can, and the network. agentty shows a **SANDBOX IS OFF** warning when it starts.
+
+To also let its file tools (read, edit, write) work outside your project folder:
+
+```bash
+agentty --sandbox off --workspace /
+```
+
+These flags last for that run only. To make it permanent, add an alias to your shell:
+
+```bash
+alias agentty='agentty --sandbox off'
+```
+
+:::warn
+With the sandbox off, and the default Write profile, agentty runs commands without asking. Press [[Shift+Tab]] to switch to Ask if you want to approve each one. Best for a machine or container you're happy to trust it with.
 :::
+
+Only need one extra folder? You can add it in [[Ctrl+K]] → Settings → Sandbox (read or write paths) and keep the rest of the sandbox. Reaching `localhost` or your local network always needs `--sandbox off`. See [Sandboxing](/docs/sandboxing).
 
 ## Next
 
