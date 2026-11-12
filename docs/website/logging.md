@@ -20,7 +20,7 @@ failure is already in the file. Raw wire bytes and per-event detail still need
 Non-release builds capture everything at `trace` with no variable set.
 :::
 
-## See the log {#see-the-log}
+## See the log
 
 ```bash
 agentty diagnostics                      # collect a report (no setup needed)
@@ -99,7 +99,7 @@ For a provider or custom-host problem, use `AGENTTY_LOG=wire=trace`. It
 captures what the server actually sent, which is usually where the answer is.
 If agentty crashed, also attach its stderr (backtrace and flight recorder).
 
-## Settings {#settings}
+## Settings
 
 | Setting | What it does | Default |
 |---------|--------------|---------|
@@ -122,7 +122,7 @@ The build type only changes the default level. `AGENTTY_LOG=trace` on a release
 binary gives you the same log as a debug build, so you can ask a user of the
 released binary for a full trace.
 
-### File and rotation {#rotation}
+### File and rotation
 
 - The file is append-only (`O_APPEND`).
 - At 32 MB, at startup or mid-run, the file is renamed to `agentty.log.old`
@@ -132,7 +132,7 @@ released binary for a full trace.
 - Running several instances? Give each its own file:
   `./build/agentty --log-file /tmp/agentty-$$.log`.
 
-## Levels {#levels}
+## Levels
 
 | Level | Char | Use |
 |-------|------|-----|
@@ -145,7 +145,7 @@ released binary for a full trace.
 
 A filter of `warn` passes `warn` and `error`.
 
-## Channels {#channels}
+## Channels
 
 | Channel | Covers |
 |---------|--------|
@@ -163,7 +163,7 @@ A filter of `warn` passes `warn` and `error`.
 | `perf` | Timings: TTFT per model, tool-batch width, thread-load and view-build cost, per-frame stream pacing |
 | `general` | Uncategorised (swallowed exceptions land here) |
 
-## Line format {#format}
+## Line format
 
 ```
 2026-08-28T01:23:45.678 +0012345ms 1a2b W wire    openai.stream: connect refused host=localhost:8080
@@ -182,7 +182,7 @@ Each run starts with a session banner, so you can split a long log by run:
 === agentty session: 0.5.0 debug pid=76883 cwd=/Users/you/projects/x ===
 ```
 
-## Site tags worth knowing {#sites}
+## Site tags worth knowing
 
 Grep for the tag, not for the message text.
 
@@ -221,7 +221,7 @@ W wire  stream.end: end=transport_error http=0 stop=unspecified replayable=true
 - **`stop`**: why the model stopped: `end_turn` · `tool_use` · `max_tokens` · `stop_sequence` · `unspecified`.
 - **`replayable`**: whether agentty may safely retry the request.
 
-## Debugging a provider {#debugging-a-provider}
+## Debugging a provider
 
 Read this when a model "ignores tools", sends empty tool arguments, or a turn
 fails in a way that looks like model quality. The cause is usually a wire event
@@ -261,7 +261,7 @@ No subsystem can bypass it. `agentty --version` and `agentty diagnostics` both
 report how many secrets have been removed so far.
 :::
 
-### Same model, different provider {#model-heterogeneity}
+### Same model, different provider
 
 Every turn opens with a fingerprint on the `model` channel:
 
@@ -288,7 +288,7 @@ To capture all of it: `AGENTTY_LOG=model=debug,wire=debug`. Salvage,
 learned-caps and fallback events are `warn` or higher, so a plain
 `agentty diagnostics` usually has the answer already.
 
-## Worked examples {#worked-examples}
+## Worked examples
 
 **"The model ignores my tools" / `invalid args, pattern required`.** Tools
 that need arguments fail while zero-argument tools (`repo_map`, `list`) work.
@@ -332,7 +332,7 @@ grep 'mcp.connect' ~/.agentty/logs/agentty.log
 # I mcp  mcp.connect: server=wordcount result=ok tools=2 resources=0 prompts=0
 ```
 
-## The flight recorder {#flight-recorder}
+## The flight recorder
 
 Even with file logging off, agentty keeps the last 256 events at `warn` or
 higher in memory. If any channel is set below `warn`, those events go into the
@@ -350,7 +350,7 @@ after the backtrace:
 
 Capture it with `agentty 2> crash.log`.
 
-## For developers {#developers}
+## For developers
 
 A non-release build (the `dev` preset) logs `trace` on every channel with no
 variable set. Run `./build/agentty` and everything appends to
@@ -375,7 +375,7 @@ tail -c 512k ~/.agentty/logs/agentty.log > ~/bug-$(date +%H%M%S).log
 tail -f ~/.agentty/logs/agentty.log | grep --line-buffered 'W \|E \|dispatch.turn'
 ```
 
-## For contributors: log-site rules {#contributors}
+## For contributors: log-site rules
 
 In provider/model code, never drop wire data or degrade a capability silently.
 
@@ -395,7 +395,7 @@ In provider/model code, never drop wire data or degrade a capability silently.
 Per-frame paths log at `trace` only; `AGT_LOG_HOT` won't compile at any other
 level. Never log secrets: redaction is a safety net.
 
-## Cost {#cost}
+## Cost
 
 No log site is compiled out of release builds. A disabled site is one relaxed
 atomic load checked before its arguments are evaluated, so
@@ -410,7 +410,7 @@ Measured at `-O2 -DNDEBUG`:
 | A site that fires | about 1.3 µs (format, redact, one `write(2)`) |
 | A healthy release session, no variable set | about 200 bytes |
 
-## Retired variables {#retired-variables}
+## Retired variables
 
 Only `AGENTTY_LOG` and `AGENTTY_LOG_BODIES` control what is captured. Where it
 goes is the `--log-file` flag. These older variables were removed:

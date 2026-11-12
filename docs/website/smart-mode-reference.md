@@ -99,7 +99,7 @@ These exist only as env variables, on purpose: the default is on, and they are f
 - **Effort stays within what the model supports.** Effort scaling and session correction stay inside the model's own range. A model with no reasoning control gets none.
 - **No hidden learning.** Session correction is capped, decays each turn, and is gone when the session ends.
 
-## Design rationale {#design}
+## Design rationale
 
 Smart Mode follows the **orchestrator-workers** pattern: a strong model owns the plan and hands well-scoped subtasks to cheaper workers. Three ideas make that work here:
 

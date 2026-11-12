@@ -179,7 +179,7 @@ ACP mode accepts the same `--workspace` (`-w`) and `--sandbox` flags as the TUI.
 }
 ```
 
-## agentty-in-Zed on an air-gapped remote {#airgap}
+## agentty-in-Zed on an air-gapped remote
 
 Yes — you can run agentty inside Zed against a server with **zero internet access**. Your laptop relays every byte; nothing runs on the remote besides the agent and your shell session. `agentty airgap <host> --acp` generates the whole Zed config for you, so there's no hand-assembled `ssh -N -R` tunnel or `env` block to maintain.
 

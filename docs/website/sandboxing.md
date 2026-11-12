@@ -10,7 +10,7 @@ Every shell command the agent runs goes into a sandbox, enforced by your operati
 
 You don't have to configure anything. This page explains what the sandbox does and how to change it.
 
-## What it allows and blocks by default {#defaults}
+## What it allows and blocks by default
 
 The default preset is `balanced`. Under it, a command:
 
@@ -21,7 +21,7 @@ The default preset is `balanced`. Under it, a command:
 - **can't write outside your project**. Those writes are refused.
 - **can't write files your editor or shell will later run** (git hooks, `.vscode/tasks.json`, `.envrc`). See [the escape a sandbox can't see](#the-escape-a-sandbox-cant-see).
 
-## Something got blocked? {#something-got-blocked}
+## Something got blocked?
 
 At startup agentty prints one line about the sandbox:
 
@@ -72,7 +72,7 @@ You can still see and edit every setting afterwards. If you change one row, the 
 In every mode with network, a command that can read your files can also send them somewhere. `airgapped` turns the network off, and costs nothing if you only read and edit code. If you need *some* network, use [Allowed hosts](#only-the-sites-you-name).
 :::
 
-## What the command can reach {#what-the-command-can-reach}
+## What the command can reach
 
 **Read and write**
 

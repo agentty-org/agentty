@@ -8,7 +8,7 @@ slug: cli
 
 This page lists every agentty subcommand and flag. Start with the five commands below. The tables after them are the full reference.
 
-## The five commands most people use {#common}
+## The five commands most people use
 
 ```bash
 agentty                                # start in the current folder
@@ -59,13 +59,13 @@ agentty --sandbox on                   # refuse to run bash without a sandbox
 | `agentty config move <dir> <path>` | Move a folder's data, then print the `export` line to add. It refuses while agentty runs and checks the copy. `default` moves it back. |
 | `agentty config doctor` | Check that folders are usable, secrets are private, and storage variables are valid. Exits 1 if something needs fixing. |
 | `agentty config clean [--yes]` | List files that older versions left behind. `--yes` deletes them. |
-| `agentty rag-bench [dir]` | Benchmark [`search_docs` retrieval](/docs/retrieval#measure-it-agentty-rag-bench) on your own files: recall@k, MRR and nDCG per pipeline stage. Uses the auto-found docs folder unless you pass a directory. |
+| `agentty rag-bench [dir]` | Benchmark [`search_docs` retrieval](/docs/retrieval#measuring-retrieval) on your own files: recall@k, MRR and nDCG per pipeline stage. Uses the auto-found docs folder unless you pass a directory. |
 | `agentty rag-eval <cases.json>` | Run a judged evaluation of `search_code` against your cases file. |
 | `agentty update [--check]` | Update agentty to the latest release. `--check` only reports whether an update exists. |
 | `agentty version`, `--version`, `-V` | Print `agentty <version>` and exit. |
 | `agentty help`, `--help`, `-h` | Print usage and exit. |
 
-## Global flags {#options}
+## Global flags
 
 These match `agentty --help`, which prints:
 
@@ -142,7 +142,7 @@ agentty run --effort high --events jsonl "fix the flaky test" 2> events.jsonl
 jq -r 'select(.ev=="reasoning") | .text' events.jsonl
 ```
 
-### Exit codes {#exit-codes}
+### Exit codes
 
 | Exit code | Meaning |
 |---|---|
@@ -168,7 +168,7 @@ Type `/` at the start of the composer to get a menu of everything you can run by
 | Compaction depth | Set how full the context window gets before agentty compacts in the background: 75% Aggressive → 90% Balanced → 95% Deep. Higher values help on a 1M-context model (see [Providers](/docs/providers#1m-context-models)). Kept across restarts. |
 | Review changes | Open the diff review pane (also `^R`). |
 | Accept all / Reject all changes | Apply or discard every pending hunk. |
-| Rewind to checkpoint | Go back to an earlier turn's worktree snapshot through a diff-preview picker. Needs a git repo and an idle session. See [Checkpoints](/docs/threads#checkpoints). |
+| Rewind to checkpoint | Go back to an earlier turn's worktree snapshot through a diff-preview picker. Needs a git repo and an idle session. See [Checkpoints](/docs/threads#checkpoints--rewind). |
 | Cycle profile | Write → Ask → Minimal (also `S-Tab`). |
 | Open model picker / Switch provider | Change the model (`^/`) or the backend (`^P`). |
 | Open threads / Open plan | Browse saved conversations (`^J`) or view the todo plan (`^T`). |
@@ -186,7 +186,7 @@ agentty airgap --help
 | Flag | Effect |
 |---|---|
 | `--setup` | Copy credentials to the remote on the first run. |
-| `--acp` | Print a ready-to-paste Zed `agent_servers` config that tunnels `agentty acp` over ssh stdio. Flags after it go to the remote agent. See [Zed / ACP](/docs/acp#airgap). |
+| `--acp` | Print a ready-to-paste Zed `agent_servers` config that tunnels `agentty acp` over ssh stdio. Flags after it go to the remote agent. See [Zed / ACP](/docs/acp#agentty-in-zed-on-an-air-gapped-remote). |
 | `--clipboard-relay` | Forward this machine's clipboard agent for this session, so Ctrl+V on the remote pastes images and files. Not needed after `agentty paste setup`. |
 | `--remote-agentty <path>` | Path to agentty on the remote, if it isn't on `PATH`. |
 

@@ -45,7 +45,7 @@ Air-gap mode doesn't trust the network between laptop and remote. It *does* trus
 
 ## Run it inside Zed (ACP over airgap)
 
-The same tunnel can run agentty as an editor agent. `agentty airgap user@remote --acp [flags…]` prints a Zed `agent_servers` block you can paste. Its `command` is `ssh` itself. That one process is the SOCKS tunnel, the remote `agentty acp`, and the JSON-RPC transport, and Zed owns it. For roles, prerequisites and troubleshooting, see [Use agentty inside Zed → air-gapped remote](/docs/acp#airgap).
+The same tunnel can run agentty as an editor agent. `agentty airgap user@remote --acp [flags…]` prints a Zed `agent_servers` block you can paste. Its `command` is `ssh` itself. That one process is the SOCKS tunnel, the remote `agentty acp`, and the JSON-RPC transport, and Zed owns it. For roles, prerequisites and troubleshooting, see [Use agentty inside Zed → air-gapped remote](/docs/acp#agentty-in-zed-on-an-air-gapped-remote).
 
 ## Pasting images on the remote
 

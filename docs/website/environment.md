@@ -12,7 +12,7 @@ set any of them: agentty runs fine with none.
 Use them for one-off overrides, debugging and scripted runs. For lasting
 preferences, use [settings](/docs/configuration) ([[Ctrl+S]]) instead.
 
-## Commonly used {#common}
+## Commonly used
 
 | Variable | What it does |
 |----------|--------------|

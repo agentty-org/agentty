@@ -10,7 +10,7 @@ agentty gives the model two local search tools. **`search_code`** finds code by 
 
 For exact names and strings, the model uses `grep` instead.
 
-## Turn on search by meaning {#quick-start-turn-on-semantic-search}
+## Turn on search by meaning
 
 Keyword search needs no setup. To also search by meaning, run [Ollama](https://ollama.com) and pull an embedding model:
 
@@ -72,7 +72,7 @@ What helps code search:
 
 `AGENTTY_RAG_CODE_RERANK=0` turns off these code-specific ranking rules.
 
-## How a search runs {#what-is-on-by-default}
+## How a search runs
 
 Each search passes through these stages in order. Cheap stages are on. Slow or corpus-sensitive stages are off until you turn them on. Defaults are set in `src/rag/adapter.cpp:715-761`.
 
@@ -143,7 +143,7 @@ export AGENTTY_RAG_PROACTIVE_BYTES=6144   # clamped 1 KiB - 32 KiB
 
 Injected context shows as its own **retrieved-context** card, not as your message. The card lists the sources and shows a confidence bar. These blocks never appear in [[↑]]/[[↓]] history recall. They ground only that turn, and older ones are dropped from later requests so you aren't charged for them again.
 
-## Optional stages {#optional-advanced-stages}
+## Optional stages
 
 These are off by default. Each adds latency or can hurt results on some corpora.
 
@@ -160,7 +160,7 @@ These are off by default. Each adds latency or can hurt results on some corpora.
 
 `AGENTTY_RAG_PRF=1` expands the query with words from the top keyword hits. It can help when your words differ from the file's words. It can also drift toward a wrong first result.
 
-### GraphRAG (off by default) {#8-graphrag-expansion-retrieval-over-the-document-graph-default-on}
+### GraphRAG (off by default)
 
 `AGENTTY_RAG_GRAPH=1` builds links between documents, similarity edges, and communities, then expands results along the graph. Building the graph can take time quadratic in the number of documents, so it is not a default. Base and graph results are merged by rank because their scores use different scales.
 
@@ -176,7 +176,7 @@ These are off by default. Each adds latency or can hurt results on some corpora.
 
 `AGENTTY_RAG_LEARN=1` turns on an experimental loop that learns from which files you open next. It is stored in `.agentty/rag_feedback.tsv`. It's off because opening a file afterwards doesn't prove a skill, memory, or passage was relevant.
 
-## Saved indexes and freshness {#persistence-and-freshness}
+## Saved indexes and freshness
 
 Indexes are saved and reopened, not rebuilt on every start. They live with the project, so each checkout has its own:
 
@@ -198,7 +198,7 @@ The freshness scan:
 
 `search_code` keeps its own index, separate from docs. It splits source at definitions, so a result is usually a whole function, class, or declaration. It indexes at most 4,000 source files of up to 256 KiB each.
 
-## Token budget {#token-economy}
+## Token budget
 
 Retrieval is the one place agentty spends model tokens for you, so its output is tightly budgeted. These settings shape how many tokens the ranked passages use. None of them change the ranking. All are on by default.
 
@@ -219,7 +219,7 @@ The requested `k` is still honored when enough distinct passages exist.
 
 Measured effect: on a 161-file corpus, these settings together cut retrieval output from ~1,845 to ~1,605 estimated tokens per query (−13%), with identical ranking (recall@10 1.000, MRR 0.968, nDCG@10 0.976). Small chunks that already fit see little change. Retrieval is a small part of a turn's tokens, since the system prompt, tools, and history dominate and are mostly cached. Measure on your own corpus instead of assuming.
 
-## Measuring retrieval {#measure-it-agentty-rag-bench}
+## Measuring retrieval
 
 Two built-in tools, both offline.
 

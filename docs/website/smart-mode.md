@@ -56,4 +56,4 @@ Savings come from running routine work on cheaper models. Fast and flagship mode
 
 - **[Roles & Routing](/docs/smart-mode-routing)**: auto-fill, effort tiers, the classifier, session correction.
 - **[Orchestration](/docs/smart-mode-orchestration)**: how the lead delegates, and the 🧠 routing card.
-- **[Reference](/docs/smart-mode-reference)**: overlay rows, `settings.json` keys, env variables, constraints, [design](/docs/smart-mode-reference#design).
+- **[Reference](/docs/smart-mode-reference)**: overlay rows, `settings.json` keys, env variables, constraints, [design](/docs/smart-mode-reference#design-rationale).

@@ -8,7 +8,7 @@ slug: workspace
 
 agentty's filesystem tools only touch paths inside the workspace, which is the directory you launch in. Anything outside it (your home directory, system files, other projects) is refused. To widen it, pass `-w` / `--workspace DIR`.
 
-## What's inside and outside {#the-workspace-root}
+## What's inside and outside
 
 By default the workspace root is the current directory. Tools such as `read`, `write`, `edit`, `glob`, `list_dir`, `grep`, `find_definition`, the git tools, and `bash`'s `cd` check every path against it. A path that escapes is rejected before the tool runs (`src/runtime/main.cpp:1568`).
 
@@ -20,7 +20,7 @@ agentty                          # root = ~/code/my-app
 
 `repo_map` adds one more rule. Its walk stops at any nested repository: a subdirectory with its own `.git`, `.hg`, `.svn`, or `.jj` (a submodule's gitlink *file* counts too). So a submodule or vendored checkout inside your root is skipped, and the map never mixes in another project's source.
 
-## Widening the workspace {#pointing-at-another-workspace}
+## Widening the workspace
 
 Point the boundary at another directory:
 

@@ -144,7 +144,7 @@ Unknown keys are ignored and kept, so a config shared with Claude Desktop, Curso
 
 Already have servers set up in another tool? Copy them with `agentty mcp import`. See [Importing from other tools](/docs/mcp#importing-from-other-tools).
 
-## Trust {#config-scope}
+## Trust
 
 A **project** `mcp.json` can come inside a repo you cloned, and a stdio server is a command agentty would run. So project stdio servers don't connect until you approve them. Approval is per server and tied to a hash of its config. If the command changes later, you're asked again.
 

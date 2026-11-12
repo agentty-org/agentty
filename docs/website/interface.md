@@ -12,7 +12,7 @@ This page explains what you see on the agentty screen and how to change how it l
 
 Your conversation scrolls in your terminal's normal scrollback: your messages, the assistant's replies and every tool call, in order. Queued messages show as preview rows above the composer and look the same as sent messages.
 
-Inside a git repo, a message that saved a worktree snapshot has a small `· ↺ checkpoint` tag in its meta line. That is a restore point you can [rewind to](/docs/threads#checkpoints) from the command palette.
+Inside a git repo, a message that saved a worktree snapshot has a small `· ↺ checkpoint` tag in its meta line. That is a restore point you can [rewind to](/docs/threads#checkpoints--rewind) from the command palette.
 
 ## The composer
 

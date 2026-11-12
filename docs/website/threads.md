@@ -52,7 +52,7 @@ The thread list also shows your Codex and Claude Code sessions, marked `↗` wit
 
 When a conversation fills the context window, press [[Ctrl+K]] and pick **Fork thread**. You get a fresh thread with almost no context. The old transcript is saved to disk and the fork reads it only when it needs to, so forking costs about the same few tokens however long the old thread was. The original thread is left as it was. See **[Forking a Thread](/docs/fork)**.
 
-## Checkpoints & rewind {#checkpoints}
+## Checkpoints & rewind
 
 Inside a git repo, agentty saves a snapshot of your working tree at the start of every message you send, before the agent edits anything. Those messages get a small `· ↺ checkpoint` tag. Nothing is committed to your history, and the snapshot is taken in the background while the request goes out.
 

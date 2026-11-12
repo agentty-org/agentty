@@ -147,7 +147,7 @@ See [Storage](/docs/storage).
 
 Some terminals lag on DEC 2026 synchronized output. File a bug with your `$TERM`, the terminal emulator name, and a screenshot.
 
-## Getting a log for a bug report {#reporting-a-bug}
+## Getting a log for a bug report
 
 ```bash
 AGENTTY_LOG=debug agentty --log-file /tmp/agentty.log
