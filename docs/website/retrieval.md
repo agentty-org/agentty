@@ -6,38 +6,49 @@ nav_order: 40
 slug: retrieval
 ---
 
-agentty has two local search tools the model can call:
+agentty gives the model two local search tools. **`search_code`** finds code by what it does ("where are retries handled") when you don't know the name. **`search_docs`** searches your docs folder, your installed skills, and facts you asked it to `remember`. Both work with no setup using keyword search, and everything runs on your machine.
 
-- **`search_code`** finds code by what it does ("where are retries handled") when you don't know the name. For exact names and strings the model uses `grep`.
-- **`search_docs`** searches your docs folder, your installed skills, and facts you asked it to `remember`.
+For exact names and strings, the model uses `grep` instead.
 
-Both work out of the box with keyword search. Everything runs on your machine; no code leaves it.
+## Turn on search by meaning {#quick-start-turn-on-semantic-search}
 
-## Quick start: turn on semantic search
-
-Keyword search works with no setup. For search by meaning, run [Ollama](https://ollama.com) and pull an embedding model:
+Keyword search needs no setup. To also search by meaning, run [Ollama](https://ollama.com) and pull an embedding model:
 
 ```bash
 ollama pull qwen3-embedding:0.6b    # best for code, ~640 MB
 # or: ollama pull nomic-embed-text  # smaller, ~270 MB
 ```
 
-That's it. agentty finds Ollama on `127.0.0.1:11434` by itself and prefers `qwen3-embedding:0.6b` when it's there. The first search in a repo builds the index (from about 30 seconds to a few minutes on a large repo); after that it loads in about a second and updates only the files you changed.
+That's all. agentty finds Ollama on `127.0.0.1:11434` by itself. It prefers `qwen3-embedding:0.6b` and falls back to `nomic-embed-text` if that's the one you pulled.
 
-Check it's on:
+The first search in a repo builds the index. This takes from about 30 seconds to a few minutes on a large repo. After that, the index loads in about a second and only changed files are updated.
+
+Check that it's on:
 
 ```bash
 agentty diagnostics
 ```
 
-The `retrieval (embeddings)` section should say `probe: ok`. Every search result also says `hybrid` (keyword + meaning) or `bm25` (keyword only) in its header.
+The `retrieval (embeddings)` section should say `probe: ok`. Each search result header also says `hybrid` (keyword + meaning) or `bm25` (keyword only).
 
-To pick a different model or a remote server, type `/settings` and open **Proactive retrieval (RAG)** (the Retrieval pane), or set:
+To use a different model or a remote server, type `/settings` and open **Proactive retrieval (RAG)** (the Retrieval pane), or set:
 
 ```bash
 export AGENTTY_EMBED_MODEL=nomic-embed-text
 export AGENTTY_OLLAMA_HOST=gpu-box.lan:11434
 ```
+
+## If results look wrong
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Results say `bm25`, never `hybrid` | No embedding server, or the model isn't pulled | `ollama pull qwen3-embedding:0.6b`, then `agentty diagnostics` |
+| `diagnostics` says `invalid: host ...` | A typo in the Retrieval pane (e.g. `127.0.0`) | Fix the host there, or delete the `rag` keys in `~/.agentty/settings.json` |
+| `search_docs` finds nothing | No docs folder | Put docs in `./docs` or `./.agentty/knowledge`, or set `AGENTTY_DOCS_DIR` |
+| First search is slow | The index is being built | Only the first time per repo and model |
+| Wrong file comes first | The query matches a sibling file better | Ask with words from the file's purpose; `grep` for exact names |
+
+When a search returns no hits, the result says why. `no matches (bm25)` means it ran, nothing was relevant, and meaning search was off. `no matches (no docs indexed — set AGENTTY_DOCS_DIR …)` means there was nothing to search.
 
 ## How well it works
 
@@ -52,66 +63,122 @@ agentty measures its own search on a judged set of real questions about its own 
 
 Each range covers the main and held-out halves of the set (60 + 41 code questions, 30 + 20 docs questions).
 
-What makes code search good: identifiers are split into words (`onClipboardRead` matches "clipboard read"), source files rank above tests and docs unless you ask about tests or docs, a header pulls its `.cpp` up with it, and results spread across files instead of returning one file eight times.
+What helps code search:
 
-## If results look wrong
+- Identifiers are split into words, so `onClipboardRead` matches "clipboard read" (`AGENTTY_RAG_SPLIT_IDENT=0` turns this off).
+- Source files rank above tests and docs unless you ask about tests or docs.
+- A header pulls its `.cpp` up with it.
+- Results spread across files instead of returning one file eight times.
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Results say `bm25`, never `hybrid` | No embedding server, or the model isn't pulled | `ollama pull qwen3-embedding:0.6b`, then `agentty diagnostics` |
-| `diagnostics` says `invalid: host ...` | A typo in the Retrieval pane (e.g. `127.0.0`) | Fix the host there, or delete the `rag` keys in `~/.agentty/settings.json` |
-| `search_docs` finds nothing | No docs folder | Put docs in `./docs` or `./.agentty/knowledge`, or set `AGENTTY_DOCS_DIR` |
-| First search is slow | The index is being built | Only the first time per repo and model |
-| Wrong file comes first | The query matches a sibling file better | Ask with words from the file's purpose; `grep` for exact names |
+`AGENTTY_RAG_CODE_RERANK=0` turns off these code-specific ranking rules.
 
-## What is on by default
+## How a search runs {#what-is-on-by-default}
 
-1. Code-aware chunking: code splits at functions and classes, docs at headings.
-2. Keyword search (BM25), plus embeddings when the startup check reaches a model.
-3. Score fusion of the two (convex by default; `AGENTTY_RAG_FUSION=rrf` for weighted reciprocal-rank fusion).
-4. A deterministic reranker, plus the code-specific rules above for `search_code`.
-5. Diversity (MMR), duplicate removal, and stitching of adjacent hits.
-6. Query-focused trimming under a strict total size budget.
+Each search passes through these stages in order. Cheap stages are on. Slow or corpus-sensitive stages are off until you turn them on. Defaults are set in `src/rag/adapter.cpp:715-761`.
 
-Expensive or corpus-sensitive stages are **opt-in**, not taxes on every query:
+| Stage | What it does | Default | Env var |
+|---|---|---|---|
+| Chunking | Splits code at functions and classes, docs at headings | On | - |
+| Contextual chunks | Adds context about where a chunk sits to the chunk | On | `AGENTTY_RAG_CONTEXTUAL=0` |
+| Keyword search (BM25) | Matches words | On | - |
+| Meaning search | Matches embeddings, if the startup check found a model | On when a model answers | `AGENTTY_EMBED_MODEL` |
+| Fusion | Merges the two lists. Convex by default; `rrf` is weighted reciprocal-rank fusion | `convex` | `AGENTTY_RAG_FUSION=rrf` |
+| Adaptive fusion | Picks the keyword/meaning balance per query | On | `AGENTTY_RAG_ADAPTIVE=0` |
+| Reranker | Deterministic rerank, plus code rules for `search_code` | On | `AGENTTY_RAG_CODE_RERANK=0` |
+| Diversity (MMR) | Spreads results across files | On, lambda 0.65 | `AGENTTY_RAG_MMR=0`, `AGENTTY_RAG_MMR_LAMBDA` |
+| Dedup | Drops near-duplicate passages | On, threshold 0.92 | `AGENTTY_RAG_DEDUP=0`, `AGENTTY_RAG_DEDUP_THRESHOLD` |
+| Autocut | Cuts the list where scores drop sharply | On, sensitivity 2.0 | `AGENTTY_RAG_AUTOCUT=0`, `AGENTTY_RAG_AUTOCUT_SENSITIVITY` |
+| Stitching | Joins adjacent hits from the same file | On | `AGENTTY_RAG_STITCH=0` |
+| Trimming | Fits passages into the size budget (see [Token budget](#token-economy)) | On | `AGENTTY_RAG_OUTPUT_BYTES` |
 
-- Pseudo-relevance feedback: `AGENTTY_RAG_PRF=1`
-- GraphRAG: `AGENTTY_RAG_GRAPH=1`
-- Corrective grading: `AGENTTY_RAG_CORRECT=1`
-- Multi-query expansion: `AGENTTY_RAG_EXPAND=1`
-- HyDE: `AGENTTY_RAG_HYDE=1`
-- Implicit learning: `AGENTTY_RAG_LEARN=1`
-- Proactive pre-turn injection: `AGENTTY_RAG_PROACTIVE=1`
+Every result starts with a short **funnel** line. It shows how many candidates each stage kept and whether the run was `bm25` or `hybrid`. You can see when a query found little, or when the relevance floor cut a weak tail.
 
-This profile favors predictable latency and token economy. Enable optional stages only after measuring them on your corpus with `agentty rag-bench` and representative real queries.
+The off-by-default stages are listed in [Optional stages](#optional-advanced-stages). Turn one on only after measuring it on your own files with `agentty rag-bench` and real questions.
 
 ## What gets indexed
 
-| Source | Default | Configuration |
+| Source | Default | Setting |
 |---|---:|---|
-| Docs folder | Auto-discovered | `AGENTTY_DOCS_DIR`, then `./docs`, then `./.agentty/knowledge` |
-| Installed skills | On | `AGENTTY_RAG_SKILLS=0` disables |
-| Learned memory | On | `AGENTTY_RAG_MEMORY=0` disables |
-| MCP resources | Off | `AGENTTY_RAG_MCP=1` enables resource reads |
+| Docs folder | Found automatically | `AGENTTY_DOCS_DIR`, then `./docs`, then `./.agentty/knowledge` |
+| Installed skills | On | `AGENTTY_RAG_SKILLS=0` turns off |
+| Learned memory | On | `AGENTTY_RAG_MEMORY=0` turns off |
+| MCP resources | Off | `AGENTTY_RAG_MCP=1` turns on |
 | Workspace source code | On demand | Indexed separately by `search_code` |
 
-MCP indexing is opt-in because reading a resource can involve server I/O. MCP-backed indexes are not persisted across sessions, preventing stale session resources from leaking into a later run.
+MCP indexing is off by default because reading a resource can mean server I/O. MCP indexes are not saved between sessions, so stale resources can't leak into a later run.
 
-## Dense retrieval and graceful fallback
+## Meaning search and fallback
 
-At startup agentty runs one quick embedding check. If the server or model is unavailable, the session stays keyword-only instead of paying a failed network timeout on every search. The check waits up to 30 seconds for Ollama to load a model, but a server that isn't running fails at once.
+At startup agentty runs one quick embedding check. If the server or model is missing, the session stays keyword-only. This avoids a failed network timeout on every search. The check waits up to 30 seconds for Ollama to load a model. A server that isn't running fails at once.
 
-With the backend on **Auto** (the default) and the model left at its default, agentty tries `qwen3-embedding:0.6b` first and uses `nomic-embed-text` when that isn't pulled. A model or backend you set yourself is used as is.
+With the backend on **Auto** (the default) and the model left at its default, agentty tries `qwen3-embedding:0.6b` first (`src/rag/embed_backend.cpp:321`) and uses `nomic-embed-text` if that isn't pulled. A model or backend you set yourself is used as is.
 
-Models trained with query/document prefixes (nomic, e5, mxbai, arctic) get them automatically; `AGENTTY_EMBED_PREFIX=0` turns that off. Other backends (an OpenAI-compatible endpoint, llama.cpp, or an in-process GGUF/ONNX model) are picked in the Retrieval pane.
+Models trained with query/document prefixes (nomic, e5, mxbai, arctic) get them automatically. `AGENTTY_EMBED_PREFIX=0` turns that off. Other backends (an OpenAI-compatible endpoint, llama.cpp, or an in-process GGUF/ONNX model) are picked in the Retrieval pane.
 
-When a search returns **no hits**, the result says why — e.g. `no matches (bm25)` (it ran, nothing was relevant, and the meaning half was off), or `no matches (no docs indexed — set AGENTTY_DOCS_DIR …)` when there was nothing to search.
+`AGENTTY_RAG_BM25_WEIGHT` and `AGENTTY_RAG_DENSE_WEIGHT` (both default 1.0) set the keyword/meaning balance in `rrf` mode. The default convex mode adapts the balance per query instead.
 
-`AGENTTY_RAG_BM25_WEIGHT` and `AGENTTY_RAG_DENSE_WEIGHT` set the keyword/meaning balance in `rrf` fusion mode; the default convex mode adapts the balance per query instead.
+## Proactive retrieval
 
-## Persistence and freshness
+By default agentty does not search before each turn. The model calls `search_docs` or `search_code` only when it needs to, which costs fewer tokens.
 
-Indexes are saved and reopened, never rebuilt on every start. They live with the project, so each checkout has its own:
+To search automatically, type `/settings` and open **Proactive retrieval (RAG)**. Pick one mode:
+
+| Mode | What it does |
+|------|-----------|
+| **On** | Retrieve and inject context before **every** turn |
+| **First turn only** | Ground the **first** turn of a thread, then stay quiet |
+| **Off** | No injection before turns. The search tools still work |
+
+The choice is saved in `settings.json`. A [forked thread](/docs/fork) can have its own mode, chosen in the fork picker. `AGENTTY_RAG_PROACTIVE=1` is the env-var equivalent of **On**:
+
+```bash
+export AGENTTY_RAG_PROACTIVE=1
+```
+
+When it's on, agentty runs one retrieval in the background, shows `retrieving context…`, and starts the model when retrieval is done. It injects only when retrieval confidence is at least `AGENTTY_RAG_PROACTIVE_MIN` (default 0.35, `adapter.cpp:760`). The block is capped at about 6 KiB (~1,500 tokens), tighter than the tool budget, because you didn't ask for it:
+
+```bash
+export AGENTTY_RAG_PROACTIVE_BYTES=6144   # clamped 1 KiB - 32 KiB
+```
+
+Injected context shows as its own **retrieved-context** card, not as your message. The card lists the sources and shows a confidence bar. These blocks never appear in [[↑]]/[[↓]] history recall. They ground only that turn, and older ones are dropped from later requests so you aren't charged for them again.
+
+## Optional stages {#optional-advanced-stages}
+
+These are off by default. Each adds latency or can hurt results on some corpora.
+
+| Stage | Turn on with | Default | Code |
+|---|---|---|---|
+| Pseudo-relevance feedback | `AGENTTY_RAG_PRF=1` | Off | `adapter.cpp:735` |
+| Corrective grading | `AGENTTY_RAG_CORRECT=1` | Off | `adapter.cpp:736` |
+| GraphRAG | `AGENTTY_RAG_GRAPH=1` | Off | `adapter.cpp:737` |
+| Multi-query expansion | `AGENTTY_RAG_EXPAND=1` | Off | `adapter.cpp:740` |
+| HyDE | `AGENTTY_RAG_HYDE=1` | Off | `adapter.cpp:741` |
+| Learning from file opens | `AGENTTY_RAG_LEARN=1` | Off | `adapter.cpp:2832` |
+
+### PRF
+
+`AGENTTY_RAG_PRF=1` expands the query with words from the top keyword hits. It can help when your words differ from the file's words. It can also drift toward a wrong first result.
+
+### GraphRAG (off by default) {#8-graphrag-expansion-retrieval-over-the-document-graph-default-on}
+
+`AGENTTY_RAG_GRAPH=1` builds links between documents, similarity edges, and communities, then expands results along the graph. Building the graph can take time quadratic in the number of documents, so it is not a default. Base and graph results are merged by rank because their scores use different scales.
+
+### Corrective grading
+
+`AGENTTY_RAG_CORRECT=1` grades each retrieval using its scores plus keyword support. A meaning match is not rejected just because it paraphrases the query. Grading keeps the number of results you asked for, so `k=10` stays 10.
+
+### Multi-query and HyDE
+
+`AGENTTY_RAG_EXPAND=1` and `AGENTTY_RAG_HYDE=1` use a small local model (`AGENTTY_RAG_GEN_MODEL`, default `qwen2.5:0.5b`) to rewrite the query. They help with vague or research-style questions but add model latency.
+
+### Learning
+
+`AGENTTY_RAG_LEARN=1` turns on an experimental loop that learns from which files you open next. It is stored in `.agentty/rag_feedback.tsv`. It's off because opening a file afterwards doesn't prove a skill, memory, or passage was relevant.
+
+## Saved indexes and freshness {#persistence-and-freshness}
+
+Indexes are saved and reopened, not rebuilt on every start. They live with the project, so each checkout has its own:
 
 ```text
 <project>/.agentty/cache/rag_docs.<id>.ragdb   # docs, skills, memory
@@ -120,178 +187,75 @@ Indexes are saved and reopened, never rebuilt on every start. They live with the
 
 `AGENTTY_RAG_DIR` moves them (see [Environment](/docs/environment)).
 
-`<id>` names the embedding model, so switching models keeps the old index for when you switch back. Each index stores per-file size/mtime stamps; when a later run sees changed files it updates only those, so one edited file costs seconds, not a rebuild. Changing the chunking, the docs folder, or the model starts a fresh index.
+`<id>` names the embedding model, so switching models keeps the old index for when you switch back. Each index stores the size and mtime of every file. When files change, only those files are reindexed, so one edited file costs seconds. Changing the chunking, the docs folder, or the model starts a fresh index. A large change set also triggers a clean rebuild.
 
-Freshness scans:
+The freshness scan:
 
-- prune `.git`, build outputs, dependency trees, virtual environments, and caches before descending;
-- inspect only extensions and sizes the loader can index;
-- include relative paths, so renames invalidate the index;
-- fingerprint skill and memory content, not only record counts.
+- skips `.git`, build outputs, dependency trees, virtual environments, and caches;
+- looks only at file types and sizes the loader can index;
+- includes relative paths, so a rename updates the index;
+- fingerprints skill and memory content, not just their count.
 
-When a small number of docs changes, agentty removes and reindexes only those documents. A large change set triggers a clean rebuild. `search_code` uses the same incremental strategy and caps its workspace corpus at 4,000 source files of at most 256 KiB each.
+`search_code` keeps its own index, separate from docs. It splits source at definitions, so a result is usually a whole function, class, or declaration. It indexes at most 4,000 source files of up to 256 KiB each.
 
-## Code-aware chunks
+## Token budget {#token-economy}
 
-`search_code` uses rag-cpp's source chunker. Recognized languages split around definitions rather than arbitrary prose windows, so a result normally contains a coherent function, class, or declaration. The code index is independent of the docs index; editing one source file updates that file rather than rebuilding the repository.
+Retrieval is the one place agentty spends model tokens for you, so its output is tightly budgeted. These settings shape how many tokens the ranked passages use. None of them change the ranking. All are on by default.
 
-## Token economy
+| Setting | What it does | Default |
+|---|---|---|
+| `AGENTTY_RAG_OUTPUT_BYTES` | Total size of all returned passages, clamped 2 KiB - 64 KiB | 12288 (~3,000 tokens) |
+| `AGENTTY_RAG_RELEVANCE_FLOOR` | Keeps a passage only if its score is within this fraction of the top hit. The top hit is always kept. `0` keeps all | 0.30 |
+| `AGENTTY_RAG_BUDGET_GAMMA` | Splits bytes in proportion to score^gamma, with a per-passage floor. Higher gives more to the top hits | 1.5 |
+| `AGENTTY_RAG_CONF_BUDGET_FLOOR` | A low-confidence retrieval gets only this fraction of the total budget, rising to 100% at full confidence | 0.45 |
+| `AGENTTY_RAG_EXTRACTIVE` | Compresses long prose passages. `0` forces a plain line window | On |
+| `AGENTTY_RAG_PROACTIVE_BYTES` | Separate cap for proactive injection | 6144 |
 
-Retrieval is the one place agentty spends model-context tokens on your behalf, so the output path is aggressively budgeted. Five independent levers keep the spend proportional to how useful the retrieval actually is. All are on by default and env-tunable, and none of them change ranking—they only shape how many tokens the *already-ranked* passages consume.
+Defaults are in `src/rag/adapter.cpp:216-290`.
 
-### Aggregate output budget
+When a prose passage is too long, agentty keeps the sentences that best match the query (rare query words count more). It prints them in their original order with `…` marking gaps. No model is involved. Code and config keep a single block of lines with the most query words, because code is hard to read with gaps.
 
-Retrieval output has an aggregate body budget of approximately 12 KiB by default—roughly 3,000 tokens, depending on content:
+The requested `k` is still honored when enough distinct passages exist.
 
-```bash
-export AGENTTY_RAG_OUTPUT_BYTES=12288   # clamped 2 KiB – 64 KiB
-```
+Measured effect: on a 161-file corpus, these settings together cut retrieval output from ~1,845 to ~1,605 estimated tokens per query (−13%), with identical ranking (recall@10 1.000, MRR 0.968, nDCG@10 0.976). Small chunks that already fit see little change. Retrieval is a small part of a turn's tokens, since the system prompt, tools, and history dominate and are mostly cached. Measure on your own corpus instead of assuming.
 
-The budget applies across all returned passage bodies, not independently to each result.
-
-### Relevance floor
-
-The low-confidence tail of a retrieval is what the model ignores anyway, so paying flagship input price to inject it is waste. A passage survives only if its score is within a fraction of the top hit's score; the best hit is always kept.
-
-```bash
-export AGENTTY_RAG_RELEVANCE_FLOOR=0.30   # 0 keeps every hit
-```
-
-### Score-proportional (water-filling) budget
-
-Instead of splitting the budget evenly by passage count—which handed a rank-8 hit at confidence 0.11 the same allowance as the rank-1 hit at 0.88—agentty splits bytes in proportion to score^gamma, with a per-passage floor so a kept tail hit still reads legibly. Confident passages get room to be complete; marginal ones get a tight excerpt.
-
-```bash
-export AGENTTY_RAG_BUDGET_GAMMA=1.5   # higher concentrates budget on the head
-```
-
-### Confidence-scaled total budget
-
-A retrieval that barely clears the relevance bar should not reserve the same ~3,000 tokens as a slam-dunk. The *total* budget ramps linearly with retrieval confidence, from a floor fraction at low confidence to 100% at full confidence. Ungraded paths keep the full budget.
-
-```bash
-export AGENTTY_RAG_CONF_BUDGET_FLOOR=0.45   # min fraction of budget at low confidence
-```
-
-### Extractive passage compression
-
-When a passage is too large, agentty compresses rather than truncates. For prose it runs a model-free, LLMLingua-style extractive pass: each sentence is scored by rare-term-weighted query overlap, the highest-scoring sentences are kept within budget, and they are re-emitted in original order with `…` gap markers. This drops irrelevant filler *between* relevant sentences—something a contiguous window cannot. Source code and config keep a contiguous line-window with the strongest query-term evidence, because inter-line contiguity is load-bearing for readability.
-
-```bash
-export AGENTTY_RAG_EXTRACTIVE=0   # disable extraction, force line-window
-```
-
-The requested `k` is still honored when enough distinct passages exist. Optional corrective grading no longer silently collapses a broad `k=10` request to three strips.
-
-### Unprompted (proactive) spend
-
-When proactive injection is enabled, the block is spent without the user asking, so it is capped independently and more tightly than the on-demand tool budget—about 6 KiB (~1,500 tokens) by default:
-
-```bash
-export AGENTTY_RAG_PROACTIVE_BYTES=6144   # clamped 1 KiB – 32 KiB
-```
-
-### Measured effect
-
-On a realistic 161-file corpus, these levers together cut retrieval output from ~1,845 to ~1,605 estimated tokens per query (**−13%**) with **identical** ranking metrics (recall@10 1.000, MRR 0.968, nDCG@10 0.976). Savings scale with passage size: a corpus of small chunks that already fit under budget sees little change, because compression never fires. Retrieval is a fraction of a coding turn's total tokens—the stable system, tools, and history prefix dominate and is already discounted heavily by prompt caching—so treat this as a real but modest slice of the overall bill. Measure it on your own corpus (see below) rather than assuming.
-
-## Proactive retrieval
-
-Automatic pre-turn context injection is off by default. The explicit `search_docs` tool is normally more economical because the model calls it only when project knowledge is needed.
-
-### The RAG picker (in-app)
-
-Rather than juggling env vars, set proactive retrieval in the app: `/settings` → **Proactive retrieval (RAG)**. One decision, three modes:
-
-| Mode | Behaviour |
-|------|-----------|
-| **On** | retrieve and inject context before **every** turn |
-| **First turn only** | ground the **first** turn of a thread, then stay quiet |
-| **Off** | no pre-turn injection (the `search_docs` / `search_code` tools still work) |
-
-The choice is **persisted** in `settings.json`, so it sticks across sessions. A [forked thread](/docs/fork) can carry its own RAG mode, chosen in the fork picker, independent of the global setting. Setting `AGENTTY_RAG_PROACTIVE=1` (below) is the env-var equivalent of **On**; the picker is the everyday way in.
-
-### The retrieved-context card
-
-When proactive retrieval injects a block, it does **not** appear as if you typed it. It renders as its own quiet **retrieved-context** card — with the source list and a confidence bar reflecting the retrieval's grade — so you can always see *what* was pulled in and *how sure* the engine was. These synthetic blocks never leak into the composer's [[↑]]/[[↓]] history recall, and older ones are dropped from later wire payloads so you're not charged for them turn after turn.
-
-### The retrieval funnel
-
-Every `search_docs` / `search_code` result is headed by a compact **funnel** line showing how the candidate set narrowed — lexical/dense retrieval → fusion → dedup/autocut → the passages actually returned — plus whether the run was `bm25` or `hybrid`. It makes the ranking legible instead of a black box: you can see at a glance when a query found little, or when the relevance floor trimmed a weak tail.
-
-### Enabling proactive retrieval via env
-
-The env-var equivalent of the picker's **On** mode:
-
-```bash
-export AGENTTY_RAG_PROACTIVE=1
-```
-
-When enabled, the app runs exactly one retrieval on an isolated worker, displays `retrieving context…`, and launches the model after retrieval settles. It does not race a synchronous hedge against a duplicate background query. Injected context grounds that turn only; older proactive blocks are removed from later wire payloads so they are not repeatedly charged.
-
-## Optional advanced stages
-
-### PRF
-
-`AGENTTY_RAG_PRF=1` expands a query from top lexical candidates. It can improve vocabulary mismatch, but it can also drift toward an initially wrong result. It is off until explicitly enabled.
-
-### GraphRAG
-
-`AGENTTY_RAG_GRAPH=1` builds document links, similarity edges, communities, and local graph expansion. Graph construction can be quadratic in document count, so it is unsuitable as an unconditional default. Base and graph results are fused by rank because their raw score scales differ.
-
-### Corrective grading
-
-`AGENTTY_RAG_CORRECT=1` grades retrieval using normalized retrieval evidence plus lexical support. Semantic matches are not rejected merely because they paraphrase the query, and grading preserves the requested result count.
-
-### Multi-query and HyDE
-
-`AGENTTY_RAG_EXPAND=1` and `AGENTTY_RAG_HYDE=1` use a small local generator (`AGENTTY_RAG_GEN_MODEL`, default `qwen2.5:0.5b`). They are useful for research-heavy or ambiguous queries but add local model latency.
-
-### Learning
-
-`AGENTTY_RAG_LEARN=1` enables the experimental file-open feedback loop stored in `.agentty/rag_feedback.tsv`. It is off by default because a subsequent file read is not an attributable relevance judgment for skills, memory, or passages that already answered the question.
-
-## Measuring retrieval
+## Measuring retrieval {#measure-it-agentty-rag-bench}
 
 Two built-in tools, both offline.
 
-`agentty rag-eval <cases.json>` scores search against questions with known answers, the way the tools actually run. agentty's own sets live in `tests/rag_eval/` (code and docs, each with a held-out half kept out of tuning). A cases file is a list of `{"q": "...", "gold": ["path", ...]}`; wrap it as `{"tool": "search_docs", "cases": [...]}` to test docs search. It prints the right-file-first rate (hit@1), the top-8 rate (hit@8), MRR, and every miss:
+`agentty rag-eval <cases.json>` scores search against questions with known answers, using the real tools. agentty's own sets are in `tests/rag_eval/` (code and docs, each with a held-out half kept out of tuning). A cases file is a list of `{"q": "...", "gold": ["path", ...]}`. Wrap it as `{"tool": "search_docs", "cases": [...]}` to test docs search. It prints hit@1 (right file first), hit@8, MRR, and every miss:
 
 ```bash
 agentty rag-eval tests/rag_eval/agentty_code.json
 AGENTTY_RAG_EVAL_ALL=1 agentty rag-eval my_cases.json   # every case's rank
 ```
 
-Write twenty questions about your own repo with the file that answers each, and you have a check that a model or setting change really helped. The `rag_eval_guard` test runs agentty's sets keyword-only on every build and fails if search gets worse.
+Write twenty questions about your repo, each with the file that answers it. Then you can check whether a model or setting change really helped. The `rag_eval_guard` test runs agentty's sets keyword-only on every build and fails if search gets worse.
 
-`agentty rag-bench` benchmarks `search_docs` on your docs folder:
+`agentty rag-bench` benchmarks `search_docs` on your docs folder. It reports indexing time, recall@k, MRR, nDCG@10, and milliseconds per query:
 
 ```bash
 agentty rag-bench docs
 ```
 
-The benchmark reports indexing time and a deterministic ladder of recall@k, MRR, nDCG@10, and milliseconds/query. A metric drop after adding a stage is evidence to leave that stage disabled or tune it.
-
-To measure **token cost** rather than ranking quality, add `AGENTTY_RAG_MEASURE=1`. This runs the benchmark's queries through the real retrieval output path—the one that applies the relevance floor, water-filling, confidence-scaled budget, and extractive compression—and reports the bytes and estimated tokens actually injected per query, plus a machine-readable `MEASURE` line:
+To measure **token cost**, add `AGENTTY_RAG_MEASURE=1`. The queries then go through the real output path (relevance floor, budget split, confidence budget, compression). It reports bytes and estimated tokens per query, plus a machine-readable `MEASURE` line:
 
 ```bash
 AGENTTY_RAG_MEASURE=1 agentty rag-bench docs
 ```
 
-To quantify any single lever, run it twice with the lever toggled and diff the `tokens=` field. For example, to isolate extractive compression:
+To measure one setting, run twice with it toggled and compare the `tokens=` field:
 
 ```bash
 AGENTTY_RAG_MEASURE=1 AGENTTY_RAG_EXTRACTIVE=0 agentty rag-bench docs   # off
 AGENTTY_RAG_MEASURE=1                          agentty rag-bench docs   # on
 ```
 
-Because every lever is env-tunable, no rebuild is needed to measure a configuration on your own corpus.
-
-`rag-bench` builds its queries from the documents themselves, so it measures the mechanics. `rag-eval` with real questions measures what you actually care about.
+No rebuild is needed. `rag-bench` builds its queries from the documents, so it tests the mechanics. `rag-eval` with real questions tests what you actually care about. If a metric drops after turning on a stage, leave it off or tune it.
 
 ## Provenance
 
-Every passage retains a source and path:
+Every passage keeps its source and path:
 
 ```text
 docs:guide/auth.md:20-44
@@ -301,4 +265,11 @@ mcp:file://resource-uri
 code:src/auth/token.cpp:80-126
 ```
 
-Use the provenance to cite, open, or verify retrieved information rather than treating it as ungrounded model knowledge.
+Use it to cite, open, or check what was retrieved.
+
+## Why it works this way
+
+- **Cheap by default.** Slow or risky stages are off, so every search has predictable latency and token cost.
+- **Fallback, not failure.** One startup check decides between hybrid and keyword-only, so a missing model never slows each search.
+- **Local.** Indexes live in your project. Embeddings run on your machine unless you point `AGENTTY_OLLAMA_HOST` elsewhere.
+- **Measured.** Optional stages stay off until you measure them on your own corpus. `rag_eval_guard` catches regressions.

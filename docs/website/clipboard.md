@@ -6,8 +6,21 @@ nav_order: 25
 slug: clipboard
 ---
 
-Press [[Ctrl+V]] in the composer (or [[Alt+V]], for terminals that keep Ctrl+V
-for their own paste). What lands depends on what you copied:
+This page covers pasting into agentty. To paste a screenshot or other image,
+copy it and press [[Ctrl+V]] in the composer. If your terminal keeps Ctrl+V for
+its own paste (Windows Terminal does), press [[Alt+V]].
+
+**Working over ssh?** Run this once on the machine you type on, then reconnect:
+
+```bash
+agentty paste setup
+```
+
+After that, Ctrl+V on the server reads your laptop's clipboard, images
+included. Details are in [Your laptop, over ssh](#2-your-laptop-over-ssh). If a
+paste fails, run `agentty paste doctor` (see [Troubleshooting](#troubleshooting)).
+
+What lands depends on what you copied:
 
 | You copied | What goes into the message |
 |------------|----------------------------|
@@ -26,10 +39,10 @@ command line.
 
 ## How a paste finds your clipboard
 
-Ctrl+V only needs the terminal for the keypress. The clipboard is fetched by
-the best route available. Routes that need no setup come first, the ones that
-can carry images before the ones that only carry text, and each one that has
-nothing hands over to the next:
+The rest of this page is reference. Ctrl+V only needs the terminal for the
+keypress; agentty fetches the clipboard by the best route it can find. Routes
+that need no setup come first, and routes that carry images come before
+text-only ones. If a route has nothing, the next one is tried:
 
 | Where you are | Tried in order |
 |---------------|----------------|

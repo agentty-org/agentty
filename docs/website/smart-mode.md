@@ -1,61 +1,59 @@
 ---
 title: Smart Mode
-description: A self-supervised orchestrator that routes each turn to the right model and effort — and gets better at your repo the more you use it.
+description: Route each turn to a model and reasoning effort that fit how hard it is.
 nav_section: User Manual
 nav_order: 52
 slug: smart-mode
 ---
 
-Smart Mode turns agentty from "one model does everything" into a small **team of models with a lead that delegates** — and a router that learns your codebase. It sends the hard thinking to your flagship, the grunt work to a cheaper model, scales reasoning effort to how hard each turn actually is, and remembers what worked in *this* repo so the next similar turn is routed better.
+Smart Mode sends each turn to a model that fits it. Hard thinking goes to your best model, routine work goes to cheaper ones, and reasoning effort scales with how hard the turn looks. This page covers what it does, how to turn it on, and what it costs.
 
-It's **off by default** and, when off, a **byte-for-byte no-op** — nothing about your turns changes until you enable it.
+It is **off by default**. When off, nothing about your turns changes.
+
+## Turn it on
+
+1. Press [[Ctrl+S]] (or [[Ctrl+K]] → *Smart Mode*).
+2. Toggle **Smart Mode** on.
+3. Leave the three model rows on **auto**, or press [[Enter]] on a row to pin a model.
+4. Press [[Esc]] to close. The choice is saved for next time.
 
 :::tip
-Open the config overlay with [[Ctrl+S]] (or [[Ctrl+K]] → *Smart Mode*). Toggle the master switch, then leave everything else on the defaults — Smart Mode auto-fills sensible roles from your live model list.
+The defaults are fine. With nothing pinned, Smart Mode fills the roles from your provider's live model list.
 :::
 
-## The one-minute version
+## The three roles
 
-You pin three models to three **roles**:
+| Role | Does | Auto-fill picks |
+|------|------|-----------------|
+| **Strategic** | planning, architecture, hard debugging, review | your current model |
+| **Implementation** | writing and editing code, tests | the strongest mid-tier model |
+| **Utility** | search, reading, summaries, titles, compaction | the cheapest capable model |
 
-| Role | Does | Typical model |
-|------|------|---------------|
-| **Strategic** | the thinking — architecture, decisions, review, decomposition | your flagship (e.g. Opus) |
-| **Implementation** | writing code, fixing compiles, tests | a mid model (e.g. Sonnet) |
-| **Utility** | grep / read / summarise / compaction | the cheapest capable model (e.g. Haiku) |
-
-The planner thinks in *roles*, never model names. At dispatch time each unit of work resolves to the model that fits it. Turn Smart Mode off and every role collapses back to your single active model — exactly today's behaviour.
-
-Leave the roles empty and Smart Mode **auto-fills** them from your provider's catalog: Strategic = your current model, Implementation = the strongest mid-tier model, Utility = the cheapest capable one.
+agentty never checks model names to decide behaviour. Each piece of work has a role, and the role picks the model. With Smart Mode off, every role is your single active model.
 
 ## What it does
 
-Smart Mode is **one switch**. Turn it on and you get all of this together — there are no sub-toggles to reason about:
+Smart Mode is one switch. Turning it on enables all of this together:
 
-- **Internal routing** — engine-internal utility calls (like the auto-compaction summary) run on the cheap Utility model instead of your flagship.
-- **Orchestration** — the *main turn* runs on Strategic, and it's told to keep the decisions and **delegate** mechanical work to subagents.
-- **Subagent routing** — each `task` subagent's model is chosen by its role (an explorer runs cheap; a reviewer runs strong).
-- **Complexity-scaled effort** — a language-agnostic feature classifier rates every turn and scales the Strategic model's reasoning budget up for hard turns, down for trivial ones, continuously with how hard the turn actually is.
-- **Cascade feedback** — the effort estimate self-corrects *within a session* from what the model actually did, then resets when you exit.
+- **Main-turn routing.** Each turn is rated Trivial, Simple, Standard or Complex. Trivial and Simple turns run on Utility, Standard on Implementation, Complex on Strategic. You can raise the floor or turn this off in the overlay's advanced rows ([[Ctrl+E]]).
+- **Internal routing.** Engine calls such as the auto-compaction summary run on Utility.
+- **Orchestration.** The main turn is told to keep decisions for itself and hand mechanical work to `task` subagents.
+- **Subagent routing.** Each subagent's model follows its role: an explorer runs cheap, a reviewer runs strong.
+- **Complexity-scaled effort.** Reasoning effort goes down for easy turns and up for hard ones.
+- **Session correction.** If you correct a turn ("no, that's wrong", "undo"), later turns in this session think harder. This resets when you exit.
 
-The only thing you configure is **which model plays each role** — and even that defaults to auto.
-
-Smart Mode used to ship eight independently-selectable layers, four of which persisted per-workspace learning. They were never measured against the fixed policy, and each was a correctness surface plus one more thing to understand. Eight unmeasured knobs is a product hedging, not an opinion — so they're gone, and what remains is on by default.
-
-Deep dives:
-
-- **[Roles & Routing](/docs/smart-mode-routing)** — the three roles, auto-fill, effort scaling, and how the resolver never checks a model name.
-- **[Orchestration](/docs/smart-mode-orchestration)** — the orchestrator-workers pattern, the delegation directive, and the 🧠 routing card.
-- **[Reference](/docs/smart-mode-reference)** — the overlay, every `settings.json` key, the env knobs, and the design rationale.
-
-## Why this shape
-
-Smart Mode is built on the **orchestrator-workers** pattern (the one Anthropic's multi-agent research system uses and that shipped coding agents converge on), not a planner emitting a static step graph. The lead model stays in agentty's normal reactive loop and delegates *using a tool it already has* — so there's no second agent framework, no brittle plan to fall out of sync, and every layer degrades cleanly to a no-op. See the [design rationale](/docs/smart-mode-reference#design).
+Smart Mode stores nothing per repository. It does not learn your codebase across sessions.
 
 :::note
-Smart Mode is **single-provider**: all three role slots must belong to the same provider (auth and prompt-caching don't transfer across providers). A single-model or one-tier account degrades to "everything on your model" — no change, no regression.
+Smart Mode works within **one provider**. All three roles must come from the same provider, because sign-in and prompt caching don't carry across providers. On an account with only one model, every role stays on that model.
 :::
 
-## Cost, honestly
+## What it costs
 
-Routing grunt work to a cheaper model is where the savings come from — frontier and efficient models in the same family differ ~5× on price. The industry rule of thumb (RouteLLM and the cascade literature) is that good routing keeps ~95% of frontier quality while sending the majority of work to cheaper models. Smart Mode's orchestration layer costs *more* tokens on a hard turn (the lead spawns workers), so it's gated on task complexity and fully under your control — turn the layer off and the main turn just runs on your model.
+Savings come from running routine work on cheaper models. Fast and flagship models in the same family often differ about 5× in price. Orchestration can use *more* tokens on a hard turn, because the lead starts workers. That only happens on turns rated complex enough, and the 🧠 routing card shows each decision.
+
+## More detail
+
+- **[Roles & Routing](/docs/smart-mode-routing)**: auto-fill, effort tiers, the classifier, session correction.
+- **[Orchestration](/docs/smart-mode-orchestration)**: how the lead delegates, and the 🧠 routing card.
+- **[Reference](/docs/smart-mode-reference)**: overlay rows, `settings.json` keys, env variables, constraints, [design](/docs/smart-mode-reference#design).

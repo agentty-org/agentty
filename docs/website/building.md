@@ -6,42 +6,33 @@ nav_order: 60
 slug: building
 ---
 
-agentty builds with CMake and a C++26 toolchain. Cutting a release is a single command that tags and pushes; GitHub Actions builds every binary and OS package.
-
-## Requirements
-
-- GCC 14+ / Clang 18+ / MSVC 14.40+ (`/std:c++latest`)
-- CMake 3.28+
-- OpenSSL and nghttp2 (FetchContent pulls maya automatically)
-
-:::warn
-AppleClang tops out at C++23 — building the tests (`AGENTTY_BUILD_TESTS`) requires `g++` or stock LLVM `clang++` on macOS, not Xcode's bundled toolchain.
-:::
-
-## Basic build
+To build agentty, clone it and use a CMake preset:
 
 ```bash
-git clone --recursive git@github.com:agentty-org/agentty.git
-cd agentty
-cmake --preset release
-cmake --build build -j
+git clone --recursive https://github.com/agentty-org/agentty.git && cd agentty
+cmake --preset release && cmake --build build -j
+```
+
+Then run it:
+
+```bash
 ./build/agentty
 ```
 
+You need a C++26 compiler. See [Requirements](#requirements).
+
 :::tip Use the presets, not a hand-rolled `-B build`
-`cmake -B build` **ignores `CMakePresets.json`** and gives you a Release +
-LTO + Makefiles configuration — and because every preset now uses that same
-`build/` directory, a hand-rolled configure *overwrites* your preset tree with
-a Makefile one (Ninja and Make cannot share a directory; CMake will refuse
-until you delete it). Always go through `--preset`. If you are about to change
-code, jump to [The development loop](#the-development-loop) instead.
+`cmake -B build` **ignores `CMakePresets.json`**. It gives you Release + LTO +
+Makefiles in the same `build/` directory the presets use. Ninja and Make cannot
+share a directory, so CMake refuses until you delete it. Always use `--preset`.
+If you plan to change code, use [The development loop](#the-development-loop).
 :::
 
 ## The development loop
 
-If you are editing agentty, this is the section that matters. The `debug`
-preset — the default — is Ninja + Debug + ccache + lld with no LTO, and it
-turns the edit→build→test cycle from ~36 seconds into under two:
+Use this if you are editing agentty. The `debug` preset is the default. It uses
+Ninja, Debug, ccache and lld, with no LTO. A rebuild after an edit drops from
+~36 seconds to under two:
 
 ```bash
 cmake --preset debug                           # once
@@ -50,8 +41,7 @@ cmake --build build --target agentty -j 12     # after each edit
 ```
 
 Pass `--target agentty`. Without it the build also makes every example,
-benchmark and submodule tool — measured at 19.6 s versus 0.65 s for the one
-target you actually care about.
+benchmark and submodule tool: 19.6 s versus 0.65 s for agentty alone.
 
 **Measured on a 12-core Linux box**, changing one `.cpp` and rebuilding:
 
@@ -60,21 +50,18 @@ target you actually care about.
 | Release + LTO | **36.2 s** |
 | `cmake --preset debug` (Debug + Ninja + ccache + lld) | **1.7 s** |
 
-That is a **21×** difference, and it is almost entirely the link step: LTO must
-re-optimize the whole binary for a one-line change, while a Debug link is
-nearly free. The first `debug` build is a normal cold compile (~5 min); every
-one after it is sub-second.
+That is **21×** faster. Almost all of it is the link step: LTO re-optimizes the
+whole binary for a one-line change. The first `debug` build is a normal cold
+compile (~5 min). Later ones are fast.
 
-Four things make it fast, all already configured:
+Four settings make it fast. All are already configured:
 
-- **Ninja** — a much tighter dependency graph than Make, and it parallelises
-  the objlib fan-out properly.
-- **No LTO** — the single biggest cost in an incremental Release build.
-- **`-g1`** — line tables, no local-variable DWARF. Backtraces and breakpoints
-  work; `print localvar` does not. Use `--preset debug-full` on the days you
-  need it.
-- **ccache** — auto-detected by `cmake/AgenttyToolchain.cmake`. Switching
-  branches or rebasing mostly hits the cache instead of recompiling.
+| Setting | Why |
+|---|---|
+| Ninja | Tighter dependency graph than Make; parallelises the objlib fan-out well. |
+| No LTO | The biggest cost in an incremental Release build. |
+| `-g1` | Line tables only. Backtraces and breakpoints work; `print localvar` does not. Use `--preset debug-full` when you need it. |
+| ccache | Auto-detected by `cmake/AgenttyToolchain.cmake`. Switching branches mostly hits the cache. |
 
 ### Running tests fast
 
@@ -111,44 +98,68 @@ ctest -j 8 -E "reveal_scrollback_test|scrollback_wire_fuzz|frozen_invariant_fuzz
 | Everything but the slow three | 432 | **26 s** |
 | Full suite | 435 | **110 s** |
 
-Those three account for nearly all of it — `reveal_scrollback_test` alone is
-120 s of CPU, `scrollback_wire_fuzz` 86 s, `frozen_invariant_fuzz` 50 s. They
-are deep property/fuzz runs worth having in CI and rarely worth waiting for
-locally. Everything else is sub-second.
+These three take nearly all the time: `reveal_scrollback_test` is 120 s of
+CPU, `scrollback_wire_fuzz` 86 s, `frozen_invariant_fuzz` 50 s. They are deep
+property/fuzz runs for CI. Everything else is sub-second.
 
 :::warn A green run proves nothing if nothing ran
-Check the assertion count, not just the status line. doctest happily reports
-`8 passed` for eight cases that asserted zero times — which is exactly what
-happened when a set of log tests guarded on an environment variable the suite
-did not set. `assertions: 0` is the tell.
+Check the assertion count, not just the status line. doctest reports
+`8 passed` for eight cases that asserted zero times. This happened once when
+log tests depended on an environment variable the suite did not set.
+`assertions: 0` is the tell.
 :::
 
 ### The other presets
 
-```bash
-cmake --preset debug-full  # Debug + full DWARF, for `print localvar` in gdb
-cmake --preset release     # -O3 + thin LTO — the optimized local binary
-cmake --preset ci          # mirrors the Linux CI gate
-cmake --preset sanitizer   # ASan + UBSan over agentty's own-logic set
-cmake --preset standalone  # portable binary, no third-party shared libs
-```
+| Preset | What it builds |
+|---|---|
+| `debug` | Default. Fastest edit-build-test loop. |
+| `dev` | Alias for `debug`. |
+| `debug-full` | Debug + full DWARF, for `print localvar` in gdb. |
+| `release` | `-O3` + thin LTO + strip. The optimized local binary. |
+| `pch` | Release + shared PCH. Opt-in experiment; slower on 8-core Apple clang. |
+| `ci` | Mirrors the Linux CI job (Release, no mimalloc, tests on). |
+| `sanitizer` | ASan + UBSan over agentty's own-logic set. |
+| `standalone` | Portable release binary, no third-party shared libs. |
 
 Every preset builds into the **same** `build/` tree. Switching preset
-reconfigures that tree in place rather than leaving a second multi-gigabyte
-copy on disk — `cmake --preset release` after `--preset debug` flips the build
-type, and flipping back is a no-op because ccache still holds the objects.
-If you genuinely need two configurations live at once, override the directory:
+reconfigures it in place, so you don't keep a second multi-gigabyte copy.
+Switching back is cheap because ccache still holds the objects. To keep two
+configurations at once, override the directory:
 `cmake --preset debug -B build-other`.
 
-## Standalone (static) build
+## Requirements
+
+- GCC 14+ / Clang 18+ / MSVC 14.40+ (`/std:c++latest`)
+- CMake 3.28+
+- OpenSSL and nghttp2 (FetchContent pulls maya automatically)
+
+## Platform notes
+
+:::warn macOS
+AppleClang tops out at C++23. To build the tests (`AGENTTY_BUILD_TESTS`) on
+macOS, use `g++` or stock LLVM `clang++`, not Xcode's bundled toolchain.
+:::
+
+### Standalone (static) build
 
 ```bash
-cmake -B build -DAGENTTY_STANDALONE=ON
+cmake --preset standalone   # sets AGENTTY_STANDALONE=ON
+cmake --build build -j
 ```
 
-Statically links OpenSSL + nghttp2 + libstdc++ + libgcc when their `.a` archives are installed, while libc stays dynamic. For a 100% static binary that runs on any Linux userland, pass `-DAGENTTY_FULLY_STATIC=ON`.
+This statically links OpenSSL, nghttp2, libstdc++ and libgcc when their `.a`
+archives are installed. libc stays dynamic. For a fully static binary that
+runs on any Linux userland, add `-DAGENTTY_FULLY_STATIC=ON`.
 
-The prebuilt Linux release binaries are **true standalone executables**: linked `-static -no-pie` into a classic `ET_EXEC` with no `NEEDED` entry and no `PT_INTERP`, so one file runs on glibc (Debian/Ubuntu/Fedora), musl (Alpine), and 64-bit Raspberry Pi OS alike. A build-time ELF-shape assertion (`cmake/assert_static_pie.cmake`) hard-fails the compile if the artifact ever regains a dynamic dependency. Termux/Android needs a PIE — build that with the opt-in `-DAGENTTY_STATIC_PIE=ON` on a musl toolchain.
+The prebuilt Linux release binaries are fully static. They are linked
+`-static -no-pie` into a classic `ET_EXEC` with no `NEEDED` entry and no
+`PT_INTERP`. One file runs on glibc (Debian/Ubuntu/Fedora), musl (Alpine) and
+64-bit Raspberry Pi OS. A build-time check (`cmake/assert_static_pie.cmake`)
+fails the build if the binary gains a dynamic dependency.
+
+Termux/Android needs a PIE. Build it with `-DAGENTTY_STATIC_PIE=ON` on a musl
+toolchain.
 
 ## Optimized builds
 

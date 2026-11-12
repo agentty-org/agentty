@@ -6,49 +6,77 @@ nav_order: 45
 slug: hooks
 ---
 
-Hooks are shell commands agentty runs **around tool calls**. A `pre_tool` hook fires before a tool executes and can **block** it; a `post_tool` hook fires after a tool produces a result. Use them to enforce a policy the model can't override — reject any `bash` command touching `/etc`, log every file write to your audit system, run a formatter after each edit.
+Hooks are shell commands that agentty runs around tool calls. A `pre_tool` hook runs before a tool and can block it. A `post_tool` hook runs after a tool returns. Use them for rules the model can't override, such as blocking `bash` commands that touch `/etc`, logging every write, or running a formatter after each edit.
 
-Hooks are **consent-gated**: a hooks file never runs until you explicitly approve it in a shell, and any change to it re-gates. This is deliberate — a hook is arbitrary code that runs on your machine.
+A hooks file never runs until you approve it in a shell. Any change to the file needs approval again.
 
-## The two events
+## Quick start
 
-| Event | Fires | Can it block? |
-|-------|-------|---------------|
-| **`pre_tool`** | just before a tool executes | **yes** — exit non-zero blocks the call |
-| **`post_tool`** | just after a tool returns a result | no — fire-and-forget |
+1. Create `~/.agentty/hooks.json`:
 
-These are the only two events; there are no session/turn/prompt hooks. Both are scoped to individual **tool calls**.
+   ```json
+   {
+     "pre_tool": [
+       { "match": "bash", "run": "~/.agentty/guard.sh" }
+     ],
+     "post_tool": [
+       { "run": "logger -t agentty" }
+     ]
+   }
+   ```
 
-## Defining hooks
+2. Create `~/.agentty/guard.sh` and make it executable (`chmod +x`):
 
-Author a `hooks.json` file. The first that exists wins:
+   ```sh
+   #!/bin/sh
+   # pre_tool hook: block commands that touch protected paths
+   payload=$(cat "$AGENTTY_HOOK_PAYLOAD_FILE")
+   case "$payload" in
+     *'/etc/'*|*'~/.ssh'*)
+       echo "refusing: touches a protected path"
+       exit 1 ;;   # non-zero → blocked, message shown to the model
+   esac
+   exit 0
+   ```
 
-1. `.agentty/hooks.json` (project)
+3. Approve it:
+
+   ```bash
+   agentty hooks approve
+   ```
+
+Now every `bash` call is checked by `guard.sh`, and every tool result is sent to the system log.
+
+## Events
+
+There are only two events. Both apply to individual tool calls. There are no session, turn, or prompt hooks.
+
+| Event | Runs | Can it block? |
+|-------|------|---------------|
+| `pre_tool` | just before a tool runs | **yes**, exit non-zero to block |
+| `post_tool` | just after a tool returns | no, its exit code is ignored |
+
+## Where the file lives
+
+agentty uses the first file that exists:
+
+1. `.agentty/hooks.json` (this project)
 2. `~/.agentty/hooks.json` (all projects)
 
-```json
-{
-  "pre_tool": [
-    { "match": "bash", "run": "~/.agentty/guard.sh" }
-  ],
-  "post_tool": [
-    { "run": "logger -t agentty" }
-  ]
-}
-```
+The file is read again on each tool call, so edits apply right away (once approved). Files over 64 KiB are ignored (`src/tool/hooks.cpp:57`).
 
-Each entry has:
+## Entry fields
 
 | Field | Required | Meaning |
 |-------|----------|---------|
-| `run` | **yes** | the shell command to execute |
-| `match` | no | a POSIX extended regex matched against the **tool name**; omit to match every tool |
+| `run` | **yes** | the shell command to run |
+| `match` | no | a POSIX extended regex matched against the **tool name**; omit it to match every tool |
 
-`match` is a regex on the tool name only (not arguments or paths). A malformed regex fails closed — the hook simply never fires.
+`match` checks the tool name only, not arguments or paths. If the regex is malformed, the hook never fires.
 
 ## What a hook receives
 
-A hook is a normal shell command, run through the **same OS sandbox as the `bash` tool** — it's workspace-confined exactly like model-driven shell. agentty passes context through environment variables:
+A hook runs in the **same OS sandbox as the `bash` tool**, so it is confined to the workspace. agentty passes context in environment variables:
 
 | Variable | Value |
 |----------|-------|
@@ -56,7 +84,7 @@ A hook is a normal shell command, run through the **same OS sandbox as the `bash
 | `AGENTTY_HOOK_TOOL` | the tool name (`bash`, `edit`, …) |
 | `AGENTTY_HOOK_PAYLOAD_FILE` | path to a mode-`0600` temp file holding the JSON payload |
 
-The payload file contains:
+The payload file looks like this:
 
 ```json
 // pre_tool
@@ -66,47 +94,40 @@ The payload file contains:
 { "event": "post_tool", "tool": "bash", "args": "…", "result": "<tool output>" }
 ```
 
-The payload travels via a file (not stdin) so a multi-MB tool result can't blow the environment-size limit; `result` is truncated to 4 MiB.
+The payload is a file, not stdin or an env var, so a large result can't hit the environment size limit. `result` is cut to 4 MiB.
 
 ## What a hook can do
 
-- **`pre_tool` — block or allow.** Exit **non-zero to block** the tool call; the hook's **captured output becomes the reason** shown to the model as the tool error (or, if the hook printed nothing, `blocked by pre_tool hook (\`<cmd>\` exited N)`). Exit **0 to allow**. The first blocking hook wins.
-- **`post_tool` — observe.** Its exit code is ignored; it can't rewrite the result or block anything. Use it for logging, notifications, or side effects.
+- **`pre_tool` blocks or allows.** Exit non-zero to block. The hook's output becomes the error the model sees. If it printed nothing, the reason is ``blocked by pre_tool hook (`<cmd>` exited N)``. Exit 0 to allow. The first hook that blocks wins.
+- **`post_tool` only observes.** It can't change the result or block anything. Use it for logs, notifications, or side effects.
 
-A hook **cannot** inject text into the conversation or modify a tool's output. A `pre_tool` hook's only lever is *block with a reason*.
+A hook can't add text to the conversation or change a tool's output. Blocking with a reason is the only control it has.
 
-Each hook command is capped at **30 seconds**. Set `AGENTTY_NO_HOOKS=1` to disable all hooks entirely.
+## Limits
 
-### Example: block writes outside the repo
-
-```sh
-#!/bin/sh
-# ~/.agentty/guard.sh — a pre_tool hook on `bash`/`edit`/`write`
-payload=$(cat "$AGENTTY_HOOK_PAYLOAD_FILE")
-case "$payload" in
-  *'/etc/'*|*'~/.ssh'*)
-    echo "refusing: touches a protected path"
-    exit 1 ;;   # non-zero → blocked, message shown to the model
-esac
-exit 0
-```
+| Setting | Value |
+|---------|-------|
+| Timeout per hook command | 30 seconds |
+| Max `result` in payload | 4 MiB |
+| Max hooks file size | 64 KiB |
+| Disable all hooks | set `AGENTTY_NO_HOOKS=1` |
 
 ## Approving a hooks file
 
-A hooks file — or **any byte change** to one — is **inert until you approve it**. Approval stores the file's SHA-256 in `~/.agentty/hooks_approved.json`; change one byte and it re-gates. Unapproved hook commands are **never executed**.
+A hooks file is inert until you approve it. Approval stores the file's SHA-256 in `~/.agentty/hooks_approved.json`. Change one byte and it needs approval again. Unapproved hooks never run.
 
 ```bash
 agentty hooks           # or: agentty hooks list — show hooks + approval state
 agentty hooks approve   # prints the file, asks y/N, stores the hash
 ```
 
-In the app, [[Ctrl+K]] → **Hooks** shows the file and its approval state, but pressing Enter there **won't** approve inline — it points you back to `agentty hooks approve` in a shell. Approval is deliberately a terminal action so the y/N prompt is never owned by a picker you might dismiss by reflex.
+In the app, [[Ctrl+K]] → **Hooks** shows the file and whether it is approved. Pressing Enter there does **not** approve it. It points you to `agentty hooks approve`. Approval happens in a terminal on purpose, so you can't dismiss the y/N prompt by reflex.
 
 :::warn
-A hook runs arbitrary code on your machine with your permissions (inside the workspace sandbox). Only approve a `hooks.json` whose `run` commands you've read. The consent gate exists precisely so a synced dotfile or a cloned repo can't run code without you seeing it first.
+A hook runs any code it names, with your permissions, inside the workspace sandbox. Only approve a `hooks.json` whose `run` commands you have read. The approval step means a synced dotfile or a cloned repo can't run code before you see it.
 :::
 
 ## Related
 
-- [Sandboxing & permissions](/docs/sandboxing) — the OS sandbox hooks run inside, and the permission profiles for tools.
-- [Tools](/docs/tools) — the native tools whose names you match on.
+- [Sandboxing & permissions](/docs/sandboxing): the OS sandbox hooks run in, and the permission profiles for tools.
+- [Tools](/docs/tools): the tool names you can match on.

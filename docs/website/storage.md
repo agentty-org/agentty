@@ -6,9 +6,9 @@ nav_order: 57
 slug: storage
 ---
 
-Everything agentty writes, where it goes, how long it stays, and how to move it.
+This page lists every file agentty writes, where it goes, how long it stays, and how to move it. Your settings are in `~/.agentty/settings.json` and your conversations in `~/.agentty/threads/`; move everything at once with `$AGENTTY_HOME`. Most settings are changed in the app, see [Configuration](/docs/configuration).
 
-`agentty config` prints this for your machine, with real paths and sizes. On a fresh install it looks like this:
+`agentty config` prints all of this for your machine, with real paths and sizes:
 
 ```run
 agentty config

@@ -6,19 +6,15 @@ nav_order: 36
 slug: build-a-plugin
 ---
 
-A [plugin](/docs/plugins) is an [MCP](https://modelcontextprotocol.io) server —
-a small program that advertises **tools** the model can call. agentty spawns it,
-lists its tools, and calls them on the model's behalf. This page shows you how
-to write one from scratch: first the fast path in Python, then a native C++
-server, then what's actually happening on the wire.
+This page shows how to write your own [plugin](/docs/plugins): an [MCP](https://modelcontextprotocol.io) server, a small program that offers **tools** the model can call. agentty starts it, lists its tools, and calls them for the model. You'll see a quick Python version first, then a C++ one, then what goes over the wire. To add an existing server instead, see [Plugins](/docs/plugins).
 
-Two runnable examples ship in the mcp-cpp repo and are referenced throughout:
+Two runnable examples in the mcp-cpp repo are used throughout:
 
 - **[`wordcount-mcp`](https://github.com/agentty-org/mcp-cpp/tree/master/examples/wordcount-mcp)** — ~120 lines of pure-stdlib **Python**, no build.
 - **[`date-mcp`](https://github.com/agentty-org/mcp-cpp/tree/master/examples/date-mcp)** — ~130 lines of **C++** built with mcp-cpp.
 
 :::tip
-You do **not** need to write a server for most things — the [MCP ecosystem](https://github.com/modelcontextprotocol/servers) has hundreds ready to add (Playwright, Postgres, GitHub, filesystem, …). Write your own when you have an internal API or a bespoke tool the model should reach.
+You don't need to write a server for most things. The [MCP ecosystem](https://github.com/modelcontextprotocol/servers) has hundreds ready to add (Playwright, Postgres, GitHub, filesystem, …). Write your own when you have an internal API or a custom tool the model should use.
 :::
 
 ## What a plugin is, minimally
@@ -32,13 +28,13 @@ An MCP server does exactly three things over its stdin/stdout:
 3. **Call** — respond to `tools/call` by running the named tool and returning a
    text result.
 
-That's it. It's newline-delimited JSON-RPC 2.0 on stdio — one JSON object per
-line in, one per line out. `stderr` is yours for logging (agentty routes it to
-`~/.agentty/stderr.log`, never the screen).
+It's newline-delimited JSON-RPC 2.0 on stdio: one JSON object per
+line in, one per line out. You can log to `stderr`. agentty sends it to
+`~/.agentty/stderr.log`, never the screen.
 
 ## The fast path: Python, no dependencies
 
-You can write a complete server with the standard library — no `pip install`, no
+You only need the standard library. No `pip install`, no
 framework. Here is the shape (the full file is `wordcount-mcp/wordcount_server.py`):
 
 ```python
@@ -80,7 +76,7 @@ for line in sys.stdin:                          # one JSON-RPC message per line
               "result": {"content": [{"type": "text", "text": text}]}})
 ```
 
-Adding a tool is three steps: append to `TOOLS`, handle it in `call_tool`, done.
+To add a tool: append it to `TOOLS` and handle it in `call_tool`.
 
 **Add it:**
 

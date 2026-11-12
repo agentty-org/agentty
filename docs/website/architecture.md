@@ -6,15 +6,15 @@ nav_order: 70
 slug: architecture
 ---
 
-agentty is small enough to read in an afternoon. The whole thing is a pure update loop with a single render function and a closed set of effects.
+This page explains how agentty's code fits together. There are three core pieces: a pure update loop, one render function, and a fixed set of effects.
 
 :::tip
-Curious *why* it's C++26 and not Rust? See [Why modern C++ (not Rust)](/docs/why-not-rust) for the case, and [The Rust critique, answered](/docs/rust-critique) for the honest opposition research.
+Wondering why it's C++26 and not Rust? See [Why modern C++ (not Rust)](/docs/why-not-rust) for the reasons, and [The Rust critique, answered](/docs/rust-critique) for the arguments against.
 :::
 
 ## The update loop
 
-Everything is one pure function: `(Model, Msg) → (Model, Cmd)`. State transitions are total and inspectable. Strong ID newtypes — `ToolCallId`, `ThreadId`, `OAuthCode`, `PkceVerifier` — mean swapping two arguments is a compile error, not a debugging session.
+All state changes go through one pure function: `(Model, Msg) → (Model, Cmd)`. Every message is handled, and you can inspect each transition. IDs have their own types (`ToolCallId`, `ThreadId`, `OAuthCode`, `PkceVerifier`), so passing two arguments in the wrong order is a compile error.
 
 ```text
 Msg  →  reducer (one std::visit over a closed event sum)  →  (Model, Cmd)
@@ -23,24 +23,33 @@ Cmd  →  runtime executes side effects  →  new Msg events
 
 ## The view
 
-Rendering is a single function `Model → Element`. agentty builds widget Configs from `Model` state; the actual chrome — every glyph, layout decision, and breathing animation — is owned by [maya](https://github.com/agentty-org/maya), a sister header-mostly TUI engine. The host constructs no Elements directly.
+Rendering is one function, `Model → Element`. agentty fills in widget Configs from the `Model`. [maya](https://github.com/agentty-org/maya), a sister TUI engine that is mostly headers, draws them: every glyph, layout choice and animation. agentty never builds Elements itself.
 
 ## The provider
 
-The Anthropic provider speaks HTTP/2 + SSE directly through an in-house `nghttp2` + OpenSSL stack. OAuth (PKCE) and API key both flow through the same `auth::cmd_login` path. SSE deltas are smoothed into the screen at ⅛ buffer per tick so server batching doesn't produce chunky text.
+The Anthropic provider talks HTTP/2 + SSE directly, using its own `nghttp2` + OpenSSL stack. OAuth (PKCE) and API keys both go through `auth::cmd_login`. Incoming text is shown at ⅛ of the buffer per tick, so server batching doesn't make it jumpy.
 
-A second transport (OpenAI Chat Completions) covers every OpenAI-compatible backend — OpenAI, DeepSeek, Kimi, Google Gemini, xAI Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, GitHub Copilot, and local Ollama — collapsing the differences to configuration (base URL, auth header, model id). A third transport is Ollama's native `/api/chat` path, which adds incremental salvage for weaker local models that leak tool calls as raw JSON so they can still drive the full tool suite; a fourth speaks OpenAI's Responses API for ChatGPT/Codex sign-in. Every ingress concern the four transports genuinely share — stream framing, the terminal-event epilogue, Retry-After backoff, UTF-8 scrubbing, the leaked-tool-call sniffer, token-usage parsing, OpenAI-family auth headers, the tool-schema encoder, the SSE anti-buffering headers, and the reasoning-effort tier — lives in exactly one shared helper each, so a fix can't drift into silently-diverging copies. Reasoning is uniform: each wire encodes effort in its own shape (`thinking.budget_tokens` / `reasoning.effort` / `reasoning_effort`) but the *value* is single-source, and streamed chain-of-thought (Anthropic thinking, DeepSeek/Grok/Gemini `reasoning_content`) all surfaces through the same event, so it renders identically everywhere. The active provider is chosen per session and switchable live. See [Providers & Models](/docs/providers).
+There are four transports in total:
 
-Compaction and subagent fan-out are cost-aware: background summarization and read-only `task` roles (explorer, reviewer) route to the cheapest capable model on the active provider rather than the flagship model you're chatting with, and the auto-compaction trigger scales with the model's real context window instead of a fixed token margin — see [Providers & Models](/docs/providers#1m-context-models) and the *Compaction depth* command.
+- **Anthropic** (above).
+- **OpenAI Chat Completions** covers every OpenAI-compatible backend: OpenAI, DeepSeek, Kimi, Google Gemini, xAI Grok, Mistral, Groq, OpenRouter, Together, Cerebras, Fireworks, GitHub Copilot and local Ollama. The differences are just config (base URL, auth header, model id).
+- **Ollama's native `/api/chat`** also rescues tool calls that weaker local models leak as raw JSON, so they can still use every tool.
+- **OpenAI's Responses API** is used for ChatGPT/Codex sign-in.
+
+Code the transports share lives in one helper each, so a fix can't drift between copies. That covers stream framing, the end-of-stream event, Retry-After backoff, UTF-8 cleanup, the leaked-tool-call detector, token-usage parsing, OpenAI-family auth headers, the tool-schema encoder, the SSE anti-buffering headers and the reasoning-effort tier.
+
+Reasoning works the same everywhere. Each wire format spells effort its own way (`thinking.budget_tokens` / `reasoning.effort` / `reasoning_effort`), but the value comes from one place. Streamed thinking (Anthropic thinking, DeepSeek/Grok/Gemini `reasoning_content`) arrives as the same event, so it looks the same on every provider. You pick the provider per session and can switch it live. See [Providers & Models](/docs/providers).
+
+Background summaries and read-only `task` roles (explorer, reviewer) run on the cheapest capable model of the active provider, not the model you chat with. Auto-compaction triggers based on the model's real context window, not a fixed token margin. See [Providers & Models](/docs/providers#1m-context-models) and the *Compaction depth* command.
 
 ## The subprocess model
 
-Subprocesses use `posix_spawn` + `poll(2)` with in-process `SIGTERM → SIGKILL` deadlines on POSIX, and `CreateProcessW` + a reader thread on Windows. No GNU `timeout` dependency, no `popen` quoting hazards. File writes are atomic: `write` + `fsync`/`_commit` + `rename`/`MoveFileExW`.
+On POSIX, subprocesses use `posix_spawn` + `poll(2)`, and agentty enforces deadlines itself (`SIGTERM → SIGKILL`). On Windows they use `CreateProcessW` + a reader thread. agentty doesn't need GNU `timeout` and doesn't use `popen`, so there are no quoting problems. File writes are atomic: `write` + `fsync`/`_commit` + `rename`/`MoveFileExW`.
 
 ## The permission matrix
 
-The permission policy is a `constexpr` matrix guarded by `static_assert`s. Each tool declares its effect set at compile time; changing a policy cell breaks the build rather than silently weakening a guarantee.
+The permission policy is a `constexpr` matrix checked by `static_assert`s. Each tool declares its effects at compile time. If you change a cell in a way that weakens a guarantee, the build fails.
 
 :::tip
-Going deeper? The repo's `docs/RENDERING.md` walks the view pipeline turn-by-turn and `docs/UI.md` is the per-widget Config reference. For how all of this stays fast — input-to-photon latency, render caching, connection warmth, and speculative tool execution — see **[Performance](/docs/performance)**.
+For more detail, the repo's `docs/RENDERING.md` walks through the view pipeline step by step, and `docs/UI.md` is the Config reference for each widget. For how it stays fast (input-to-photon latency, render caching, connection warmth, speculative tool execution), see **[Performance](/docs/performance)**.
 :::

@@ -6,9 +6,9 @@ nav_order: 50
 slug: subagents
 ---
 
-A **subagent** is a fresh agent spawned to complete one self-contained task in isolation. It has its **own context window**, runs the full agent loop with its own tools, and returns a **single condensed report** — its transcript and tool output never enter the parent thread. This keeps the main conversation focused: a big investigation ("map how auth works across these 12 files") happens in the subagent's window, and only the answer comes back.
+A **subagent** is a fresh agent that does one self-contained task on its own and sends back a short report. Use one for a big investigation, like "map how auth works across these 12 files". The subagent has its **own context window** and its own tools, so its reading and tool output never fill up your main conversation. Only the report comes back.
 
-Subagents are driven by the built-in **`task` tool**, so the model spawns them on its own when a job is worth isolating — and you can ask for one explicitly ("spawn an explorer to map the render pipeline").
+Subagents run through the built-in **`task` tool**. The model starts one by itself when a job is worth splitting off, and you can also ask for one ("spawn an explorer to map the render pipeline").
 
 ## Built-in agent types
 

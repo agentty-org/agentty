@@ -6,23 +6,25 @@ nav_order: 50
 slug: proxies
 ---
 
-SOCKS keeps TLS end-to-end, so cert verification works untouched. A forward proxy that re-encrypts with its own certificate is a different story.
-
-## SOCKS proxies
-
-Because SOCKS doesn't terminate TLS, agentty's certificate verification works exactly as it does on a direct connection. This is also why [air-gap mode](/docs/airgap) is safe over an untrusted network.
-
-:::note
-agentty routes through SOCKS via its own `AGENTTY_SOCKS_PROXY=host:port` variable — it does **not** read the ambient `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` variables, so a stray shell export can't silently reroute your API traffic. Airgap mode sets it for you.
-:::
+Behind a SOCKS proxy, start agentty like this:
 
 ```bash
 AGENTTY_SOCKS_PROXY=127.0.0.1:1080 agentty
 ```
 
+Behind a proxy that re-encrypts traffic (Zscaler, Bluecoat, mitmproxy), install the proxy's CA certificate into the system trust store. The sections below explain both.
+
+## SOCKS proxies
+
+SOCKS does not terminate TLS. agentty checks certificates exactly as it does on a direct connection. This is also why [air-gap mode](/docs/airgap) is safe over an untrusted network.
+
+:::note
+agentty only uses its own `AGENTTY_SOCKS_PROXY=host:port` variable. It does **not** read `HTTP_PROXY`, `HTTPS_PROXY` or `NO_PROXY`, so a stray shell export can't reroute your API traffic. Air-gap mode sets the variable for you.
+:::
+
 ## TLS-terminating proxies (Zscaler, Bluecoat, mitmproxy)
 
-If your network routes through a forward proxy that re-encrypts traffic with its own CA, install that CA into the system trust store — agentty picks up system roots at startup:
+These proxies re-encrypt traffic with their own CA. Install that CA into the system trust store. agentty loads system roots at startup.
 
 ```bash
 # Debian / Ubuntu
@@ -36,22 +38,22 @@ sudo update-ca-trust
 
 ## Streaming through corporate VPNs
 
-Some endpoint-security gateways keep the connection open but buffer SSE model events, so short replies arrive in one burst and older agentty builds report `stream stalled — no events for 120s` on larger tasks. Current builds:
+Some endpoint-security gateways keep the connection open but hold back model events. Short replies then arrive in one burst. Older agentty builds stopped larger tasks with `stream stalled — no events for 120s`. Current builds:
 
-- request `no-cache, no-transform` and uncompressed event streams,
-- treat HTTP/2 control traffic as transport liveness while retaining a hard deadline,
+- ask for `no-cache, no-transform` and uncompressed event streams,
+- count HTTP/2 control traffic as a sign the connection is alive, with a hard deadline still in place,
 - fall back to incremental TLS HTTP/1.1 streaming when a gateway removes `h2` from ALPN.
 
-Update agentty if you see the exact 120-second error. Streaming may still appear in bursts when company policy forces buffering—the client cannot make an intermediary reveal bytes it withholds—but the request will continue instead of being cancelled while the bounded connection remains alive.
+If you see that exact 120-second error, update agentty. Replies may still arrive in bursts when company policy forces buffering. agentty can't make a gateway release bytes it holds back. The request keeps going instead of being cancelled, as long as the connection stays up.
 
-## Last resort
+## Last resort: turn off verification
 
-If you genuinely can't install the CA, you can disable peer verification:
+If you can't install the CA, you can disable peer verification:
 
 ```bash
 AGENTTY_INSECURE=1 agentty
 ```
 
 :::warn
-`AGENTTY_INSECURE=1` skips peer verification entirely — anyone on the path can impersonate the API. Don't ship that to anyone you care about; use it only as a temporary local workaround.
+`AGENTTY_INSECURE=1` skips peer verification entirely. Anyone on the network path can pretend to be the API. Use it only as a temporary local workaround, and never hand it to other people.
 :::

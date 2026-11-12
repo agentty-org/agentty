@@ -1,36 +1,55 @@
 ---
 title: Sandboxing
-description: Every shell command runs inside a sandbox the kernel enforces. What it guarantees, how to configure it, and what it deliberately doesn't cover.
+description: Every shell command runs inside a sandbox the kernel enforces. What it allows, how to loosen it, and what it doesn't cover.
 nav_section: Tools
 nav_order: 20
 slug: sandboxing
 ---
 
-When the agent runs `npm install` or `cargo build`, that command executes on your machine with your permissions. Nothing about "it's an AI" changes that — a shell command is a shell command.
+Every shell command the agent runs goes into a sandbox, enforced by your operating system's kernel. Your project folder stays writable. Your keys, cloud credentials and `.env` files are hidden from the command.
 
-So agentty puts every one of them inside a sandbox, by default. Not a permission prompt you click through; a boundary the **operating system kernel** enforces, which means the command cannot cross it even if it tries.
+You don't have to configure anything. This page explains what the sandbox does and how to change it.
 
-You don't have to configure anything. This page is for when you want to.
+## What it allows and blocks by default {#defaults}
 
-## The one promise
+The default preset is `balanced`. Under it, a command:
 
-**A command can't read a credential it wasn't given, and can't write outside your project folder.**
+- **can read and write your project folder**, plus a private `/tmp`.
+- **can read your toolchains and system files**: `/usr`, `/bin`, `/lib`, `~/.cargo/bin`, `~/.rustup`, `~/.nvm`, `~/.pyenv` and similar, plus your git config.
+- **sees credentials as empty files**: `~/.ssh`, `~/.aws`, `.env` in your repo, and many more (full list [below](#what-the-command-can-reach)). The file opens but reads as empty. This is on purpose: a tool that gets "permission denied" often crashes, while one that reads an empty config usually carries on.
+- **reaches the internet through agentty's proxy**. The proxy refuses `localhost`, your local network, and cloud metadata addresses.
+- **can't write outside your project**. Those writes are refused.
+- **can't write files your editor or shell will later run** (git hooks, `.vscode/tasks.json`, `.envrc`). See [the escape a sandbox can't see](#the-escape-a-sandbox-cant-see).
 
-Everything below serves that one sentence.
+## Something got blocked? {#something-got-blocked}
 
-Your `~/.ssh` keys, `~/.aws` credentials, cloud tokens, and any `.env` file in your repo are **masked** — the command opens the file and finds it empty. Masking rather than blocking is deliberate: a tool that gets "permission denied" often crashes, while a tool that reads an empty config usually carries on.
-
-## Check what you've got
-
-The startup banner tells you:
+At startup agentty prints one line about the sandbox:
 
 ```
 agentty: sandbox: active (claybin) · turn it off entirely with --sandbox off
 ```
 
-That line is a **real test, not a claim**. Before printing it, agentty actually tries to build a sandbox and watches whether the kernel allows it. A sandbox tool that's installed but can't run is reported as unavailable — because the worst possible failure here is confidently announcing protection you don't have.
+agentty prints `active` only after it has actually built a test sandbox and the kernel allowed it. If the sandbox can't run, the line says so.
 
-For the full picture, open **Settings → Sandbox**. The pane shows every wall, what's enforcing it, and — crucially — anything it *can't* enforce on your machine.
+To loosen the sandbox, open **Settings → Sandbox**. There you can:
+
+- pick a looser preset, such as `permissive` (see [presets](#pick-a-posture-not-28-switches))
+- add folders the command may read or write ([adding paths](#adding-paths))
+- set **Allowed hosts** to limit the network to named sites ([below](#only-the-sites-you-name))
+
+Changes save as you type but **apply on the next launch**, so restart agentty afterwards ([why](#why-changes-need-a-restart)).
+
+To turn the sandbox off entirely:
+
+```sh
+agentty --sandbox off
+```
+
+:::tip
+A program that ignores `https_proxy` gets *no* network inside the sandbox, because the proxy is the only thing it can reach. If something "can't connect" inside the sandbox but works outside, that is usually why.
+:::
+
+The pane also shows every wall, what enforces it, and anything it *can't* enforce on your machine.
 
 :::caution
 On **Windows** the pane previews through claybin's Windows compiler, so the footer and per-row walls match what commands get (filesystem `partial` via appcontainer+DACL, memory and process caps `strong` via the job object).
@@ -38,109 +57,34 @@ On **Windows** the pane previews through claybin's Windows compiler, so the foot
 
 ## Pick a posture, not 28 switches
 
-The pane has a lot of knobs. You almost certainly want the top one.
+The pane has many settings. Most people only need the first one: **posture**. A posture is a preset that fills in every other setting.
 
-A **posture** is a preset: pick one and it fills in every other setting for you.
+| Posture | Pick it when | Files | Network | What you give up |
+|---|---|---|---|---|
+| `permissive` | a build breaks and you suspect the sandbox | toolchain dirs readable | full, via proxy | syscall filter and resource caps (except the process cap); masks and file walls stay |
+| `balanced` | **the default**, everyday work | toolchain dirs readable | full, via proxy | the network is open, so a leaked secret could be sent out |
+| `hardened` | running an agent you haven't reviewed | minimal | TCP ports 443, 80, 22, 53 only | an unusual build might need something it can't do |
+| `airgapped` | reading or editing code you don't trust | minimal | none | `git push`, `npm install` and `curl` stop working |
 
-| Posture | Pick it when | What you give up |
-|---|---|---|
-| `permissive` | a build breaks and you suspect the sandbox | the strictest walls; file protection stays |
-| `balanced` | **the default** — everyday work | the network is open, so a leaked secret could be sent out |
-| `hardened` | running an agent you haven't reviewed | an unusual build might need something it can't do |
-| `airgapped` | reading or editing code you don't trust | `git push`, `npm install` and `curl` all stop working |
-
-Everything stays visible and editable afterwards — a posture is a starting point, not a mode you're locked into. Change one row and the pane honestly relabels itself `custom` instead of still claiming the preset. Pick one and restart, and it is still that preset: every preset is tested through a real save-and-reload. Your own lists — extra paths, ports, **Allowed hosts** — never knock a preset to `custom`.
+You can still see and edit every setting afterwards. If you change one row, the pane relabels itself `custom`. Your own lists (extra paths, ports, **Allowed hosts**) never turn a preset into `custom`.
 
 :::tip
-`airgapped` is the one worth knowing about. In every other mode, a command that can read your files can also send them somewhere. Turn the network off and that stops being true — and if you're only reading and editing code, it costs you nothing. If you need *some* network, [Allowed hosts](#only-the-sites-you-name) is the middle ground.
+In every mode with network, a command that can read your files can also send them somewhere. `airgapped` turns the network off, and costs nothing if you only read and edit code. If you need *some* network, use [Allowed hosts](#only-the-sites-you-name).
 :::
 
-## What the walls actually are
-
-The sandbox isn't one mechanism. It's several, each closing a different route out. Taking Linux first, because it's the platform where every one of them exists:
-
-**A private view of the filesystem.** The command gets its own *mount namespace* — its own idea of what the filesystem looks like. Your project is there, system libraries are there read-only, and `~/.ssh` is an empty file. Not hidden by convention: it genuinely isn't in that view.
-
-**A list of syscalls it may make.** Every program asks the kernel to do things — open a file, start a process, send a packet. These requests are called **syscalls**, and a *seccomp filter* is a list of which ones are allowed. agentty's default profile blocks the ones used to escape a sandbox (`ptrace`, `mount`, `unshare`) while allowing everything a compiler needs. Sockets are limited to the families real tools use (Unix, IPv4, IPv6); netlink, vsock, raw and packet sockets are refused.
-
-**File rules the kernel checks directly.** *Landlock* is a Linux feature (kernel 5.13+) that lets a program permanently drop its own file access. Once set, it applies to that process and everything it starts — so a build script spawning a shell spawning a Python script is still confined.
-
-**Hard resource ceilings.** *cgroups* cap memory, CPU and process count. A runaway build hits a limit inside the sandbox instead of taking your laptop down with it.
-
-**No new privileges.** The `no_new_privs` flag means a program inside the sandbox can't gain permissions by running a setuid binary — the normal escalation route is closed.
-
-**A detached terminal session.** Without this, a command can push fake keystrokes into your terminal (the `TIOCSTI` trick) and make your shell run them after agentty exits.
-
-:::note
-Each platform compiles the same policy into what it actually has. On Linux that's namespaces, Landlock, seccomp and cgroup2 at full strength. On macOS the profile is seatbelt plus rlimits: `no_new_privs` has an equivalent in that a seatbelt profile cannot be dropped by `exec`; resource ceilings become POSIX rlimits, which are weaker than cgroups (they count *per process*, not per process tree); and there is **no syscall filter** — macOS has no seccomp equivalent available to an unprivileged process — so agentty reports that capability as `none` instead of quietly implying it. On Windows the walls are an AppContainer, a restricted token, a job object and process mitigation policies: memory, CPU and process caps are genuinely as strong as cgroup2, filesystem and exec walls are `partial` because Windows enforces ACLs per object rather than per path prefix, and there is no syscall filter either (mitigation policies are a fixed menu of hardening switches, not a programmable filter).
-:::
-
-## Which backend, and why
-
-| Platform | Engine | What it puts up | Fallback |
-|---|---|---|---|
-| Linux | **claybin** | namespaces, Landlock, seccomp, cgroup2 | none — one Linux engine |
-| macOS | **claybin** | seatbelt from your compiled policy, plus rlimits | `sandbox-exec`, one fixed profile |
-| Windows | **claybin** | AppContainer, restricted token, job object, mitigation policies | **none, by design** |
-
-On Windows there is no weaker engine to fall back to and no `bwrap`: the probe either proves it can build a wall (an AppContainer or a job object) and claybin runs, or the startup banner says `sandbox: unavailable, running unsandboxed` and commands run unconfined — reported, never silent. Windows Sandbox (the Hyper-V VM product) was deliberately not chosen: it is a whole-OS VM with seconds of boot time, no pipe-stdout model and no per-command exit codes.
-
-claybin is the default because the difference is measured, not argued.
-
-**On Linux**, against the bwrap path it replaced:
-
-| Capability | claybin | bwrap |
-|---|---|---|
-| file read/write walls | yes | yes |
-| syscall filter | **yes** | **no** |
-| memory / CPU / process limits | **yes** | **no** |
-| runtime `ptrace` + `kill` decisions | **yes** | **no** |
-
-There's no capability where bwrap wins. It used to stay as a second Linux engine on the argument that the two **fail on different machines** — bwrap can't start where *user namespaces* are blocked (Ubuntu 24.04 disables them for untrusted programs), and claybin needs Landlock, so it can't do its full job on kernels older than 5.13. That argument did not survive the code it described: both fail for the same underlying reason, and the probe now proves a real namespace rather than checking that a binary exists. So there is one Linux engine, and `--sandbox-backend bwrap` still parses, says what it did, and runs claybin.
-
-**On macOS**, the comparison is a different shape: both engines are seatbelt, so this is not a contest about strength. claybin calls `sandbox_init` with a profile compiled from *your* policy; `sandbox-exec` is Apple's command-line wrapper around the same kernel mechanism, driven by one fixed profile string. So the question is what survives the trip:
-
-| Capability | claybin | sandbox-exec |
-|---|---|---|
-| file read/write/exec walls | yes | yes, but fixed |
-| network through the filtering proxy | **yes** | **no** — open |
-| your **Settings → Sandbox** choices apply | **yes** | **no** |
-| extra readable / masked paths | **yes** | **no** |
-| per-capability guarantee report | **yes** | **no** |
-| memory / CPU / process limits | **partial** (rlimits) | **no** |
-| syscall filter | no — platform has none | no |
-
-That last row is the honest one. macOS has no seccomp equivalent available to an ordinary program, so agentty reports the syscall filter as unavailable rather than implying it. The resource limits are rlimits, which count *per process* rather than per process tree — four children under a 1 GB cap can use 4 GB between them — so they report `partial`, and the process limit reports `advisory`, because it is counted per *user account*, not per sandbox.
-
-What claybin's macOS profile closes that a simple seatbelt profile leaves open — each one found by trying it, and each one in a test that tries it again on every build:
-
-- **Your clipboard and keychains.** macOS system services run *outside* any sandbox, so a profile that lets a command talk to all of them lets it read the clipboard (`pbpaste`) and list your keychains, even with no network and no home folder. agentty allows only the handful real tools need.
-- **The map of your disk.** Reading a file's *metadata* — does `~/.ssh/id_ed25519` exist, how big is it, when did it change — is a leak even when its contents are walled off. A command can only look up the folders on the way to what it was granted.
-- **The network.** A sandboxed command can reach exactly one place: agentty's own proxy, on a private port on `127.0.0.1`. No LAN, no other local services, no DNS of its own.
-- **Apple's own tools still work.** `/usr/bin/git`, `cc` and `python3` are small launchers that load the real tool from Xcode and write a cache to your per-user temp folder; both are allowed, so they run inside the sandbox instead of failing at startup.
-
-Two things no seatbelt profile can do, said plainly: `launchctl print` (read-only) always works, because it uses a channel every process is born with; and setuid programs like `/bin/ps` refuse to run inside any sandbox on macOS.
-
-Asking for claybin where it can't run gives you the platform's answer, not a silent nothing. On macOS the fallback works in both directions, so a Mac missing `sandbox-exec` still gets claybin, which talks to the kernel directly. On Windows there is nothing to fall back to, so the banner tells you instead.
-
-```sh
-agentty --sandbox-backend claybin   # default everywhere
-agentty --sandbox-backend bwrap     # accepted for old scripts; bwrap is gone
-```
-
-## What the command can reach
+## What the command can reach {#what-the-command-can-reach}
 
 **Read and write**
 
 - your project folder
-- a private, empty `/tmp` that vanishes when the command ends (on macOS, your per-user temp and cache folders under `/var/folders`, which is where `$TMPDIR` points)
+- a private, empty `/tmp` that vanishes when the command ends (on macOS, your per-user temp and cache folders under `/var/folders`, where `$TMPDIR` points)
 
 **Read only**
 
 - system libraries and binaries (`/usr`, `/bin`, `/lib`) so builds work
 - your language toolchains: `~/.cargo/bin`, `~/.rustup`, `~/go/bin`, `~/.nvm`, `~/.pyenv`, `~/.rbenv`, `~/.asdf`, `~/.bun/bin`, `~/.deno/bin`, `~/.dotnet`, `~/.sdkman`, `~/.local/bin`
-- your git config: `~/.gitconfig` and `~/.config/git` (git refuses to run at all if it can't read them). Your git *credentials* stay masked.
-- a short allow-list of `/etc` — DNS config, CA certificates, your git identity. The rest of `/etc` isn't visible. On macOS, also the Xcode / Command Line Tools folders and the timezone database.
+- your git config: `~/.gitconfig` and `~/.config/git` (git won't run without them). Your git *credentials* stay masked.
+- a short allow-list of `/etc`: DNS config, CA certificates, your git identity. The rest of `/etc` isn't visible. On macOS, also the Xcode / Command Line Tools folders and the timezone database.
 
 **Masked (reads as empty)**
 
@@ -150,19 +94,15 @@ agentty --sandbox-backend bwrap     # accepted for old scripts; bwrap is gone
 - **Shell and REPL history:** `~/.bash_history`, `~/.zsh_history`, fish history, and the Python, psql, MySQL and Node REPL histories. Pasted tokens end up there.
 - **agentty's own state:** its credential store and its memory file.
 
-A mask always wins. Nothing else the sandbox mounts, including the read-only binds below, can make a masked path readable again.
+A mask always wins. Nothing else the sandbox mounts can make a masked path readable again.
 
-**Not there at all**
+**Not there at all:** everything else in your home directory, such as other projects and documents.
 
-Everything else in your home directory. Your other projects, your documents, your browser profile.
-
-**The network**
-
-With Network set to `full` (the default), a command reaches the internet only through agentty's own proxy. The proxy refuses your machine's own services, your local network, and cloud metadata addresses — so a command can't poke your router, a database on `localhost`, or a cloud instance's credentials endpoint, even though the internet works. agentty tells the command where the proxy is (`https_proxy` and friends), so `curl`, `git`, `pip`, `npm`, Python and Node all just work.
+**The network:** with Network set to `full` (the default), a command reaches the internet only through agentty's proxy. The proxy refuses your machine's own services, your local network and cloud metadata addresses. So a command can't reach your router, a database on `localhost`, or a cloud credentials endpoint. agentty sets `https_proxy` and friends, so `curl`, `git`, `pip`, `npm`, Python and Node work as usual.
 
 ### Only the sites you name
 
-**Settings → Sandbox → Network → Allowed hosts** narrows that further: commands may reach *only* the hosts on the list.
+**Settings → Sandbox → Network → Allowed hosts** limits commands to *only* the hosts on the list.
 
 | You write | It allows | It doesn't allow |
 |---|---|---|
@@ -177,59 +117,55 @@ github.com
 registry.npmjs.org
 ```
 
-- **Leave it empty and nothing changes** — any public site is reachable, which is the default. The row says *any public host*.
+- **Empty list:** nothing changes. Any public site is reachable (the default). The row says *any public host*.
 - **`*.example.com` means subdomains only.** Add `example.com` too if you want the site itself. The editor reminds you, and the pane warns if every entry is a wildcard.
-- **Paste a URL** and it's trimmed to the host — `https://GitHub.com/me/repo` is saved as `github.com`, and the editor shows you that before you close it.
-- **Addresses don't count.** Once there's a list, `curl https://140.82.112.3` is refused: a list of names can't vouch for a raw address, and allowing them would make every rule bypassable.
-- **Typos are caught, not guessed.** `*`, `*.com`, `git*hub.com`, an IP, or anything that isn't a host name is marked with the reason and dropped when you close the editor.
-- **The agent is told.** Its instructions list the allowed hosts, and when a command is refused, the agent gets a note naming the allowed ones — so it picks a mirror you allowed instead of retrying the same blocked URL.
+- **Paste a URL** and it's trimmed to the host. `https://GitHub.com/me/repo` is saved as `github.com`.
+- **Raw IP addresses are refused** once there's a list. `curl https://140.82.112.3` fails, because a list of names can't vouch for an address.
+- **Typos are flagged, not guessed.** `*`, `*.com`, `git*hub.com`, an IP, or anything that isn't a host name is marked with the reason and dropped when you close the editor.
+- **The agent is told.** Its instructions list the allowed hosts. When a command is refused, the agent gets a note naming them, so it picks a mirror you allowed.
 
 :::note
-The list is checked on the name the command *asked for*, and the proxy then looks up that same name itself. So a command can't sneak past it with a fake DNS answer, `curl --resolve`, or a forged `Host:` header — and an allowed name that points at your local network is still refused.
+The proxy checks the name the command *asked for*, then looks up that name itself. So a fake DNS answer, `curl --resolve`, or a forged `Host:` header won't get past it. An allowed name that points at your local network is still refused.
 :::
 
 Allowed hosts only applies while Network is `full`. Under `ports` or `none` it's kept but unused, and the row says so.
 
 ## Secrets inside your own repo
 
-Credentials aren't only in `$HOME`. They end up committed, copied into examples, and generated by tooling — so agentty also walks your project and masks files by name:
+Credentials also end up inside projects: committed, copied into examples, or made by tooling. So agentty walks your project and masks these files by name:
 
 `.env` and its variants, `.npmrc`, `.netrc`, `.git-credentials`, `.pgpass`, SSH keys (`id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`), `credentials.json`, `service-account.json`, and anything ending in `.pem` or `.tfvars`.
 
-The walk goes three levels deep by default (configurable) and skips `.git`, `node_modules`, `target`, `build` and `.venv` — directories that are reliably enormous and reliably not where credentials live.
+The walk goes three levels deep by default (configurable). It skips `.git`, `node_modules`, `target`, `build` and `.venv`, which are large and rarely hold credentials.
 
 :::tip
-A monorepo's `services/api/.env` gets masked, not just the one at the repo root. Depth-limited rather than root-only is the whole reason the walk exists — the one at the root is rarely the only one.
+A monorepo's `services/api/.env` is masked too, not just the one at the repo root.
 :::
 
 ## Adding paths
 
-Need a dependency outside your project to be readable? In **Settings → Sandbox**, the **Also readable** row opens a list editor with path completion — type a few characters, [[Tab]] accepts. It completes folders as well as files.
+Need a folder outside your project to be readable? In **Settings → Sandbox**, the **Also readable** row opens a list editor with path completion. Type a few characters and [[Tab]] accepts. It completes folders and files.
 
 - clear a line (or press [[Ctrl+X]]) to remove an entry
-- **Masked** punches a hole *inside* something you've granted — useful for "this whole folder, except that one file"
-- **Allowed ports** switches Network to per-port mode for you when you add the first one
-- **Allowed hosts** limits the network to named sites (see [above](#only-the-sites-you-name)); paste URLs freely
+- **Masked** hides something *inside* a folder you granted ("this whole folder, except that one file")
+- **Allowed ports** switches Network to per-port mode when you add the first one
+- **Allowed hosts** limits the network to named sites (see [above](#only-the-sites-you-name)); you can paste URLs
 
 ## Why changes need a restart
 
-This is the one place in agentty where saving doesn't apply immediately, and it's deliberate.
+This is the one place in agentty where saving doesn't apply right away.
 
-A boundary that can change while commands are running can only usefully change in the *loosening* direction — and loosening can't be taken back. Re-tightening doesn't un-read a key that already left. It would also make the sandbox impossible to audit: two commands in one session, two different sets of walls, and no record of which got which.
+If the walls could change while commands run, they could only usefully get looser, and loosening can't be undone: tightening again doesn't un-read a key that already left. It would also make the sandbox hard to audit, with two commands in one session getting different walls.
 
-So edits save as you type and take effect next launch.
-
-The pane doesn't just promise that, it **checks** it. If the next launch won't deliver what the settings describe — the policy won't compile, the engine can't start on this machine, some capability quietly degrades — the footer tells you which, and why.
+So edits save as you type and take effect on the next launch. The pane checks this. If the next launch can't deliver what the settings describe (the policy won't compile, the engine can't start, a feature degrades), the footer says which and why.
 
 ## The escape a sandbox can't see
 
-There's one attack that no process sandbox stops, and it's the one that keeps showing up in real incidents.
+One attack gets past any process sandbox, and it shows up in real incidents.
 
-The agent writes a completely ordinary file in your project — a `.vscode/tasks.json`, a git hook, a `.envrc`, a virtualenv interpreter. Nothing is violated: it's a normal write, to a normal path, inside the folder it's allowed to write.
+The agent writes an ordinary file in your project, such as `.vscode/tasks.json`, a git hook, a `.envrc` or a virtualenv interpreter. That's a normal write inside the folder it may write. Later **you** open the project in your editor, run `git commit`, or activate the virtualenv, and that file runs outside any sandbox.
 
-Then **you** open the project in your editor, or run `git commit`, or activate the virtualenv. Your editor runs that file. There's no sandbox involved at that point — the command that wrote it finished long ago.
-
-agentty refuses those writes by default, and tells the model what to do instead ("write the content somewhere inert and ask the user to wire it up"). You can relax it to warn-and-allow in the pane, but `refuse` is the default because this is the shape nearly every real agent escape has taken.
+agentty refuses those writes by default and tells the model to write the content somewhere inert and ask you to wire it up. You can relax this to warn-and-allow in the pane, but `refuse` is the default.
 
 The files it guards:
 
@@ -240,33 +176,31 @@ The files it guards:
 - **Executables found on `PATH`:** `.local/bin`, `node_modules/.bin`, virtualenv interpreters
 - **Build scripts:** `Makefile`, `package.json`, `build.rs`, and similar
 
-Where the sandbox can, it also binds the ones that already exist read-only, so the write fails with `EROFS` instead of landing. Where it can't (a host without user namespaces), the write is still detected and reported.
+Where it can, the sandbox also mounts the existing ones read-only, so the write fails with `EROFS`. Where it can't (a host without user namespaces), the write is still detected and reported.
 
 ## What it doesn't stop
 
-A boundary you can't see the edge of isn't one you can trust. So, plainly:
-
-- **Sending data out over a network you allowed.** If a command can read your files and the network is on, it can upload them — to any public site, or, with **Allowed hosts** set, to the sites on your list (and anywhere those sites will forward it). This is a real trade — blocking the network breaks `git push` and `npm install` — and it's exactly why `airgapped` and Allowed hosts exist. For one headless run, `agentty run --no-network` takes the network away from every command it spawns without changing your saved setting.
-- **Tools that ignore the proxy settings.** A program that doesn't read `https_proxy` gets *no* network, not an unfiltered one — the sandbox only lets it reach the proxy. If something "can't connect" inside the sandbox but works outside, that's usually why.
-- **Ports mode is TCP only.** With Network set to `ports`, the allowed-ports list limits TCP connections. UDP and ICMP aren't filtered, so DNS-based exfiltration still works there. Under `full` the ports list is ignored entirely, and the pane says so.
-- **A memory bug that maps, writes, then flips a page executable.** W^X refuses a mapping that is writable and executable at once. Writing a page and then making it executable still works, because JITs need it.
+- **Sending data over a network you allowed.** If a command can read your files and the network is on, it can upload them: to any public site, or with **Allowed hosts** set, to the sites on your list (and anywhere they forward it). Blocking the network breaks `git push` and `npm install`, which is why `airgapped` and Allowed hosts are opt-in. For one headless run, `agentty run --no-network` removes the network without changing your saved setting.
+- **Tools that ignore the proxy settings.** They get *no* network, not an unfiltered one.
+- **UDP in ports mode.** With Network set to `ports`, the allowed-ports list limits TCP only. UDP and ICMP aren't filtered, so DNS-based exfiltration still works there. Under `full` the ports list is ignored, and the pane says so.
+- **Map, write, then make executable.** W^X refuses a mapping that is writable and executable at once. Writing a page and then making it executable still works, because JITs need it.
 - **Secrets deeper than the scan depth,** or inside a skipped folder like `node_modules`.
-- **Credential files nobody would recognise.** A secret in `config.local.yaml` doesn't look like a secret.
-- **Kernel bugs.** The command shares your kernel. A flaw in the kernel itself defeats any sandbox of this kind — which is what the pane means when it reports kernel isolation as `none`.
-- **A host that cannot build a wall.** On Linux, a kernel without Landlock (older than 5.13) leaves no engine; on Windows, a host where the AppContainer probe fails (policy software, token shape) leaves none either. `--sandbox on` fails loudly rather than quietly doing nothing, and `--sandbox auto` prints what you actually got.
+- **Credential files with unusual names.** A secret in `config.local.yaml` doesn't look like a secret.
+- **Kernel bugs.** The command shares your kernel. A kernel flaw defeats any sandbox of this kind. That is what the pane means by kernel isolation `none`.
+- **A host that can't build a wall.** On Linux, a kernel without Landlock (older than 5.13) leaves no engine. On Windows, a failed AppContainer probe (policy software, token shape) leaves none either. `--sandbox on` fails loudly; `--sandbox auto` prints what you actually got.
 
 ## The model knows it's sandboxed
 
-A model that doesn't know it's confined **misdiagnoses every wall it hits**. A permission error becomes "your corporate proxy is blocking this"; a failed connection becomes "check your firewall". It then either sends you chasing a problem that doesn't exist, or retries a command the kernel will never allow.
+A model that doesn't know it's confined misreads every wall it hits. A permission error becomes "your corporate proxy is blocking this". Then it sends you after a problem that doesn't exist, or retries a command that will never be allowed.
 
-agentty tells it twice: once in the system prompt — what's *allowed*, not just what's blocked, so it knows where to work on the first try — and again on the output of any command that got denied, which is where the model is actually looking when it decides what to do next.
+So agentty tells it twice: in the system prompt (what's *allowed*, so it works in the right place first time), and on the output of any command that was denied.
 
 ## Locking down a single run
 
 `agentty run` takes two flags for running on code you don't trust, like a pull request in CI:
 
 - `--read-only` gives the model only tools that read. Write, shell and network tools aren't offered, and if the model asks for one anyway the call is refused.
-- `--no-network` runs every command with no network at all (an empty network namespace, so not even DNS works) and refuses network tools. It needs the claybin sandbox; with the sandbox off or unavailable the run refuses to start instead of pretending.
+- `--no-network` runs every command with no network at all (an empty network namespace, so not even DNS works) and refuses network tools. It needs the claybin sandbox. With the sandbox off or unavailable, the run refuses to start.
 
 ```sh
 agentty run --read-only --no-network "review this branch for anything that leaks secrets"
@@ -286,27 +220,84 @@ Both apply to that run only. Your saved sandbox setting is untouched.
 agentty --sandbox on
 ```
 
-If your machine blocks the feature agentty needs, `--sandbox auto` runs unsandboxed and prints why; `--sandbox on` refuses to start. On Linux, to enable it on a host that blocks unprivileged user namespaces, allow them — an AppArmor profile for `/usr/bin/bwrap` containing `userns,`, or `sudo sysctl -w kernel.unprivileged_userns_clone=1`. (claybin's default path doesn't need user namespaces at all, which is why it's tried first.) On macOS there's nothing to enable: seatbelt is always present.
+If your machine blocks a feature agentty needs, `--sandbox auto` runs unsandboxed and prints why, and `--sandbox on` refuses to start. On Linux, on a host that blocks unprivileged user namespaces, you can allow them: an AppArmor profile for `/usr/bin/bwrap` containing `userns,`, or `sudo sysctl -w kernel.unprivileged_userns_clone=1`. (claybin's default path doesn't need user namespaces, which is why it's tried first.) On macOS there's nothing to enable: seatbelt is always present.
 
 :::warn
-Running with `--workspace /` makes your entire filesystem the project folder, so there's nothing left to contain — agentty reports the sandbox as degraded. Keep the workspace scoped to the project you're working on.
+Running with `--workspace /` makes your whole filesystem the project folder, so there's nothing left to contain. agentty reports the sandbox as degraded. Keep the workspace scoped to your project.
 :::
 
 :::warn Don't use your home directory as the workspace
-The workspace is the one place commands may write. Start agentty in `~` and every dotfile becomes writable: shell start-up files, `~/.local/bin`, autostart entries, other tools' config. The masks and the read-only binds above still hold for the files they cover, but anything they don't name is fair game, and the trust-handoff check hits its size cap on a whole home directory. Settings → Sandbox warns when this is the case. Start agentty in a project folder instead.
+The workspace is the one place commands may write. Start agentty in `~` and every dotfile becomes writable: shell start-up files, `~/.local/bin`, autostart entries, other tools' config. The masks and read-only binds still hold for the files they cover, but anything they don't name is open, and the trust-handoff check hits its size cap on a whole home directory. Settings → Sandbox warns when this is the case. Start agentty in a project folder instead.
 :::
 
 ## See it work
 
 ```bash
 # inside the sandbox
-$ cmake --build build -j     # works — project + system libraries reachable
-$ cat ~/.ssh/id_rsa          # empty — the key never reaches the command
-$ cat .env                   # empty — masked even inside your own project
+$ cmake --build build -j     # works: project + system libraries reachable
+$ cat ~/.ssh/id_rsa          # empty: the key never reaches the command
+$ cat .env                   # empty: masked even inside your own project
 ```
 
 :::warn
-A sandbox shrinks the blast radius. It is not a substitute for reading what the agent proposes. With the network on, an approved command can still send your code somewhere.
+A sandbox limits the damage. It doesn't replace reading what the agent proposes. With the network on, an approved command can still send your code somewhere.
 :::
 
-Technical detail, the full threat model, and how to verify any of this on your own machine: [`docs/SANDBOX.md`](https://github.com/agentty-org/agentty/blob/master/docs/SANDBOX.md).
+## What the walls actually are
+
+The sandbox is several mechanisms, each closing a different way out. Linux has all of them:
+
+- **A private view of the filesystem.** The command gets its own *mount namespace*. Your project is there, system libraries are there read-only, and `~/.ssh` is an empty file. It isn't hidden by convention; it isn't in that view.
+- **A list of allowed syscalls.** A program asks the kernel to do things (open a file, start a process, send a packet) through **syscalls**. A *seccomp filter* lists which are allowed. The default profile blocks the ones used to escape a sandbox (`ptrace`, `mount`, `unshare`) and allows what a compiler needs. Sockets are limited to Unix, IPv4 and IPv6; netlink, vsock, raw and packet sockets are refused.
+- **File rules the kernel checks.** *Landlock* (Linux 5.13+) lets a program permanently drop its own file access. It applies to that process and everything it starts, so a build script that starts a shell that starts Python is still confined.
+- **Resource ceilings.** *cgroups* cap memory, CPU and process count. A runaway build hits a limit instead of taking your laptop down.
+- **No new privileges.** The `no_new_privs` flag stops a program from gaining permissions through a setuid binary.
+- **A detached terminal session.** Without it, a command could push fake keystrokes into your terminal (the `TIOCSTI` trick) and make your shell run them after agentty exits.
+
+:::note
+Each platform compiles the same policy into what it has. On Linux: namespaces, Landlock, seccomp and cgroup2 at full strength. On macOS: seatbelt plus rlimits. A seatbelt profile can't be dropped by `exec`, which matches `no_new_privs`. Resource ceilings become POSIX rlimits, which are weaker than cgroups (they count *per process*, not per process tree). There is **no syscall filter** on macOS, so agentty reports it as `none`. On Windows: an AppContainer, a restricted token, a job object and process mitigation policies. Memory, CPU and process caps are as strong as cgroup2. Filesystem and exec walls are `partial`, because Windows enforces ACLs per object, not per path prefix. There is no syscall filter either (mitigation policies are a fixed menu of hardening switches, not a programmable filter).
+:::
+
+## Which backend, and why
+
+| Platform | Engine | What it puts up | Fallback |
+|---|---|---|---|
+| Linux | **claybin** | namespaces, Landlock, seccomp, cgroup2 | none (one Linux engine) |
+| macOS | **claybin** | seatbelt from your compiled policy, plus rlimits | `sandbox-exec`, one fixed profile |
+| Windows | **claybin** | AppContainer, restricted token, job object, mitigation policies | **none, by design** |
+
+**Linux.** claybin replaced bwrap. Both build file read/write walls, but only claybin adds a syscall filter, memory/CPU/process limits, runtime `ptrace` and `kill` decisions, and the filtering proxy. `--sandbox-backend bwrap` still parses for old scripts, says what it did, and runs claybin.
+
+**macOS.** Both engines use seatbelt. claybin calls `sandbox_init` with a profile compiled from *your* policy; `sandbox-exec` runs one fixed profile.
+
+| Capability | claybin | sandbox-exec |
+|---|---|---|
+| file read/write/exec walls | yes | yes, but fixed |
+| network through the filtering proxy | **yes** | **no** (open) |
+| your **Settings → Sandbox** choices apply | **yes** | **no** |
+| extra readable / masked paths | **yes** | **no** |
+| per-capability guarantee report | **yes** | **no** |
+| memory / CPU / process limits | **partial** (rlimits) | **no** |
+| syscall filter | no (platform has none) | no |
+
+The rlimits count *per process*, not per process tree: four children under a 1 GB cap can use 4 GB together. So memory and CPU report `partial`, and the process limit reports `advisory`, because macOS counts it per *user account*, not per sandbox.
+
+What claybin's macOS profile closes that a simple seatbelt profile leaves open (each has a test that runs on every build):
+
+- **Your clipboard and keychains.** macOS system services run outside any sandbox. A profile that allows all of them lets a command read the clipboard (`pbpaste`) and list your keychains. agentty allows only the few real tools need.
+- **The map of your disk.** A file's *metadata* (does `~/.ssh/id_ed25519` exist, how big is it) leaks even when its contents are walled off. A command can only look up the folders on the way to what it was granted.
+- **The network.** A command can reach one place: agentty's proxy, on a private port on `127.0.0.1`. No LAN, no other local services, no DNS of its own.
+- **Apple's own tools still work.** `/usr/bin/git`, `cc` and `python3` are launchers that load the real tool from Xcode and write a cache to your per-user temp folder. Both are allowed.
+
+Two things no seatbelt profile can do: `launchctl print` (read-only) always works, because it uses a channel every process is born with; and setuid programs like `/bin/ps` refuse to run inside any sandbox on macOS.
+
+On macOS the fallback works both ways, so a Mac missing `sandbox-exec` still gets claybin, which talks to the kernel directly.
+
+**Windows.** There is no weaker engine and no `bwrap`. The probe either proves it can build a wall (an AppContainer or a job object) and claybin runs, or the startup line says `sandbox: unavailable, running unsandboxed` and commands run unconfined. Windows Sandbox (the Hyper-V VM) wasn't chosen: it is a whole-OS VM with seconds of boot time, no piped stdout and no per-command exit codes.
+
+```sh
+agentty --sandbox-backend claybin   # default everywhere
+agentty --sandbox-backend bwrap     # accepted for old scripts; bwrap is gone
+```
+
+Technical detail, the full threat model, and how to verify all of this on your machine: [`docs/SANDBOX.md`](https://github.com/agentty-org/agentty/blob/master/docs/SANDBOX.md).

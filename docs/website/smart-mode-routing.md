@@ -1,47 +1,60 @@
 ---
 title: "Smart Mode: Roles & Routing"
-description: The three model roles, zero-config auto-fill, complexity-scaled effort, and the resolver that never checks a model name.
+description: The three model roles, auto-fill, which model each turn gets, and how reasoning effort scales.
 nav_section: Advanced
 nav_order: 62
 slug: smart-mode-routing
 ---
 
-The heart of Smart Mode is a single idea: **every unit of LLM work has a role, and the role — not a hard-coded model name — decides which model runs it.** This page covers the three roles, how they're filled, and how reasoning effort scales to each turn.
-
-## The three roles
-
-| Role | Answers | Runs |
-|------|---------|------|
-| **Strategic** | *What should we build?* — architecture, API design, debugging hard bugs, review, decomposition | the main turn (and reviewer subagents) |
-| **Implementation** | *Build what Strategic decided* — write/edit code, fix compiles, write tests | coder / tester subagents |
-| **Utility** | *Gather info / mechanical work* — grep, read, summarise, commit messages, compaction | explorer subagents + internal engine calls |
-
-Nothing in the engine ever writes `if (model == "opus")`. A single pure resolver maps `role → (model, effort)`; every call site just asks it. That's what makes Smart Mode provider-agnostic and what makes "off" a perfect no-op — with the master switch off, every role resolves to your single active model.
+This page explains how Smart Mode picks a model and a reasoning effort for each piece of work. Most people come here to pin a model to a role, or to understand why a turn got the effort it did. For the overview, see [Smart Mode](/docs/smart-mode).
 
 ## Assigning models
 
-Open [[Ctrl+S]]. Rows *Strategic*, *Implementation*, *Utility* each show the model that would run right now, tagged **· pinned** (you chose it) or **· auto** (Smart Mode filled it).
+1. Open [[Ctrl+S]].
+2. The *Strategic*, *Implementation* and *Utility* rows each show the model that would run now, tagged **· pinned** (you chose it) or **· auto** (Smart Mode filled it).
+3. Press [[Enter]] on a role row to open the model picker and pin a model.
+4. Press [[x]] on a pinned role to reset it to **auto**.
 
-- **[[Enter]]** on a role row opens the model picker in *assign* mode — pick a model to pin that role.
-- **[[x]]** on a pinned role resets it to **auto**.
+| Role | Answers | Runs |
+|------|---------|------|
+| **Strategic** | *What should we build?* Architecture, API design, hard bugs, review, planning | Complex main turns, reviewer subagents |
+| **Implementation** | *Build what was decided.* Write and edit code, fix compiles, write tests | Standard main turns, coder / tester / general subagents |
+| **Utility** | *Gather info, do mechanical work.* Search, read, summarise, commit messages, compaction | Trivial and Simple main turns, explorer subagents, internal engine calls |
 
 ### Zero-config auto-fill
 
-Leave a role empty and Smart Mode fills it from your provider's live catalog using the same capability tiers agentty already uses:
+Leave a role empty and Smart Mode fills it from your provider's live model list:
 
-- **Strategic** → your current (flagship) model, at your effort.
-- **Implementation** → the strongest **mid-tier** model, at one effort step down.
-- **Utility** → the **cheapest capable** model, with reasoning effort **off**.
+- **Strategic**: your current model, at your effort.
+- **Implementation**: the strongest **mid-tier** model, one effort step down.
+- **Utility**: the **cheapest capable** model, with reasoning effort **off**.
 
-So enabling Smart Mode with nothing pinned is safe and immediately useful. On a **single-model** or **Opus-only** account there's nothing cheaper to route to, so every role stays on your model — no change, no regression.
+On a single-model or Opus-only account there is nothing cheaper, so every role stays on your model.
 
 :::note
-All three slots must be on the **same provider** (see the [reference](/docs/smart-mode-reference#constraints)). The picker only offers models from your active provider.
+All three roles must be on the **same provider** (see [constraints](/docs/smart-mode-reference#constraints)). The picker only offers models from your active provider.
 :::
+
+## Which model the main turn gets
+
+Each turn is rated into a tier (see below), and the tier picks the role:
+
+| Tier | Role |
+|------|------|
+| Trivial, Simple | Utility |
+| Standard | Implementation |
+| Complex | Strategic |
+
+Two rows in [[Ctrl+S]] control this:
+
+- **Route the main turn** (default on). Off means every main turn runs on Strategic.
+- **Cheapest main-turn role** (default `utility`). Set it to `implementation` to keep simple turns off the cheapest model, or `strategic` to never route down.
+
+If you start agentty with an explicit `--model`, that model is honoured.
 
 ## Complexity-scaled effort
 
-Reasoning effort has to be decided *before* the request is sent, so Smart Mode classifies each turn upfront — no extra model call, no latency — into one of four tiers:
+Effort has to be chosen *before* the request is sent, so Smart Mode rates each turn up front. This costs no extra model call and no latency. There are four tiers:
 
 | Tier | Looks like | Effort |
 |------|-----------|--------|
@@ -50,11 +63,13 @@ Reasoning effort has to be decided *before* the request is sent, so Smart Mode c
 | **Standard** | the everyday working turn | your baseline (unchanged) |
 | **Complex** | "why does this deadlock?", "refactor the auth module", a long or multi-part ask | one step **up** (or **two** when the turn is *deeply* complex) |
 
+You don't set the tier; it comes from your prompt. Ask a design or "why" question, or list a multi-step task, and the turn gets more room to think.
+
 ### Your baseline, and why it defaults to `auto`
 
-Everything in that table is **relative to a baseline** — the effort setting on your model, which you cycle with [[←]] / [[→]] in the model picker. The tiers move *from* it, so the baseline wants room in both directions.
+The table above is **relative to a baseline**: the effort setting on your model, which you change with [[←]] / [[→]] in the model picker. Tiers move up or down from it, so the baseline needs room in both directions.
 
-That's what **`auto`** (the default) gives you. It isn't a fixed level — it's a *position*: the middle rung of whatever reasoning ladder your current model actually exposes. So it's sensible on a model with six levels and on one with a single on/off switch, without you configuring anything:
+**`auto`** (the default) means the middle rung of whatever effort levels your current model has:
 
 | Your model's ladder | `auto` means | trivial | simple | standard | complex |
 |---|---|---|---|---|---|
@@ -63,44 +78,47 @@ That's what **`auto`** (the default) gives you. It isn't a fixed level — it's 
 | on/off only | `high` | off | off | high | **high** |
 | no reasoning control | — | off | off | off | off |
 
-**Trivial turns are always free**, at every baseline — "commit it" never buys a reasoning budget. That's what makes a centred baseline safe: you pay on the turns that earned it, not as a floor tax.
+**Trivial turns never get a reasoning budget**, at any baseline.
 
-If you'd rather fix the level yourself, cycle to any rung and it stays there. **`off` is a real choice**, distinct from "haven't decided": pick it and agentty sends no reasoning parameter at all, on every turn, including complex ones.
+To fix the level yourself, pick any rung and it stays there. **`off` is a real choice**: agentty then sends no reasoning parameter on any turn, including complex ones.
 
 :::note
-Before this was a distinct setting, "never configured" and "off" were the same value — so on default settings the classifier could score a turn Complex and the effort dial had nowhere to climb from. If you had deliberately set effort **off**, set it again once; an untouched setting is now read as `auto`.
+In older versions "never set" and "off" were the same value. If you had chosen **off** on purpose, set it again once; an untouched setting is now read as `auto`.
 :::
 
 ### How the classifier works
 
-It's not a keyword lookup — it's a small **additive feature score**. Three orthogonal signal families each contribute weight, and the sum is thresholded into a tier:
+The rating is a small **added-up score**, not a keyword lookup. Three kinds of signal add weight, and the total is cut into tiers:
 
-- **Structural** (carries most of the weight, and is *language-agnostic*): enumerated asks, clause and conjunction density, code-token density, question shape, and length. A request's complexity lives mostly in its **structure**, not its verbs — so this works whether you write in English or not.
-- **Lexical**: weighted design/debug/architecture keyword sets across the major languages. Keywords **add evidence** (capped) rather than overriding — one stray "design" in *"add a design token"* no longer forces the top tier.
-- **Morphological**: token-shape variety (prose vs. identifiers vs. paths).
+- **Structure** (most of the weight, works in any language): numbered asks, clause and conjunction count, how much code is in the prompt, question shape, length.
+- **Words**: weighted design, debug and architecture keywords in the major languages. They add capped evidence; one stray "design" in *"add a design token"* does not force the top tier.
+- **Token shape**: the mix of prose, identifiers and paths.
 
-Because it's a score and not a switch, Smart Mode also knows *how far* into a tier a turn sits. **Continuous effort scaling** uses that: a turn that is barely Complex gets the normal one-step bump, but a turn that is *overwhelmingly* complex (long, multi-part, code-heavy, design vocabulary) gets an extra step — reaching the ceiling immediately instead of waiting for the session cascade to drift there.
+Because it's a score, Smart Mode knows how far into a tier a turn sits. A turn barely past Complex gets one step up; a turn deep into Complex gets two.
 
-The classifier is deliberately **conservative**: *Standard* is the fallback, and ambiguity biases **upward** — under-thinking a hard turn costs far more than a little wasted budget on an easy one. Effort is always clamped to what the chosen model actually supports (a model with no reasoning control resolves to *none*, honestly, rather than requesting an effort it will reject).
+Other rules:
 
-The tier boundary and the deep-band aggressiveness are [tunable](/docs/configuration#smart-mode-tuning) via `AGENTTY_SMART_COMPLEX_THRESHOLD` and `AGENTTY_SMART_DEEP_MARGIN` if you want the router more or less eager to escalate.
+- **Ambiguity rounds up.** Standard is the fallback. Under-thinking a hard turn costs more than a little extra budget on an easy one.
+- **Context counts.** A short follow-up to a hard turn (*"now do the same for the other module"*) inherits weight from the turn it continues. A plain *"thanks"* is taken at face value. An attached payload can also lift the tier.
+- **Effort stays in range.** A model with no reasoning control gets none.
 
-Classification is also **context-aware**: a short follow-up to a hard turn (*"now do the same for the other module"*) would score as Simple on its own text, but it inherits weight from the Complex turn it continues rather than collapsing to a one-liner — while a plain acknowledgement (*"thanks"*) is always taken at face value.
-
-:::tip
-You don't set the tier — it's inferred from your prompt. Ask a design or "why" question, or spell out a multi-step task, and the Strategic model automatically gets more room to think.
-:::
+To make the router more or less eager to escalate, [tune](/docs/configuration#smart-mode-tuning) `AGENTTY_SMART_COMPLEX_THRESHOLD` and `AGENTTY_SMART_DEEP_MARGIN`, or the matching advanced rows in [[Ctrl+S]] ([[Ctrl+E]]).
 
 ### The cascade correction
 
-The upfront classifier is a good first guess, not an oracle. Smart Mode layers a **cascade** on top: as a turn plays out, agentty watches what the orchestrator actually did and adjusts a running effort bias for the rest of the session. If a turn the heuristic called "Simple" ends up spawning several parallel workers, it was really complex — so the bias nudges up and the next turns think harder. If a "Complex"-rated turn delegated nothing and answered directly, the bias relaxes. The bias decays toward neutral each turn, so one anomaly never sticks.
+The up-front rating is a first guess. After each turn, agentty looks at what actually happened and adjusts an effort bias for the rest of the session:
 
-This is the routing research's actual recommendation — *cascade beats one-shot routing* — and it's free here because the agent loop already sees the outcome. The correction is **session-scoped**: it decays each turn, is clamped, and resets when you exit. agentty deliberately does not persist it across sessions — a routing prior that ratchets cost from one week's work into the next is a correctness surface that was never worth its complexity.
+- A Simple or Standard turn that started two or more `task` workers was really harder. The bias goes up.
+- A failed `shell`, `test`, `diagnostics` or `edit` call is a sign the route was too weak.
+- A Complex turn that delegated nothing and answered directly was easier. The bias goes down.
+- A message that corrects the last turn ("no", "that's wrong", "actually…", "undo", "revert") pushes the bias up.
+
+The bias moves back toward neutral each turn, so one odd turn doesn't stick. It is capped by `AGENTTY_SMART_BIAS_CLAMP` (the *Self-correction cap* row). The bias is **session-only**: it resets on a new thread and on exit, and is never saved. The routing card shows it as `session +N`.
 
 ## Where each role is used
 
-- **Main turn** → Strategic (when orchestration is on).
-- **Subagents** (`task`) → by agent type: explorer → Utility, reviewer → Strategic, coder / tester / general → Implementation.
-- **Internal engine calls** (auto-compaction summary today) → Utility.
+- **Main turn**: by tier, as above.
+- **Subagents** (`task`): explorer → Utility, reviewer → Strategic, coder / tester / general → Implementation.
+- **Internal engine calls** (the auto-compaction summary): Utility.
 
-Each funnels through the same resolver, so "which model is cheaper / stronger" lives in exactly one place.
+All of these go through one resolver that maps `role → (model, effort)`. It never checks a model name such as `if (model == "opus")`, which is why Smart Mode works with any provider and why turning it off changes nothing: with the switch off, every role is your single active model.

@@ -6,28 +6,11 @@ nav_order: 40
 slug: threads
 ---
 
-Every conversation is a thread, stored as plain files you can inspect, back up, or delete. Nothing is hidden in a database.
-
-## Where threads live
-
-Threads are written to `~/.agentty/threads/` (move it with `AGENTTY_THREADS_DIR`). Each thread is an append-only log plus two small sidecars:
-
-```text
-~/.agentty/threads/
-├── f24a29c6….jsonl        # the conversation, one event per line
-├── f24a29c6….ofs          # line offsets, so a long thread opens fast
-├── f24a29c6….meta.json    # title, dates
-├── index.json             # picker cache, rebuilt if missing
-└── blobs/                 # images and big tool outputs, shared by content hash
-```
-
-Threads are global: the directory is flat and a thread isn't bound to the workspace you created it in, so [[Ctrl+J]] lists every conversation regardless of which project you launched from.
+Every conversation is a thread, saved as plain files you can read, back up or delete. Press [[Ctrl+J]] to open the thread list and switch between them, and [[Ctrl+N]] to start a new one.
 
 ## Managing threads
 
-Press [[Ctrl+J]] to open the thread list and switch between past conversations. [[Ctrl+N]] starts a new thread. [[Ctrl+R]] renames the highlighted thread: its title opens for editing, [[Enter]] saves and [[Esc]] cancels. Saving an empty title clears your name and goes back to the automatic one. `/rename <title>` renames the open thread from the composer. Deleting a thread removes all its files; its blobs go in the next daily sweep if no other thread uses them.
-
-In the thread list:
+In the thread list ([[Ctrl+J]]):
 
 | Key | Action |
 |---|---|
@@ -43,15 +26,15 @@ In the thread list:
 | [[Ctrl+N]] | New thread |
 | [[Esc]] | Clear the filter, then close |
 
-The title of the panel says which list you're on, and the hint row says where [[Tab]] goes next. With **Appearance → Thread preview** on, a card above the list shows the highlighted thread's turns.
+The panel title says which list you're on, and the hint row says where [[Tab]] goes next. With **Appearance → Thread preview** on, a card above the list shows the highlighted thread's turns.
 
-## Conversations from Codex and Claude Code
+**Renaming.** [[Ctrl+R]] opens the highlighted title for editing. [[Enter]] saves, [[Esc]] cancels. Saving an empty title goes back to the automatic name. From the composer, `/rename <title>` renames the open thread.
 
-The thread list also shows your Codex and Claude Code sessions, marked `↗` with the tool's name on the right. [[Enter]] on one brings it in as an agentty thread you can keep talking in, on any model. A `→ continued in agentty` line marks where agentty took over, and opening it again later picks up anything you said in the other tool since. See **[Coming from Codex or Claude Code](/docs/switching)** for what comes across and how.
+**Automatic names.** A new thread is first named after the first line of its first message. After the first reply, agentty asks the cheap utility model (the one compaction uses) for a 3 to 6 word title and swaps it in. A toast tells you, and the list marks those names `auto`. It asks once per thread, even if that fails, and never replaces a name you set. Forks keep their `Fork:` name, imported Codex or Claude Code threads keep their old name, and older threads keep theirs. Turn it off in Settings → **Chat names**, or with `"auto_title": false` in `settings.json`.
 
-A new thread is named after the first line of its first message. After the first reply, agentty asks the cheap utility model (the one compaction uses) for a 3 to 6 word title and swaps it in, the way chat apps name a chat. A toast says when that happens, and the thread list marks those names `auto`. It is asked once per thread, even if it fails, and never replaces a name you set. Forks keep their `Fork:` name, threads brought in from Codex or Claude Code keep the name they had there, and threads from before this feature keep the name they had. Turn it off in Settings → **Chat names**, or with `"auto_title": false` in `settings.json`.
+**Deleting.** Deleting a thread removes all its files. Its blobs are removed in the next daily sweep if no other thread uses them.
 
-Threads are kept until you delete them. To expire old ones automatically:
+**Expiring old threads.** Threads are kept until you delete them. To delete old ones automatically:
 
 ```sh
 export AGENTTY_THREADS_KEEP_DAYS=90
@@ -59,26 +42,49 @@ export AGENTTY_THREADS_KEEP_DAYS=90
 
 Once a day, threads with no activity for that long are deleted. A thread open in a running agentty is never touched. See [Storage](/docs/storage) for everything else agentty keeps on disk.
 
-Headless runs are threads too. `agentty run --save "…"` keeps the run as a thread (it shows up in [[Ctrl+J]]), and `agentty run --resume <id>` or `--resume last` continues one from a script. See [agentty run](/docs/cli#agentty-run).
+**Scripts.** Headless runs are threads too. `agentty run --save "…"` keeps the run as a thread (it shows up in [[Ctrl+J]]), and `agentty run --resume <id>` or `--resume last` continues one. See [agentty run](/docs/cli#agentty-run).
+
+## Conversations from Codex and Claude Code
+
+The thread list also shows your Codex and Claude Code sessions, marked `↗` with the tool's name on the right. [[Enter]] on one brings it in as an agentty thread you can keep talking in, on any model. A `→ continued in agentty` line marks where agentty took over. Opening it again later picks up anything you said in the other tool since. See **[Coming from Codex or Claude Code](/docs/switching)** for details.
 
 ## Forking a thread
 
-When a conversation fills the context window, open the command palette ([[Ctrl+K]]) and pick **Fork thread** to branch it into a *fresh* thread that carries **near-zero context**. The parent's full transcript is written to disk and the fork reads it on demand, so forking costs O(1) tokens no matter how large the parent grew — nothing is copied into the window and nothing is lost. The original thread is saved untouched, and the fork records where it came from. See **[Forking a Thread](/docs/fork)** for the full walkthrough.
+When a conversation fills the context window, press [[Ctrl+K]] and pick **Fork thread**. You get a fresh thread with almost no context. The old transcript is saved to disk and the fork reads it only when it needs to, so forking costs about the same few tokens however long the old thread was. The original thread is left as it was. See **[Forking a Thread](/docs/fork)**.
 
-## Checkpoints & rewind
+## Checkpoints & rewind {#checkpoints}
 
-Inside a git repo, every user turn pins a **worktree snapshot** before the agent starts editing. The turn's meta line carries a subtle `· ↺ checkpoint` tag so a restore point reads as an ordinary turn, not a banner. Nothing is committed to your history — the snapshot is captured out-of-band, concurrent with the request, so it costs you nothing.
+Inside a git repo, agentty saves a snapshot of your working tree at the start of every message you send, before the agent edits anything. Those messages get a small `· ↺ checkpoint` tag. Nothing is committed to your history, and the snapshot is taken in the background while the request goes out.
 
-Open the command palette ([[Ctrl+K]]) and pick **Rewind to checkpoint** to reach *any* earlier turn, not just the last. The picker lists every checkpointed turn (turn number + prompt preview + relative time), and each row shows a `N files · +A −D` summary of what the worktree has changed *since* that point — computed asynchronously, so opening is instant even on a big repo. [[↑↓]] / [[j]] / [[k]] move, [[Enter]] rewinds, [[Esc]] cancels.
+To go back to an earlier point:
 
-A rewind is a destructive double restore: the worktree files *and* the transcript both return to the instant before that turn was submitted, and the original prompt is refilled into the composer so you can edit and resend. It's gated on an idle session and a real git repo (a friendly toast explains why otherwise). Checkpoints key off the project directory agentty was launched from, so they keep working even under `--workspace /`.
+1. Press [[Ctrl+K]] and pick **Rewind to checkpoint**.
+2. Pick a turn. Each row shows the turn number, a preview of the prompt, how long ago it was, and `N files · +A −D`: what has changed in the tree since then. [[↑↓]] / [[j]] / [[k]] move.
+3. Press [[Enter]] to rewind, or [[Esc]] to cancel.
 
-The worktree restore is exact in both directions: files the agent **edited** are rewound to their snapshot contents, files it **deleted** are recreated, and files it **created after** that point are removed — so the tree really is bit-for-bit what it was, not merely "the touched files put back." Anything git already ignores (build output, caches, `node_modules`) is never part of a snapshot and is left completely alone. The snapshots live in an out-of-band ref namespace (`refs/agentty/checkpoints/…`) with no parent commits, so they never touch your branch, your index, or `HEAD`, and the most recent 64 are kept per project.
+A rewind puts back **both** the files and the conversation to just before that message, and puts your original prompt back in the composer so you can edit and resend. It can't be undone. It only works in a git repo with no turn running (a toast explains otherwise). Checkpoints belong to the folder agentty was started in, so they still work with `--workspace /`.
+
+The file restore is exact: edited files get their old contents, deleted files come back, and files created after that point are removed. Files git ignores (build output, caches, `node_modules`) are never in a snapshot and are left alone. Snapshots live under `refs/agentty/checkpoints/…` with no parent commits, so they never touch your branch, index or `HEAD`. The newest 64 are kept per project.
+
+## Where threads live
+
+Threads are saved in `~/.agentty/threads/` (change it with `AGENTTY_THREADS_DIR`). Each thread is an append-only log plus two small side files:
+
+```text
+~/.agentty/threads/
+├── f24a29c6….jsonl        # the conversation, one event per line
+├── f24a29c6….ofs          # line offsets, so a long thread opens fast
+├── f24a29c6….meta.json    # title, dates
+├── index.json             # picker cache, rebuilt if missing
+└── blobs/                 # images and big tool outputs, shared by content hash
+```
+
+Threads aren't tied to a project. The folder is flat, so [[Ctrl+J]] lists every conversation no matter where you started agentty.
 
 ## Atomic writes
 
-Thread and credential writes are atomic: agentty writes to a temp file, calls `fsync`/`_commit`, then `rename`s into place (`MoveFileExW` on Windows). A crash mid-write can't leave you with a half-written, corrupt thread.
+Thread and credential files are written safely: agentty writes a temp file, calls `fsync`/`_commit`, then `rename`s it into place (`MoveFileExW` on Windows). A crash mid-write can't leave a half-written thread.
 
 ## Credentials
 
-Auth lives separately at `~/.agentty/credentials/credentials.json` (mode `0600`) — see [Authentication](/docs/authentication).
+Logins are stored separately in `~/.agentty/credentials/credentials.json` (mode `0600`). See [Authentication](/docs/authentication).

@@ -6,28 +6,28 @@ nav_order: 35
 slug: plugins
 ---
 
-A **plugin** is an external [MCP](https://modelcontextprotocol.io) server that adds tools to agentty. Point agentty at a Playwright server and the model can drive a browser; add a Postgres server and it can query your database. Plugins are how you extend the agent's capabilities beyond its native toolset without recompiling anything.
+This page shows how to add a plugin: an [MCP](https://modelcontextprotocol.io) server that gives agentty new tools. Add a Playwright server and the model can drive a browser. Add a Postgres server and it can query your database. No rebuild needed.
 
-Under the hood a plugin *is* an MCP server — this page is the practical "add a tool to my agent" guide; [MCP Server](/docs/mcp) covers the full protocol, OAuth, and serving agentty's own tools the other way.
+The quickest way is [[Ctrl+K]] → **Plugins** → [[a]], or `agentty plugin add` from a shell. For the protocol, OAuth and serving agentty's own tools, see [MCP Server](/docs/mcp). To write your own server, see [Build a Plugin](/docs/build-a-plugin).
 
-There are two ways to configure plugins and they edit the same files — pick whichever fits: the **TUI** for the common cases (add / enable / disable / remove / approve, no JSON), or **editing `mcp.json`** directly for full control (env vars, headers, per-tool filters, timeouts).
+The TUI and the `mcp.json` file edit the same config. Use the **TUI** for common jobs (add, enable, disable, remove, approve). **Edit `mcp.json`** when you need env vars, headers, per-tool filters or timeouts.
 
 ## Where plugins live
 
-agentty reads **both** of these and unions them (a project server and a user server are both active; on a name clash the project one wins):
+agentty reads **both** files and uses the servers from each. If both have a server with the same name, the project one wins.
 
 - `~/.agentty/mcp.json` — **user** scope: your servers, on every project.
 - `<project>/.agentty/mcp.json` — **project** scope: committed with the repo, shared with your team.
 
-`$AGENTTY_MCP_CONFIG` points at an explicit file that overrides both. A project `mcp.json` can ride in on a clone, so its command-spawning servers are gated — see [Trust](#trust).
+Set `$AGENTTY_MCP_CONFIG` to a file path to use that file instead of both. A project `mcp.json` can come with a cloned repo, so its servers that run commands need your approval first. See [Trust](#config-scope).
 
 :::note
-Plugins are lazy and opt-in. With no `mcp.json` present, startup is a single `stat()` that finds nothing — zero overhead when you aren't using any.
+If you have no `mcp.json`, plugins cost nothing at startup. agentty checks for the file and moves on.
 :::
 
 ## Configure from the TUI
 
-Open the command palette with [[Ctrl+K]] and choose **Plugins**. The picker lists every configured server (from both scopes), its live connection state, and its tools — read from the same model the agent uses, so it's never stale. No restart is needed for anything you do here.
+Open the command palette with [[Ctrl+K]] and choose **Plugins**. The picker lists every configured server (from both scopes), its live connection state, and its tools. It reads the same state the agent uses, so it's always current. No restart is needed for anything you do here.
 
 **What each row shows**
 
@@ -47,7 +47,7 @@ Open the command palette with [[Ctrl+K]] and choose **Plugins**. The picker list
 | [[d]] | **remove** the server — press once to arm (row turns ⚠ *press d again to remove*), again to confirm |
 | [[esc]] | close |
 
-Every edit writes back to the **file the server actually came from** — toggling a project server edits the project `mcp.json`, a user server edits yours; the two never cross. A fresh inline add goes to your user config unless you pass `--project`.
+Every change is saved to the **file the server came from**. Toggling a project server edits the project `mcp.json`. Toggling a user server edits yours. A fresh inline add goes to your user config unless you pass `--project`.
 
 **Adding inline** — press [[a]], type a `name`, then one recipe:
 
@@ -61,7 +61,7 @@ mydb -- /usr/local/bin/db-mcp --port 5432   # any command, verbatim after --
 
 Append `--project` to write the repo config. The server connects immediately.
 
-The same operations work headless from a shell, for scripts / CI / SSH-without-TUI:
+The same actions work from a shell, for scripts, CI or SSH sessions:
 
 ```bash
 agentty plugin add weather --uvx mcp-weather
@@ -71,11 +71,11 @@ agentty plugin approve <name> --project  # per-server trust
 agentty plugin remove <name>
 ```
 
-The inline add covers the common shapes. For a server that needs **environment variables, HTTP headers, per-tool filters, or custom timeouts**, edit the file directly — next.
+The inline add covers the common shapes. For a server that needs **environment variables, HTTP headers, per-tool filters, or custom timeouts**, edit the file directly, as described next.
 
 ## Configure by editing `mcp.json`
 
-Everything the TUI writes is plain JSON you can hand-edit; agentty picks up changes on the next connect (start a new session, or toggle the server in the picker). Edits are **round-trip safe** — keys agentty doesn't own, other servers, and the `servers` vs `mcpServers` spelling are all preserved byte-for-byte.
+Everything the TUI writes is plain JSON you can edit by hand. agentty picks up changes on the next connect: start a new session, or toggle the server in the picker. When agentty writes the file, it keeps everything else exactly as it was: keys it doesn't use, other servers, and your choice of `servers` or `mcpServers`.
 
 The top-level key is `mcpServers` (the `servers` spelling is also read). Each entry is one server, keyed by the name you'll see in tool names (`mcp__<name>__<tool>`).
 
@@ -140,13 +140,20 @@ Use `"type": "sse"` for a Server-Sent-Events endpoint. HTTP/SSE servers spawn no
 | `connectTimeoutMs` | all | handshake / connect deadline. |
 | `maxOutputChars` | all | cap a tool's output before it enters context. |
 
-Unknown keys are ignored (and preserved), so a config shared with Claude Desktop / Cursor / VS Code works as-is — they read the same `mcpServers` shape. Connected tools carry stable provenance names (`mcp__playwright__browser_click`) that can't collide with or impersonate a native tool, and live `tools/list_changed` updates are honoured without a restart.
+Unknown keys are ignored and kept, so a config shared with Claude Desktop, Cursor or VS Code works as it is. They all read the same `mcpServers` shape. Tools get namespaced names (`mcp__playwright__browser_click`) that can't clash with native tools, and `tools/list_changed` updates apply without a restart.
 
-## Trust
+Already have servers set up in another tool? Copy them with `agentty mcp import`. See [Importing from other tools](/docs/mcp#importing-from-other-tools).
 
-A **project** `mcp.json` can arrive inside a repo you cloned, and an stdio server is a command agentty would spawn. So project stdio servers don't auto-connect — each is untrusted until you approve it, per-server, by content hash. Approve from the picker ([[Enter]] on the *trust & enable* row) or the CLI (`agentty plugin approve <name> --project`); edit the command afterwards and it re-gates. Your own `~/.agentty` servers and remote HTTP/SSE servers are never gated. Full rationale: [Plugin Trust](/docs/plugin-trust).
+## Trust {#config-scope}
 
-`AGENTTY_MCP_ALLOW_PROJECT=1` is the blanket alternative — it trusts every server in a project config at once (fine for a repo you fully control, not for a fresh clone).
+A **project** `mcp.json` can come inside a repo you cloned, and a stdio server is a command agentty would run. So project stdio servers don't connect until you approve them. Approval is per server and tied to a hash of its config. If the command changes later, you're asked again.
+
+- In the picker: [[Enter]] on the *trust & enable* row.
+- From a shell: `agentty plugin approve <name> --project`.
+
+Your own `~/.agentty` servers and remote HTTP/SSE servers never need approval. Why: [Plugin Trust](/docs/plugin-trust).
+
+`AGENTTY_MCP_ALLOW_PROJECT=1` trusts every server in a project config at once. That's fine for a repo you fully control, not for a fresh clone.
 
 ## How tools load
 
@@ -157,6 +164,8 @@ Every enabled plugin tool is always **callable**. What changes is whether its sc
 - **On demand:** the rest. The model gets a `tool_search` tool, finds what it needs by describing the task (any language, typos are fine, or `select:<name>`), and a found tool stays loaded for the rest of the conversation.
 
 On Anthropic, on-demand tools use the API's own deferred loading, so finding one doesn't break the prompt cache. Elsewhere a found tool is added to the end of the tool list, which keeps the cached part of the request the same.
+
+### The tool budget
 
 Choose how this works in **Settings → General → MCP tool loading**:
 
@@ -170,9 +179,9 @@ The Plugins picker (also `/tools`) shows how many tools are loaded and on demand
 
 ## Safety
 
-- Plugin tools run under the same [permission profile](/docs/sandboxing) as native tools — a write-capable plugin tool still asks for approval on `Ask`/`Minimal`.
-- A configured plugin is **never re-exported** when agentty runs as an MCP server itself (`agentty mcp-serve`), preventing credential leaks and recursive proxy loops.
-- Independent servers run concurrently; a crashed server reconnects on its next call instead of wedging the session.
+- Plugin tools follow the same [permission profile](/docs/sandboxing) as native tools. A plugin tool that writes still asks for approval on `Ask`/`Minimal`.
+- When agentty runs as an MCP server itself (`agentty mcp-serve`), it **never passes on** your plugins. This avoids leaking credentials and proxy loops.
+- Different servers run at the same time. A crashed server reconnects on its next call, so the session keeps going.
 
 ## Related
 

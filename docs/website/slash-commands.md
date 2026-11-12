@@ -6,9 +6,9 @@ nav_order: 55
 slug: slash-commands
 ---
 
-A slash command is a **prompt template** you invoke from the composer as `/name [arguments]`. On submit, the template — with your arguments substituted in — replaces what you typed and the turn runs as if you'd written the whole thing. Commands are prompt **macros**: save the phrasing of a task you run often ("review this file for security issues", "write a conventional-commit message for the staged diff") and fire it with a few keystrokes.
+A slash command is a saved prompt you run from the composer as `/name [arguments]`. To make one, drop a Markdown file in `.agentty/commands/`. When you submit, the file's text (with your arguments filled in) replaces what you typed, and the turn runs as if you'd written it all. Use it for tasks you ask for often, like "review this file for security issues" or "write a commit message for the staged diff".
 
-They complement the [command palette](/docs/keybindings) ([[Ctrl+K]]), which dispatches app *actions* like New Thread. The common actions can be typed as `/name` too (see below).
+The [command palette](/docs/keybindings) ([[Ctrl+K]]) is different: it runs app *actions* like New Thread. The common actions can be typed as `/name` too (see below).
 
 ## Authoring a command
 
@@ -23,14 +23,14 @@ Review $1 for security problems, focusing on $2.
 Full request: $ARGUMENTS
 ```
 
-Save that as `.agentty/commands/review.md` and type `/review auth.cpp tokens` — the model receives *"Review auth.cpp for security problems, focusing on tokens…"*.
+Save that as `.agentty/commands/review.md` and type `/review auth.cpp tokens`. The model receives *"Review auth.cpp for security problems, focusing on tokens…"*.
 
 | Frontmatter | Meaning |
 |-------------|---------|
 | `description` | one-line summary shown in the `/` menu (falls back to the body's first line) |
 | `argument-hint` | usage hint shown under the menu for the selected command, e.g. `<file> [focus]` |
 
-Both are optional — a file with no frontmatter is treated as the whole body.
+Both are optional. A file with no frontmatter is all body.
 
 ## Argument substitution
 
@@ -42,7 +42,7 @@ Placeholders are replaced at submit time:
 | `$1` … `$9` | whitespace-split positional words (`$2` of `a b c` is `b`; later words are not re-joined) |
 | `$$` | a literal dollar sign (escape hatch) |
 
-A placeholder with no matching argument expands to an empty string, so a command degrades gracefully when called with fewer args than it references.
+A placeholder with no matching argument becomes an empty string, so a command still works with fewer arguments than it uses.
 
 ## Invoking
 
@@ -72,11 +72,11 @@ The same names work over [ACP](/docs/acp) and with `agentty run "/name args"`.
 
 ## Namespacing
 
-Subdirectories namespace the command name with `:` — `.agentty/commands/git/fixup.md` is invoked as `/git:fixup`. Nesting up to three levels deep is supported (`a:b:c`).
+Subfolders add a prefix with `:`. `.agentty/commands/git/fixup.md` runs as `/git:fixup`. You can nest up to three levels (`a:b:c`).
 
 ## Discovery & precedence
 
-Commands are discovered from six roots; on a name collision the **first** hit wins (project shadows user):
+agentty looks in six folders. If two commands have the same name, the **first** one found wins (project beats user):
 
 ```text
 <cwd>/.agentty/commands/<name>.md      # project
@@ -88,10 +88,10 @@ Commands are discovered from six roots; on a name collision the **first** hit wi
 ```
 
 :::tip
-Because agentty reads `.claude/commands/`, your existing **Claude Code slash commands load unchanged** — same file format, same `$ARGUMENTS` / `$1` placeholders, same subdirectory namespacing.
+Because agentty reads `.claude/commands/`, your existing **Claude Code slash commands work unchanged**: same file format, same `$ARGUMENTS` / `$1` placeholders, same subfolder prefixes.
 :::
 
-Files are picked up live (an mtime signature refreshes the cache), so editing a command takes effect without a restart. Up to 128 commands, 64 KiB each.
+Changes are picked up right away, so editing a command doesn't need a restart. Limits: 128 commands, 64 KiB each.
 
 ## Browsing commands in the app
 

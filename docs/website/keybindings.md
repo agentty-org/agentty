@@ -6,70 +6,64 @@ nav_order: 20
 slug: keybindings
 ---
 
-Everything you can do without leaving the home row.
+Every key agentty understands. The first table has the keys you'll use most; the rest are grouped by where they work.
 
-## Global
+## Most used
 
 | Key | Action |
 |---|---|
-| [[Enter]] | Send the current message |
-| [[Esc]] | Cancel the current turn / reject a permission / close a modal (does NOT quit) |
+| [[Enter]] | Send the message (while a turn runs, it's queued) |
+| [[Shift+Enter]] | New line in the composer |
+| [[Esc]] | Cancel the current turn, reject a permission, or close a panel. It never quits |
+| [[Ctrl+C]] | Quit (the only quit key) |
+| [[Ctrl+K]] | Command palette |
+| [[Ctrl+/]] | Model picker |
+| [[Ctrl+J]] | Thread list |
+| [[Ctrl+N]] | New thread |
 | [[S-Tab]] | Cycle permission profile (Write → Ask → Minimal) |
+| [[Ctrl+R]] | [Review pending diffs](clip:diff-review) |
+| [[Ctrl+V]] / [[Alt+V]] | Paste from the clipboard, including images |
+
+## Global
+
+These work from the main screen.
+
+| Key | Action |
+|---|---|
 | [[Ctrl+K]] | Command palette |
 | [[Ctrl+J]] | Thread list (opens at the current thread). Includes your [Codex and Claude Code sessions](/docs/switching) |
 | [[Ctrl+N]] | New thread |
-| [[Alt+←/→]] | Quick-cycle to the adjacent thread (← newer, → older) |
-| [[Ctrl+←/→]] | Quick-cycle threads (empty composer, idle session) |
-| [[Ctrl+T]] | Todo / plan view |
-| [[Ctrl+/]] | Model picker — **one list across every provider you're signed into** (fuzzy-search, `Enter` switches provider+model atomically) |
-| [[Ctrl+Tab]] | Quick-swap to the previous model you used (jumps across providers) |
-| [[Ctrl+P]] | Provider picker (manage/switch LLM backends, hosts, accounts) |
+| [[Alt+←/→]] | Switch to the next thread (← newer, → older) |
+| [[Ctrl+←/→]] | Same, but only on an empty composer with no turn running |
+| [[Ctrl+/]] | Model picker: one fuzzy list of every model from every provider you're signed into. [[Enter]] switches provider and model together |
+| [[Ctrl+Tab]] | Swap back to the previous model you used (works across providers) |
+| [[Ctrl+P]] | Provider picker (add or switch backends, hosts, accounts) |
 | [[Ctrl+S]] | Smart Mode overlay (routing + learning) |
+| [[Ctrl+T]] | Todo / plan view |
 | [[Ctrl+G]] | Run a code block from the newest reply on your real terminal |
 | [[Ctrl+R]] | [Review pending diffs](clip:diff-review) |
-| [[Ctrl+O]] | Browse the full text of a frozen retrieved-context card |
-| [[Ctrl+U]] | Read thinking blocks in full, newest first; ←/→ for older ones (empty composer). Toggles the newest retrieved-context card instead while one is live |
+| [[Ctrl+O]] | Tool output viewer: browse the full output of past tool calls |
+| [[Ctrl+U]] | On an empty composer: read thinking blocks in full, newest first. If a retrieved-context card is live, it expands or collapses that card instead |
 | [[Ctrl+L]] | Stats: tokens, cache, tools, latency for this thread |
-| [[Ctrl+Y]] | Redraw the screen (empty composer; in the composer it's redo) |
-| [[Ctrl+C]] | Quit (the only quit key) |
+| [[Ctrl+Y]] | Redraw the screen (inside the composer [[Ctrl+Y]] is redo) |
+| [[Ctrl+E]] | Toggle the taller composer |
+| [[Ctrl+B]] | Loop: send this message, then send it again after every finished turn until you press it again |
+| [[S-Tab]] | Cycle permission profile (Write → Ask → Minimal) |
+| [[Ctrl+C]] | Quit |
 
-> **Every open key toggles.** Pressing a modal's own open key again while
-> it's up closes it — [[Ctrl+P]] shuts the provider picker, [[Ctrl+K]] the
-> command palette, [[Ctrl+S]] the Smart Mode overlay, and so on. The model
-> and provider pickers also **cross-hop**: [[Ctrl+P]] from the model picker
-> jumps to the provider picker, [[Ctrl+/]] does the reverse.
+**Open keys also close.** Press a panel's own key again to close it: [[Ctrl+P]] closes the provider picker, [[Ctrl+K]] the palette, [[Ctrl+S]] Smart Mode, and so on. The two pickers link to each other: [[Ctrl+P]] in the model picker jumps to the provider picker, and [[Ctrl+/]] in the provider picker jumps back. Inside the model picker, [[Ctrl+/]] narrows the list to the highlighted row's provider (press again to clear) and [[Ctrl+F]] marks a favorite.
 
-> **The model picker spans every provider.** [[Ctrl+/]] opens one fuzzy list
-> of every model on every backend you're signed into — type `son` for every
-> Sonnet, `gpt` for every GPT — and [[Enter]] switches provider **and** model
-> in a single step. A **recent** section (the models you toggle between) sits
-> up top, and providers you're *not* signed into appear as dim **sign in to …**
-> rows that drop straight into login. [[Ctrl+Tab]] jumps to your previous
-> model without opening anything. Use [[Ctrl+P]] when you want to *manage*
-> backends (add a custom host, switch accounts) rather than pick a model.
+**The model picker.** Type `son` for every Sonnet or `gpt` for every GPT. A **recent** section at the top holds the models you switch between. Providers you aren't signed into show as dim **sign in to …** rows that open login. Use [[Ctrl+P]] when you want to manage backends rather than pick a model.
 
-> **If [[Ctrl+/]] or [[Ctrl+Tab]] do nothing, your terminal can't encode them.**
-> `Ctrl`+`/` and `Ctrl`+`Tab` are among the few chords legacy terminals
-> literally cannot send (on most, `Ctrl`+`Tab` is byte-identical to `Tab`).
-> agentty negotiates the **kitty keyboard protocol** on startup, so the keys
-> work on terminals that support it — kitty, Ghostty, WezTerm, foot, Konsole,
-> recent xterm/Alacritty, iTerm2 3.5+, and **Blink Shell** on iOS. On a
-> terminal that can't (notably **mosh** sessions, some minimal iOS SSH apps),
-> use the always-portable routes instead: type **`/model`** (or `/swap`) in
-> the composer, or open the command palette with [[Ctrl+K]] and pick
-> **"Switch model"** / **"Swap to previous model"**. Both work on every
-> terminal. (Set `MAYA_NO_KITTY_KEYBOARD=1` to disable the protocol.)
+**Esc steps back one level.** In a multi-step flow (provider picker → **Custom host…** → host input → API-key prompt), [[Esc]] goes back one step and keeps what you typed. The footer shows `Esc back` when there's a step to go back to, `Esc cancel` when there isn't.
 
-> **Esc steps back one level.** In a multi-step flow — provider picker →
-> **Custom host…** → host input → API-key prompt — [[Esc]] pops one level
-> at a time (and restores what you typed) rather than collapsing the whole
-> stack. The footer shows `Esc back` when there's a parent, `Esc cancel`
-> when there isn't.
+:::note
+**If [[Ctrl+/]] or [[Ctrl+Tab]] do nothing, your terminal can't send them.** Older terminals can't encode these chords (on most, `Ctrl`+`Tab` is the same byte as `Tab`). agentty turns on the **kitty keyboard protocol** at startup, so they work on kitty, Ghostty, WezTerm, foot, Konsole, recent xterm/Alacritty, iTerm2 3.5+ and **Blink Shell** on iOS. Where they don't (notably **mosh**, some minimal iOS SSH apps), type **`/model`** (or `/swap`) in the composer, or pick **"Switch model"** / **"Swap to previous model"** from [[Ctrl+K]]. Set `MAYA_NO_KITTY_KEYBOARD=1` to turn the protocol off.
+:::
 
 ## Composer
 
-The composer is a full readline-style editor. Keys are grouped below by what
-they do.
+The composer is a readline-style editor.
 
 ### Submit & compose
 
@@ -77,78 +71,57 @@ they do.
 |---|---|
 | [[Enter]] | Send the message (or, while streaming, queue it) |
 | [[Shift+Enter]] | Insert a newline |
-| [[Alt+Enter]] | Insert a newline (fallback for terminals that don't deliver Shift+Enter) |
+| [[Alt+Enter]] | Insert a newline (for terminals that don't send Shift+Enter) |
 | [[Ctrl+E]] | Toggle the expanded (taller) composer |
-| [[/]] | Open the command palette — when line-leading (start of buffer or after a newline) |
-| [[@]] | Open the file-mention picker — at a word boundary; inserts an `@file` chip |
-| [[#]] | Open the symbol picker — at a word boundary; inserts a `#symbol` chip |
+| [[/]] | At the start of a line: open the `/` command menu. [[↑]]/[[↓]] or [[Ctrl+P]]/[[Ctrl+N]] move, [[Tab]] completes, [[Enter]] completes a partial name or runs an exact one, [[Esc]] hides it |
+| [[@]] | At a word boundary: open the file picker; inserts an `@file` chip |
+| [[#]] | At a word boundary: open the symbol picker; inserts a `#symbol` chip |
 
 ### Cursor motion
 
 | Key | Action |
 |---|---|
-| [[←]] / [[→]] | Move one character (steps over an attachment chip as a single unit) |
-| [[Ctrl+←]] / [[Ctrl+→]] | Move one word (a run of punctuation counts as one unit) |
+| [[←]] / [[→]] | Move one character (an attachment chip counts as one) |
+| [[Ctrl+←]] / [[Ctrl+→]] | Move one word (a run of punctuation counts as one). On an empty composer with no turn running, they switch threads instead |
 | [[Home]] / [[End]] | Jump to start / end of the buffer |
-
-[[Ctrl+←]] / [[Ctrl+→]] switch to word-motion only when the composer has text;
-on an **empty** composer with an idle session they cycle threads instead (same
-as [[Alt+←/→]]).
 
 ### Editing
 
 | Key | Action |
 |---|---|
 | [[Backspace]] | Delete the character (or whole chip) before the cursor |
-| [[Ctrl+W]] | Delete the word before the cursor (readline *unix-word-rubout*) |
-| [[Alt+D]] | Delete the word after the cursor (readline *kill-word*) |
-| [[Ctrl+U]] | Kill to beginning of line |
-| [[Alt+K]] | Kill to end of line |
-| [[Ctrl+Z]] | Undo — rewinds word-by-word, not keystroke-by-keystroke |
+| [[Ctrl+W]] | Delete the word before the cursor |
+| [[Alt+D]] | Delete the word after the cursor |
+| [[Ctrl+U]] | Delete to start of line (on an empty composer it opens the thinking reader, see Global) |
+| [[Alt+K]] | Delete to end of line |
+| [[Ctrl+Z]] | Undo, a word at a time |
 | [[Ctrl+Y]] / [[Ctrl+Shift+Z]] | Redo |
-| [[Ctrl+V]] / [[Alt+V]] | Paste from the clipboard: an image as an image chip, a copied file as its text or saved path, text as text |
+| [[Ctrl+V]] / [[Alt+V]] | Paste from the clipboard: an image becomes an image chip, a copied file becomes its text or saved path, text stays text |
 
-Undo coalesces a run of typing into one step (broken on whitespace and on any
-non-typing edit), so one [[Ctrl+Z]] after a paste reaches the pre-paste state.
-[[Ctrl+V]] is intercepted by some terminals (Windows Terminal binds it to its
-own paste); [[Alt+V]] is the fallback that every terminal passes through. A
-terminal's own paste (an empty bracketed paste, or a pasted `richpaste:1:`
-line) also lands as the image or file. Over **ssh**, run `agentty paste setup`
-once on your laptop and Ctrl+V reads the laptop's clipboard. See
-[Clipboard & Images](/docs/clipboard); every route can be turned on or off in
-Settings → Paste.
+Undo groups a run of typing into one step, so one [[Ctrl+Z]] after a paste gets you back to before the paste.
 
-> Kill-to-end is [[Alt+K]], not the readline-standard [[Ctrl+K]] — [[Ctrl+K]] is
-> reserved app-wide for the command palette. It pairs with [[Ctrl+U]]
-> (kill-to-start) the same way [[Alt+D]] (delete word forward) pairs with
-> [[Ctrl+W]] (delete word back). [[Ctrl+U]] also doubles as “expand/collapse the
-> newest retrieved-context card” **when the composer is empty** and such a card
-> is on screen; with text in the box it always means kill-to-line-start.
+Delete-to-end is [[Alt+K]], not the usual readline [[Ctrl+K]], because [[Ctrl+K]] always opens the palette.
+
+Some terminals take [[Ctrl+V]] for their own paste (Windows Terminal does). [[Alt+V]] works in every terminal. A terminal's own paste (an empty bracketed paste, or a pasted `richpaste:1:` line) also lands as the image or file. Over **ssh**, run `agentty paste setup` once on your laptop and [[Ctrl+V]] reads the laptop's clipboard. See [Clipboard & Images](/docs/clipboard); each route can be turned on or off in Settings → Paste.
 
 ### History & queue
 
 | Key | Action |
 |---|---|
-| [[↑]] | On an empty composer: recall queued messages (if any), else walk back through your previous messages |
-| [[↓]] | Walk forward through history toward the live draft |
-| [[Alt+↑]] | Edit queued messages one at a time (loads the most recently queued first) |
-| [[Alt+↓]] | Step back out of the per-item queue editor toward the live draft |
-| [[Alt+Backspace]] | Drop the most recently queued message (empty composer, nothing peeked) |
+| [[↑]] | On an empty composer: bring back queued messages (if any), else step back through your earlier messages |
+| [[↓]] | Step forward through history toward your draft |
+| [[Alt+↑]] | Edit queued messages one at a time (newest first) |
+| [[Alt+↓]] | Step back out of the queue editor toward your draft |
+| [[Alt+Backspace]] | Drop the most recently queued message (empty composer, not editing the queue) |
 
 ## Queue behavior
 
-Typing while a turn streams **queues** the message rather than interrupting.
-There are two ways to work with the queue:
+Typing while a turn runs **queues** your message instead of interrupting. Two ways to change the queue:
 
-- **[[↑]] on an empty composer** pulls *every* queued message back into the
-  buffer at once (joined by newlines, cursor at the seam) — destructive on the
-  queue, so re-submit to re-queue.
-- **[[Alt+↑]] / [[Alt+↓]]** step through the queue **one message at a time** to
-  fix a single entry; [[Enter]] re-queues the edited message in place. This
-  works even mid-edit, so you don't have to clear the composer first.
+- **[[↑]] on an empty composer** pulls *every* queued message back into the box at once (one per line). This empties the queue, so send again to re-queue.
+- **[[Alt+↑]] / [[Alt+↓]]** step through the queue **one message at a time**. [[Enter]] puts the edited message back in its place. This works even with text in the composer.
 
-The composer placeholder hints `press ↑ to edit queued — type to queue
-another…` when relevant.
+The composer placeholder shows `press ↑ to edit queued — type to queue another…` when it applies.
 
 ## Thread list ([[Ctrl+J]])
 
@@ -158,9 +131,9 @@ another…` when relevant.
 | [[↑]] / [[↓]] | Move |
 | [[Home]] / [[End]], or [[Shift+↑]] / [[Shift+↓]] | Jump to the top / bottom |
 | [[PgUp]] / [[PgDn]] | Move a page |
-| [[Tab]] / [[S-Tab]] | Cycle the list: all → this folder → Codex & Claude. A list with nothing in it is skipped |
-| [[←]] / [[→]] | Scroll the preview a turn at a time; [[Shift+←]] / [[Shift+→]] go to the first / latest |
-| [[Enter]] | Open. On a Codex or Claude Code session, bring it in and continue it here |
+| [[Tab]] / [[S-Tab]] | Cycle the list: all → this folder → Codex & Claude. Empty lists are skipped |
+| [[←]] / [[→]] | Scroll the preview one turn; [[Shift+←]] / [[Shift+→]] go to the first / latest |
+| [[Enter]] | Open. On a Codex or Claude Code session, import it and continue here |
 | [[Ctrl+R]] | Rename the highlighted thread |
 | [[Ctrl+D]] | Delete it (press twice; any other key cancels) |
 | [[Ctrl+N]] | Start a new thread |
@@ -168,32 +141,54 @@ another…` when relevant.
 
 ## Review pane ([[Ctrl+R]])
 
-When the agent has edited files, [[Ctrl+R]] opens the review pane. Edits are already on disk — the pane is a keep/undo gate.
+When the agent has edited files, [[Ctrl+R]] opens the review pane. The edits are already on disk; the pane lets you keep or undo each one.
 
 | Key | Action |
 |-----|--------|
-| [[j]] / [[k]] or [[↑]] / [[↓]] | Move between hunks |
-| [[h]] / [[l]] or [[Tab]] | Previous / next file |
-| [[y]] / [[Enter]] | Accept the current hunk (keep it) |
-| [[n]] | Reject the current hunk (revert it) |
-| [[Ctrl+D]] / [[Ctrl+U]] or [[PgDn]] / [[PgUp]] | Scroll inside a hunk taller than the viewport |
-| [[Ctrl+A]] | Accept all — keep every change |
-| [[Ctrl+X]] | Reject all — revert every file (two-press to confirm) |
-| [[Esc]] / [[q]] | Close — keeps accepted + undecided hunks, reverts rejected ones |
+| [[↑]] / [[↓]] | Move between hunks |
+| [[←]] / [[→]] or [[S-Tab]] / [[Tab]] | Previous / next file |
+| [[Enter]], [[y]] or [[Ctrl+Y]] | Accept the current hunk (keep it) |
+| [[n]] or [[Ctrl+N]] | Reject the current hunk (revert it) |
+| [[PgDn]] / [[PgUp]] or [[Ctrl+D]] / [[Ctrl+U]] | Scroll inside a hunk taller than the view |
+| [[Ctrl+A]] | Accept all: keep every change |
+| [[Ctrl+X]] | Reject all: revert every file (press twice to confirm) |
+| [[Esc]] / [[Ctrl+R]] | Close: keeps accepted and undecided hunks, reverts rejected ones |
 
-> **[[Esc]] commits, it does not cancel.** Closing keeps every undecided
-> hunk (the edit is already live). The footer says `Esc keep all` /
-> `keep rest` / `apply` so the outcome is never a surprise. To throw away
-> *everything*, use [[Ctrl+X]] (Reject all).
+:::warn
+**[[Esc]] keeps, it does not cancel.** Closing keeps every hunk you didn't decide on (the edit is already live). The footer says `Esc keep all` / `keep rest` / `apply` so you know what will happen. To throw away *everything*, use [[Ctrl+X]].
+:::
+
+## Tool output viewer ([[Ctrl+O]])
+
+| Key | Action |
+|---|---|
+| [[↑]] / [[↓]] (or [[j]] / [[k]]) | Move in the list, or scroll the open output |
+| [[PgUp]] / [[PgDn]], [[Space]] | Scroll a page |
+| [[Enter]] | Open the highlighted output |
+| [[←]] / [[→]] | Previous / next entry |
+| [[/]] or [[Ctrl+F]] | Search; [[n]] / [[N]] next / previous match |
+| [[t]] | Jump to the newest |
+| [[y]] / [[Ctrl+Y]] | Copy |
+| [[Esc]] | Back to the list, or close |
+| [[Ctrl+O]] | Close |
+
+The thinking reader ([[Ctrl+U]]) uses the same keys; [[Ctrl+U]] closes it.
+
+## Code blocks ([[Ctrl+G]])
+
+| Key | Action |
+|---|---|
+| [[1]]–[[9]] | Pick a block |
+| [[Ctrl+E]] / [[e]] | Edit the block before running |
+| [[Ctrl+Y]] / [[y]] | Copy the block |
+| [[Ctrl+G]] | Close |
+
+On the result screen, [[Ctrl+A]] / [[a]] attaches the output to your next message and [[Ctrl+Y]] / [[y]] copies it.
 
 ## Palette-only actions
 
-Some actions have no dedicated key — reach them from the command palette
-([[Ctrl+K]]). Notably **Rewind to checkpoint** opens a diff-preview picker over
-every checkpointed turn (git repo + idle session); see
-[Checkpoints & rewind](/docs/threads#checkpoints). **Fork thread** branches the
-current conversation into a fresh thread that carries near-zero context — the
-parent transcript is read on demand — to escape a full context window; see
-[Forking a Thread](/docs/fork). **Compaction depth** cycles
-how full the context window gets before agentty auto-compacts in the background
-(75/90/95%) — see [Providers & Models](/docs/providers#1m-context-models).
+Some actions have no key. Open them from the command palette ([[Ctrl+K]]):
+
+- **Rewind to checkpoint** opens a picker with a diff preview over every checkpointed turn (git repo, no turn running). See [Checkpoints & rewind](/docs/threads#checkpoints).
+- **Fork thread** starts a fresh thread from the current one with almost no context; the old transcript is read only when needed. Use it when the context window is full. See [Forking a Thread](/docs/fork).
+- **Compaction depth** sets how full the context window gets before agentty compacts it in the background (75/90/95%). See [Providers & Models](/docs/providers#1m-context-models).

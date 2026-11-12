@@ -6,13 +6,24 @@ nav_order: 56
 slug: environment
 ---
 
-Every environment variable agentty reads, grouped by what it affects. Nothing
-here is required: agentty runs with none of them set. Reach for one when you
-need to override a default, debug a problem, or script a headless run.
+This page lists every environment variable agentty reads. Most people never
+set any of them: agentty runs fine with none.
 
-Persistent preferences belong in
-[settings](/docs/configuration) (the config overlay, [[Ctrl+S]]) —
-environment variables are for **per-invocation** overrides and diagnostics.
+Use them for one-off overrides, debugging and scripted runs. For lasting
+preferences, use [settings](/docs/configuration) ([[Ctrl+S]]) instead.
+
+## Commonly used {#common}
+
+| Variable | What it does |
+|----------|--------------|
+| `AGENTTY_HOME` | Moves all agentty state. Default `~/.agentty`. |
+| `AGENTTY_LOG` | Sets how much goes to the log, e.g. `debug` or `warn,wire=trace`. |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ... | Provider API keys. See [Providers & models](#providers--models). |
+| `AGENTTY_OLLAMA_HOST` | Where your Ollama server is. Default `http://localhost:11434`. |
+| `AGENTTY_POOL_IDLE_TTL` | Lower it if answers fail with `h2 socket hangup`. |
+| `AGENTTY_CODEX_CLIENT_VERSION` | Set a newer version if the ChatGPT model list is empty. |
+
+The full list follows, grouped by what each variable affects.
 
 :::tip Debugging something right now?
 Start with [`AGENTTY_LOG`](#diagnostics). In a non-release build everything is
@@ -47,9 +58,9 @@ channel list and line format.
 | `AGENTTY_MAX_SKILLS` | Override the tier-1 skill catalog cap (default 64, clamped to 8–4096). Lower it for small-context models, raise it for large skill libraries. |
 | `AGENTTY_FORCE_EFFORT` | Force a reasoning-effort tier for every turn, overriding what the model's capabilities imply. For A/B-ing effort, not everyday use. |
 | `AGENTTY_CHATGPT_DEVICE_AUTH` | Use the device-code flow for ChatGPT sign-in instead of the loopback browser flow — for headless or remote machines. |
-| `AGENTTY_CODEX_CLIENT_VERSION` | The Codex CLI version agentty reports to ChatGPT (`x.y.z`). The model list shrinks or empties for versions the server considers old; set a newer one if the ChatGPT picker comes back empty before agentty is updated. Anything that isn't plain `x.y.z` is ignored. |
+| `AGENTTY_CODEX_CLIENT_VERSION` | The Codex CLI version agentty reports to ChatGPT, as `x.y.z`. The server sends fewer models (or none) to versions it thinks are old. If the ChatGPT picker is empty, set a newer version. Other formats are ignored. |
 | `AGENTTY_NO_PREWARM` | Skip the TLS/connection prewarm at startup. |
-| `AGENTTY_POOL_IDLE_TTL` | Seconds an idle HTTP/2 connection may be reused (default 90, or 450 under a SOCKS proxy; `0` disables pooling). **Lower this if you see `h2 socket hangup (server accepted request; not replayed automatically)` mid-answer** — that means a proxy/VPN/CDN killed the connection before agentty did. Set it below your network's idle timeout and the pool evicts first, turning a visible failure into an invisible re-dial. `grep http.stream_hangup` in the log shows each hangup's idle age, so the right value is measurable. |
+| `AGENTTY_POOL_IDLE_TTL` | How many seconds an idle HTTP/2 connection may be reused. Default 90, or 450 behind a SOCKS proxy; `0` turns pooling off. **If answers fail with `h2 socket hangup (server accepted request; not replayed automatically)`, lower it.** That error means a proxy, VPN or CDN closed the connection first. Set this below your network's idle timeout and agentty re-dials quietly instead. `grep http.stream_hangup` in the log shows the idle age of each hangup. |
 | `AGENTTY_FORCE_REMOTE` | No effect since 0.9.42: there is no separate remote cadence any more. Still accepted. |
 
 ## Smart Mode
@@ -63,39 +74,32 @@ Off by default and a byte-for-byte no-op when off — see
 | `AGENTTY_SMART_NO_INTERNAL` | Keep engine-internal calls (compaction summary, thread title) on the main model instead of the Utility slot. |
 | `AGENTTY_SMART_NO_SUBAGENTS` · `AGENTTY_SMART_NO_ORCHESTRATE` | Disable subagent delegation / orchestration independently. For bisecting a routing problem. |
 | `AGENTTY_SMART_COMPLEX_THRESHOLD` · `AGENTTY_SMART_DEEP_MARGIN` · `AGENTTY_SMART_BIAS_CLAMP` | Router tuning: complexity cut-off, deep-work margin, and the clamp on learned bias. Defaults are measured; change them only with a benchmark. |
-| `AGENTTY_SMART_ROUTE_MAIN` | `0` stops the main conversation turn from being routed by complexity — every turn runs on the Strategic model and only its *effort* varies. On by default. Before this existed that was the only behaviour: the flagship served every turn, including ones the classifier had already scored trivial. |
+| `AGENTTY_SMART_ROUTE_MAIN` | On by default. `0` stops routing the main turn by complexity: every turn runs on the Strategic model and only its *effort* changes. |
 | `AGENTTY_SMART_MAIN_FLOOR` | The cheapest role the main turn may be routed to: `utility` (default — the full ladder), `implementation` (never cheaper than the mid model), or `strategic` (never route down; equivalent to `AGENTTY_SMART_ROUTE_MAIN=0`). Raise it if simple turns are being answered too thinly. |
 
 ## Context window
 
-agentty learns a model's context window from three places, most specific
-first: **your override**, then what the provider **advertised**, then what the
-**model id** implies. Nothing known falls back to a conservative 200k.
+agentty finds a model's context window in three places, most specific first:
+**your override**, what the provider **advertised**, and what the **model id**
+implies. If none of them knows, it uses 200k.
 
-That middle layer is why most setups need no configuration — the
-`/v1/models` listing is read for `model_info.max_input_tokens` (LiteLLM),
+Most setups need nothing here, because the `/v1/models` listing is read for `model_info.max_input_tokens` (LiteLLM),
 `context_length` and `top_provider.context_length` (OpenRouter),
 `max_model_len` (vLLM), and `n_ctx` (llama.cpp). Where a row advertises both
-a catalog window and the serving endpoint's, the **serving** one wins: it is
-the one that will reject an over-long prompt.
+a catalog window and the serving endpoint's, the **serving** one wins, since it
+is the one that rejects an over-long prompt.
 
-But a gateway is not obliged to say anything — OpenAI's own `/v1/models`
-schema is just `{id, object, created, owned_by}` — so when every layer comes
-up empty the picker shows `auto` and the turn runs on the conservative
-default. For that case:
+Some gateways report no window at all (OpenAI's own `/v1/models` has only
+`{id, object, created, owned_by}`). Then the picker shows `auto` and the turn
+uses the default. For that case:
 
 > | Variable | Effect |
 > |---|---|
 > | `AGENTTY_MAX_CONTEXT_TOKENS` | The window to assume when nothing else knows one. Spelled to mirror Claude Code's `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so it is guessable if you have hit this before. |
 
-It is consulted **last**, after the catalog, the probe and the model id, so it
-only speaks when nothing better did — it is global, and a session that reaches
-several models should not apply one number to all of them.
-
-In practice almost nothing needs it: between the `/v1/models` listing, the
-endpoint probes and models.dev, discovery covers nearly every provider agentty
-ships. What is left is the genuinely unknowable case — a private gateway
-serving an id no catalog has published.
+It is checked **last**, after the catalog, the probe and the model id. It is
+global, so it only applies when nothing better is known. In practice you need
+it only for a private gateway serving a model id no catalog lists.
 
 ## Retrieval (RAG)
 
@@ -132,9 +136,9 @@ by meaning turns on by itself. `agentty diagnostics` shows what is in use.
 | `AGENTTY_MCP_CONFIG` | Path to the MCP server config. Otherwise `~/.agentty` then `./.agentty`. |
 | `AGENTTY_MCP_ALLOW_PROJECT` | Allow a project-local `.agentty/mcp.json` to add servers. Off by default — a repo you clone should not silently gain tool servers. |
 | `AGENTTY_MCP_TIMEOUT_MS` · `AGENTTY_MCP_CONNECT_TIMEOUT_MS` | Per-call and initial-connect timeouts for MCP servers. |
-| `AGENTTY_MCP_TOOL_BUDGET` | Cap on how many tools one request loads (native + plugin). Past it, plugin tools are on demand behind `tool_search`, never hidden. Default: the provider's limit (128 on OpenAI-style providers, none on Anthropic). `0` disables the cap; unparsable values keep the default. |
+| `AGENTTY_MCP_TOOL_BUDGET` | Most tools (built-in plus plugin) one request loads. Past it, plugin tools load on demand through `tool_search`; none are hidden. Default is the provider's limit: 128 on OpenAI-style providers, none on Anthropic. `0` removes the cap; bad values keep the default. |
 | `AGENTTY_MCP_CLIENT_ID` | OAuth client id for MCP servers that require one. |
-| `AGENTTY_SUBAGENT_MAX_SECONDS` | Wall-clock ceiling for one `task` subagent run, default 900 (15 min). Bounds the case the turn cap cannot: a backend that keeps a stream technically alive without finishing it, where the per-stream budget alone allowed hours. On expiry the subagent stops and reports what it has, flagged incomplete. Values outside 1–86399 keep the default. For `agentty run`, `--timeout` overrides it. |
+| `AGENTTY_SUBAGENT_MAX_SECONDS` | Time limit in seconds for one `task` subagent run. Default 900 (15 min); values outside 1–86399 keep the default. It catches a backend that keeps a stream open without finishing. When time runs out, the subagent reports what it has, marked incomplete. For `agentty run`, `--timeout` overrides it. |
 | `AGENTTY_ACP_AGENTS` | Path to the ACP agent config (same precedence chain as MCP). |
 | `AGENTTY_ACP_ALLOW_PROJECT` | Allow a project-local ACP agent config. Off by default, same reasoning as MCP. |
 | `AGENTTY_NO_HOOKS` | Disable all lifecycle hooks for this run. |
@@ -182,46 +186,40 @@ See [Storage](/docs/storage) for every file and how long it stays.
 
 ### Retrieval indexes are per-project
 
-`AGENTTY_RAG_DIR` is the odd one out, because the data is. Retrieval indexes
-are keyed to the tree that produced them — they are meaningless away from it,
-and sharing one between unrelated checkouts would invalidate it constantly —
-so they default to `<project>/.agentty` rather than anywhere under
-`AGENTTY_HOME`. Only `AGENTTY_RAG_DIR` and `AGENTTY_PROJECT_DIR` move them.
+`AGENTTY_RAG_DIR` works differently. A retrieval index belongs to the source
+tree that built it and is useless anywhere else. So indexes live in
+`<project>/.agentty`, not under `AGENTTY_HOME`. Only `AGENTTY_RAG_DIR` and
+`AGENTTY_PROJECT_DIR` move them.
 
-They are also the biggest thing agentty writes per project: on the agentty
-repo itself, 31 MB of code index and 7 MB of docs index. If your code already
-lives on a roomy disk they follow it and there is nothing to do. If it does
-not:
+They are the largest thing agentty writes per project. On the agentty repo
+itself they take 31 MB (code) and 7 MB (docs). If your code is on a roomy
+disk, there is nothing to do. If not:
 
 ```sh
 export AGENTTY_RAG_DIR=/mnt/data/agentty/rag
 ```
 
-With the override set, each project gets its own readable subdirectory
-(`myrepo-04b42962/`) so two checkouts pointed at one location do not fight
-over the same file.
+With this set, each project gets its own subfolder (`myrepo-04b42962/`), so
+two checkouts never share one file.
 
-The "project" is the nearest enclosing directory containing `.git`,
-`.agentty`, `.hg` or `.svn` — **not** the directory you launched from. So
-`cd src/ && agentty` reuses the index at the repo root instead of building a
-second one beside it.
+The "project" is the nearest parent directory that contains `.git`,
+`.agentty`, `.hg` or `.svn`, **not** the directory you started in. So
+`cd src/ && agentty` reuses the index at the repo root.
 
 #### Superseded indexes are reclaimed
 
-The filename carries an identity tag for the embedding backend that built it
-(`rag_code.e45ba1de.ragdb`), so changing backends can never serve vectors
-from an incompatible space. The cost is that the filename set grows every
-time you switch.
+Each index filename includes a tag for the embedding backend that built it
+(`rag_code.e45ba1de.ragdb`). This stops agentty from mixing vectors from
+different backends, but each switch adds a new file.
 
-After a successful index write, agentty deletes superseded variants — keeping
-the live one plus the most recent previous one, so A/B-ing two backends does
-not force a full rebuild each time you switch back. Untagged indexes from
-before the tag existed are removed outright: no current build can read them.
+After writing an index, agentty deletes old variants. It keeps the current
+one and the most recent previous one, so switching back and forth between two
+backends doesn't force a full rebuild. Old untagged indexes are deleted, since
+no current build can read them.
 
-Two deliberate limits. Variants newer than an hour are left alone, since
-another agentty process may be mid-write. And if any file in the directory
-cannot be examined, nothing is deleted at all — being wrong about what is
-present should cost disk, not data.
+Two safety limits: variants less than an hour old are left alone, because
+another agentty process may be writing them. And if any file in the folder
+can't be checked, nothing is deleted.
 
 Details worth knowing:
 
@@ -268,7 +266,6 @@ defaults: **[Configuration → Paste](/docs/configuration#paste)**.
 | `AGENTTY_REVEAL_DECORATE` | The decorative overlay on the revealing tail alone. ANDed with `AGENTTY_REVEAL`; same default and same truthiness rule. |
 | `AGENTTY_NO_REVEAL_GLIDE` | `=1` disables the bounded **end-of-turn glide** (the visible catch-up when a turn finishes) and restores the immediate finish. Not the reveal animation itself — that's `AGENTTY_REVEAL`. The glide needs synchronized-output support; it runs over SSH too. |
 | `AGENTTY_REPLAY_ROWS` | Rows of history redrawn into scrollback on open and resize, overriding Appearance → **Scrollback**. `0` turns the redraw off. |
-| `AGENTTY_NO_TAPE` | `=1` replaces the animated activity tape with a quiet static row carrying the same elapsed / tok-s detail. |
 | `AGENTTY_FROZEN_COLLAPSE` | `=1` opts **in** to collapsing frozen turns. Off by default. |
 | `AGENTTY_NO_TRANSFORMS` | Disable output transforms. |
 

@@ -1,40 +1,50 @@
 ---
 title: The Interface
-description: A tour of the agentty TUI — composer, transcript, status bar, and tool widgets.
+description: A tour of the agentty screen: composer, transcript, status bar and tool widgets.
 nav_section: User Manual
 nav_order: 10
 slug: interface
 ---
 
-agentty renders inline at the bottom of your terminal. It never takes over the screen — your scrollback stays intact, the status bar overlays on top.
+This page explains what you see on the agentty screen and how to change how it looks. agentty draws at the bottom of your terminal and never takes over the whole screen, so your scrollback stays intact. To change colours or layout, press [[Ctrl+K]] → **Appearance** ([below](#appearance)).
 
 ## The transcript
 
-Conversation history flows in your terminal's normal scrollback. Your turns, the assistant's replies, and every tool call render in order. Queued messages appear as preview rows above the composer — visually identical to real user turns.
+Your conversation scrolls in your terminal's normal scrollback: your messages, the assistant's replies and every tool call, in order. Queued messages show as preview rows above the composer and look the same as sent messages.
 
-Inside a git repo, a user turn that pinned a worktree snapshot carries a subtle `· ↺ checkpoint` tag in its meta line — a restore point you can [rewind to](/docs/threads#checkpoints) from the command palette.
+Inside a git repo, a message that saved a worktree snapshot has a small `· ↺ checkpoint` tag in its meta line. That is a restore point you can [rewind to](/docs/threads#checkpoints) from the command palette.
 
 ## The composer
 
-The input box at the bottom. Type and press [[Enter]] to send. [[Alt+Enter]] inserts a newline. [[Ctrl+E]] expands the composer for longer prompts. A `❚ N queued` chip shows how many messages are waiting.
+The input box at the bottom. Type and press [[Enter]] to send.
 
-Type while a turn is streaming and your message **queues** — it lands automatically when the current turn finishes. On an empty composer, press [[↑]] to recall every queued message back into the buffer for editing.
-
-The composer is project-aware: type [[@]] to [mention a file](clip:file-mention), [[#]] to jump to a symbol, and [[/]] (on an empty composer) to open [the slash commands](clip:slash-commands) — the same fuzzy list as [the command palette](clip:command-palette) on [[Ctrl+K]], with entries like *Compact context*, *Switch provider*, and *New thread*. Drop an image file's path, or press [[Ctrl+V]], to attach a PNG, JPEG, GIF, or WebP inline. [[Ctrl+V]] also pastes copied files (small text files as their text, others saved with their path typed in). Over ssh, run `agentty paste setup` once on your laptop, see [Clipboard & Images](/docs/clipboard).
+- [[Shift+Enter]] or [[Alt+Enter]] inserts a newline.
+- [[Ctrl+E]] makes the composer taller for long prompts.
+- If you type while a turn is running, your message is **queued** and sent when the turn ends. A `❚ N queued` chip shows how many are waiting. On an empty composer, [[↑]] brings every queued message back into the box for editing.
+- [[@]] [mentions a file](clip:file-mention), [[#]] picks a symbol, and [[/]] at the start of a line opens [the slash commands](clip:slash-commands). That's the same fuzzy list as [the command palette](clip:command-palette) on [[Ctrl+K]], with entries like *Compact context*, *Switch provider* and *New thread*.
+- To attach a PNG, JPEG, GIF or WebP, drop the image file's path in or press [[Ctrl+V]]. [[Ctrl+V]] also pastes copied files (small text files as their text, others saved and their path typed in). Over ssh, run `agentty paste setup` once on your laptop. See [Clipboard & Images](/docs/clipboard).
 
 ## Run code blocks (Ctrl+G)
 
-When a reply hands you a fenced block of shell commands, don't copy-paste it. [[Ctrl+G]] lists the runnable blocks from the newest reply; [[Enter]] (or a digit) runs one **interactively on your real terminal** — the TUI suspends, so `sudo` password prompts work, output streams live, and [[Ctrl+C]] kills the command (not agentty). When it exits, a result card lets you attach the captured output back to the composer as a collapsed chip ([[a]]), copy it ([[y]]), or discard ([[Esc]]) — so “it failed with X” reaches the model without you re-typing anything. A transient toast surfaces the affordance while the commands are still on screen. It runs the right shell per block on every OS: `sh`/`bash` blocks through `/bin/sh` on Linux/macOS, `powershell`/`cmd` blocks natively on Windows.
+When a reply gives you shell commands in a code block, you don't need to copy them.
+
+1. Press [[Ctrl+G]] to list the runnable blocks in the newest reply.
+2. Press [[Enter]] or the block's number to run it **on your real terminal**. agentty steps aside, so `sudo` password prompts work and output shows live. [[Ctrl+C]] stops the command, not agentty.
+3. When it finishes, a result card lets you attach the output to your next message as a collapsed chip ([[a]]), copy it ([[y]]), or throw it away ([[Esc]]).
+
+A short toast reminds you of [[Ctrl+G]] while commands are on screen. Each block runs in the right shell: `sh`/`bash` blocks through `/bin/sh` on Linux/macOS, `powershell`/`cmd` blocks natively on Windows.
 
 ## Threads & quick-cycle
 
-Every conversation is a saved thread. [[Ctrl+J]] opens the thread list *at the current thread* (marked with a bold `●`), and [[Ctrl+N]] starts a new one. To flip to the adjacent thread without opening the picker, use [[Alt+←/→]] (or [[Ctrl+←/→]] on an empty composer) — [[←]] newer, [[→]] older — with a “thread k/N · title” toast on every hop. Quick-cycle only fires while the session is idle, so a live stream can never be yanked out from under you.
+Every conversation is saved as a thread. [[Ctrl+J]] opens the thread list at the current thread (marked with a bold `●`). [[Ctrl+N]] starts a new one.
 
-When a thread fills the context window, **Fork thread** ([[Ctrl+K]] → palette) branches it into a fresh thread that opens with a **⑃ Forked** card and carries near-zero context — the parent transcript is read on demand. See [Forking a Thread](/docs/fork).
+To switch to the next thread without opening the list, press [[Alt+←/→]] (or [[Ctrl+←/→]] on an empty composer). [[←]] is newer, [[→]] is older. A "thread k/N · title" toast shows where you are. This only works when no turn is running.
+
+When a thread fills the context window, use **Fork thread** from the palette ([[Ctrl+K]]). It opens a fresh thread with a **⑃ Forked** card and almost no context; the old transcript is read only when needed. See [Forking a Thread](/docs/fork).
 
 ## Reading the model picker
 
-[[Ctrl+/]] opens [one list across every provider](clip:model-picker) you're signed into. A row looks like this:
+[[Ctrl+/]] opens [one list across every provider](clip:model-picker) you're signed into. Rows look like this:
 
 ```
 ▎ anthropic   Claude Sonnet 4.6      200k  ★ ✦
@@ -42,68 +52,68 @@ When a thread fills the context window, **Fork thread** ([[Ctrl+K]] → palette)
   ollama      qwen3:4b · chat only   auto
 ```
 
-Left to right: the active-row bar, the provider badge, the model name, then a right-aligned reference column.
+Left to right: the `▎` bar (marks the active row), the provider badge, the model name, and a dim reference column.
 
-The **provider badge** on the left is coloured by the model's *capability tier* — agentty's estimate of what it can be trusted with. The list is ordered strongest-first, so the colour makes that ordering legible instead of leaving it unexplained:
+The **badge colour** shows the model's capability tier, agentty's guess at what it can handle. The list is sorted strongest first.
 
-| Badge | Tier | What it means |
+| Badge | Tier | Meaning |
 |---|---|---|
-| Magenta | Flagship | The provider's top model — long multi-step work, hard reasoning |
-| Blue | Mid | The workhorse: reliable tool use, good for most turns |
-| Cyan | Cheap | Small and fast — fine for text, summaries, titles |
-| Grey | Weak | Tool use is unreliable here; expect it to fumble multi-step work |
+| Magenta | Flagship | The provider's top model: long multi-step work, hard reasoning |
+| Blue | Mid | Reliable tool use, good for most turns |
+| Cyan | Cheap | Small and fast: fine for text, summaries, titles |
+| Grey | Weak | Tool use is unreliable; expect trouble with multi-step work |
 
-The tier is inferred from the model id, because the vendor's own naming *is* the ranking (Haiku < Sonnet < Opus, `gpt-5-mini` < `gpt-5`); local models rank by parameter count. The **active** model's badge wears the brand accent instead of its tier colour — that row's job is to say "you are here".
+The tier comes from the model id (Haiku < Sonnet < Opus, `gpt-5-mini` < `gpt-5`). Local models rank by parameter count. The **active** model's badge uses the brand accent colour instead of its tier colour.
 
-Colour is never the only signal. The `▎` edge bar in column zero marks the active row, position carries the same ranking the hue does, and everything disqualifying is spelled out in words: a model that can't call tools gets **`· chat only`** appended to its *name*, not a glyph in the dim reference column, because a warning painted as reference data reads as decoration.
+Colour is never the only signal. A model that can't call tools gets **`· chat only`** added to its name.
 
-The right-hand column is reference data, dimmed on purpose: the context window, then two fixed slots — **★** favourite ([[Ctrl+F]]) and **✦** reasoning-capable. The slots are fixed so a row without a favourite leaves a hole instead of sliding its ✦ left, which is what made the list look jittery while scrolling.
+The reference column shows the context window, then two fixed slots: **★** favourite ([[Ctrl+F]]) and **✦** reasoning-capable. The slots stay in place so rows line up.
 
-`auto` in the context column means no catalog or probe could tell agentty the model's window, so it falls back to a default. It's rare — the window resolves automatically from what the gateway advertises, what it answers to a probe, and models.dev, which between them cover almost every provider agentty ships. What's left is a private gateway serving an id no catalog has heard of; set [`AGENTTY_MAX_CONTEXT_TOKENS`](/docs/environment) for that.
+`auto` in the context column means agentty couldn't find the model's window size and uses a default. This is rare: the size usually comes from the gateway, a probe, or models.dev. If you run a private gateway with an unknown model id, set [`AGENTTY_MAX_CONTEXT_TOKENS`](/docs/environment).
 
 ## Reading the provider picker
 
-[[Ctrl+P]] [lists backends](clip:provider-picker) rather than models, so its trailing chip is an auth status — it answers "can I use this row right now?":
+[[Ctrl+P]] [lists backends](clip:provider-picker), not models. Each row ends with a chip that tells you whether you can use it right now:
 
 | Chip | Meaning |
 |---|---|
-| ✓ green | Signed in. On the active row it reads `✓ signed in · accounts`, and [[Enter]] drills into the accounts for that provider rather than switching |
-| ✓ grey | Signed in, but not the provider you're on — [[Enter]] switches to it |
-| ● blue | Usable with no login: a local server, an external ACP agent, or a key agentty found in your environment (`● key from OPENAI_API_KEY`) |
-| ⚠ amber | Needs action — `⚠ sign in`, or the name of the env var to set |
+| ✓ green | Signed in. On the active row it reads `✓ signed in · accounts`, and [[Enter]] opens that provider's accounts instead of switching |
+| ✓ grey | Signed in, but not the current provider. [[Enter]] switches to it |
+| ● blue | Works without login: a local server, an external ACP agent, or a key found in your environment (`● key from OPENAI_API_KEY`) |
+| ⚠ amber | Needs action: `⚠ sign in`, or the name of the env var to set |
 | ✗ amber | [[Ctrl+D]] is armed; press again to sign out or remove |
 
-A key you **pasted** says `key saved` and [[Ctrl+D]] removes it. A key from the environment says `key from VAR` and [[Ctrl+D]] leaves it alone, because agentty can't unset a variable in your shell — the chip has to say which kind you have, or the remove key looks broken.
+A key you **pasted** shows `key saved`, and [[Ctrl+D]] removes it. A key from the environment shows `key from VAR`, and [[Ctrl+D]] leaves it alone, because agentty can't unset a variable in your shell.
 
-The footer is contextual rather than a fixed legend: type something endpoint-shaped and it tells you what [[Enter]] will connect to; type something that matches no provider and it points at the `host:port` path, at the moment the list looks empty.
+The footer changes with what you type. Type something that looks like an endpoint and it tells you what [[Enter]] will connect to. Type something that matches no provider and it points you to the `host:port` path.
 
 ## The status bar
 
-A single row at the bottom edge shows the active profile, provider, and model, plus the current phase. When something needs your attention — a transient retry, an error — it swaps in a banner-style notification (`▎⚠ <text>` for errors, `▎ <text>` for info) and reverts to the keybindings strip when the toast expires. Switch provider with [[Ctrl+P]] and model with [[Ctrl+/]] without leaving the thread.
+One row at the bottom shows the permission profile, provider, model and current phase. When something needs your attention (a retry, an error) it briefly shows a message instead (`▎⚠ <text>` for errors, `▎ <text>` for info), then goes back to the key hints. Switch provider with [[Ctrl+P]] and model with [[Ctrl+/]] without leaving the thread.
 
 ## Tool widgets
 
-Each tool gets a purpose-built widget — agentty doesn't just print raw JSON:
+Each tool has its own display instead of raw JSON:
 
-- **Diffs render as diffs** — additions and deletions color-coded, with a **real line-number gutter** parsed from the diff's `@@` hunk headers. An `edit`'s rows carry the same source line numbers you'd see in the file, so you can cross-reference a change without opening it. The numbers are shown only where they're provably correct (they blank out across an elided gap and resume at the next hunk).
-- **Search results group by file**, each match on its own row with a right-aligned line number — a `grep` card reads as a table, not a wall of text. The line numbers are the file's true positions, derived from the match blocks.
-- **File reads keep true line numbers** — a `read` with an `offset`, a `start_line`, or a `symbol=` starts its gutter at the real line the slice begins on, not at 1, and the tool's own footer/header decorations are stripped from the numbered body. The card header names the symbol you read (`file.cpp · foo()`).
-- **Terminal output stays terminal-shaped** — `bash`, `test`, `diagnostics`, and the `process_start`/`poll`/`stop` trio share a tail-anchored view that surfaces the newest lines, shows **exit codes**, and lifts a one-line verdict out of test-runner summaries and compiler diagnostics when it can.
-- **todos become checklists** you can watch tick off; [[Ctrl+T]] opens [the whole plan](clip:todo-plan).
-- **Head-heavy tools show their head** — `repo_map`, `outline`, `list_dir`, and the search tools front-load their answer, so their preview shows the top of the output instead of the pagination footer.
+- **Diffs** are colour-coded, with line numbers taken from the diff's `@@` headers, so they match the file. Numbers are blank across a skipped gap and resume at the next hunk.
+- **Search results** are grouped by file, one match per row, with the file's real line number on the right.
+- **File reads** keep real line numbers. A `read` with an `offset`, `start_line` or `symbol=` starts counting at the line the slice starts on. The header names the symbol you read (`file.cpp · foo()`).
+- **Terminal output** (`bash`, `test`, `diagnostics`, and `process_start`/`poll`/`stop`) shows the newest lines and the **exit code**, and pulls out a one-line result from test and compiler summaries when it can.
+- **Todos** show as a checklist that ticks off as work gets done. [[Ctrl+T]] opens [the whole plan](clip:todo-plan).
+- **Tools that answer up front** (`repo_map`, `outline`, `list_dir`, the search tools) preview the top of their output, not the footer.
 
 ## Smooth streaming
 
-Text is revealed at a steady pace, smoothing out the bursts a server sends, so a reply that arrives in big chunks still types out evenly. When a turn ends, any text still waiting glides out over a moment instead of appearing all at once. This works over SSH too. Where the terminal supports it, frames are wrapped in DEC 2026 begin/end-sync to avoid tearing. Set **Motion** to *off* to turn the animation off.
+Text is shown at a steady pace, so a reply that arrives in big chunks still types out evenly. When a turn ends, any leftover text slides out over a moment. This works over SSH too. Where the terminal supports it, frames use DEC 2026 synchronized output to avoid tearing. Set **Motion** to *off* to turn the animation off.
 
 ## Appearance
 
-[[Ctrl+K]] → **Appearance** opens a form with fifteen look-and-feel knobs. Changes apply immediately — there is no apply step — and persist to your user config, not the project's, because a light terminal is a property of your eyes rather than of the repo you happen to be in.
+[[Ctrl+K]] → **Appearance** opens a form with fifteen settings. Changes apply right away and are saved to your user config (not the project's), since things like a light terminal are about you, not the repo.
 
 | Setting | Options |
 |---|---|
 | Language | the interface language |
-| Scheme | `native` + 615 built-ins, via a fuzzy browser |
+| Scheme | `native` + 615 built-ins, in a fuzzy browser |
 | Colors | auto / truecolor / 256 / 16 / mono |
 | Background | auto / dark / light |
 | Density | compact / normal / roomy |
@@ -118,15 +128,15 @@ Text is revealed at a steady pace, smoothing out the bursts a server sends, so a
 | Thinking | shown / collapsed / hidden |
 | Timestamps | off / relative / absolute |
 
-`auto` on Colors and Background shows what was actually detected, so you can see whether the guess was right before overriding it.
+When Colors or Background is `auto`, the form shows what was detected, so you can check it before overriding.
 
-The theme browser previews live: arrowing through the list restyles the transcript under you, [[Enter]] keeps it, [[Esc]] puts back the one you opened on. Typing filters by fuzzy subsequence — `gvd` finds Gruvbox Dark.
+The theme browser previews live: moving through the list restyles the transcript, [[Enter]] keeps the theme, [[Esc]] goes back to the one you started with. Typing filters by fuzzy match: `gvd` finds Gruvbox Dark.
 
-Colour changes repaint; **layout** changes (density, prose width, compact turns) apply to new output only. Rows already committed to your scrollback are the terminal's, not ours — rewriting them would tear the canvas.
+Colour changes repaint everything. **Layout** changes (density, prose width, compact turns) only apply to new output, because rows already in your scrollback belong to the terminal.
 
 ### Scrollback
 
-When you open a thread or resize the window, agentty redraws the conversation into your terminal's scrollback so you can scroll back through it. For a long thread that redraw is the biggest cost in time and memory, and anything past the terminal's own scrollback limit is thrown away anyway. **Scrollback** decides how much is redrawn:
+When you open a thread or resize the window, agentty redraws the conversation into your terminal's scrollback so you can scroll up through it. For a long thread this redraw costs the most time and memory, and anything past your terminal's scrollback limit is thrown away anyway. **Scrollback** sets how much is redrawn:
 
 | Level | Rows |
 |---|---|
@@ -136,14 +146,10 @@ When you open a thread or resize the window, agentty redraws the conversation in
 | big | about 20,000 |
 | full | the whole thread |
 
-*auto* reads your terminal's scrollback setting: tmux's `history-limit`, zellij, GNU screen, kitty, WezTerm, Alacritty, foot, Ghostty, Konsole, xfce4-terminal, GNOME Terminal, Windows Terminal, the Windows console, iTerm2, Terminal.app and VS Code. When the setting isn't in the config, it uses that terminal's default. A terminal it can't identify gets 5,000 rows. None of this slows startup: the config is read in the background. `AGENTTY_REPLAY_ROWS` overrides every level (`0` turns the redraw off).
+*auto* reads your terminal's scrollback setting: tmux's `history-limit`, zellij, GNU screen, kitty, WezTerm, Alacritty, foot, Ghostty, Konsole, xfce4-terminal, GNOME Terminal, Windows Terminal, the Windows console, iTerm2, Terminal.app and VS Code. If the setting isn't in the config, it uses that terminal's default. An unknown terminal gets 5,000 rows. The config is read in the background, so startup isn't slowed. `AGENTTY_REPLAY_ROWS` overrides every level (`0` turns the redraw off).
 
 ### Why `native` is the default
 
-Every named scheme is a guess about your terminal. `native` is the absence of a guess: it emits only your terminal's own foreground and background plus the 16 ANSI colours **you** configured, and never a hardcoded RGB value.
+`native` uses only your terminal's own foreground, background and the 16 ANSI colours **you** set up. It never uses a fixed RGB value. So it looks right on light, dark, 16-colour and monochrome terminals, and your own palette (Catppuccin, Gruvbox, your own) shows through.
 
-That makes it the one choice that is correct on a light terminal, a dark terminal, a 16-colour terminal and a monochrome one simultaneously — and it means a carefully-tuned palette (Catppuccin, Gruvbox, your own) shows through instead of being painted over.
-
-The trade is that agentty cannot *read* those 16 colours — the terminal owns them and does not report them — so a few effects that need to know a colour's brightness degrade rather than guess. Filled elements use reverse video, letting the terminal pair its own foreground and background, and blends that cannot be computed become no blend at all rather than a wrong one.
-
-If you would rather agentty pick a complete palette, the browser has 615 of them.
+The catch: agentty can't read those 16 colours, so a few effects that need to know a colour's brightness are simpler. Filled elements use reverse video, and blends it can't compute are left out. If you'd rather agentty use a full palette, pick one of the 615 in the browser.

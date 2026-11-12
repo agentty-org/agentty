@@ -72,7 +72,7 @@ cards. It's persisted to `settings.json`, single-provider, and a
 single-model / Opus-only account degrades to a no-op per layer. See
 [Smart Mode](/docs/smart-mode), [Roles & Routing](/docs/smart-mode-routing),
 [Orchestration](/docs/smart-mode-orchestration),
-[Learning](/docs/smart-mode-learning), and the
+[Learning](/docs/smart-mode-reference), and the
 [Reference](/docs/smart-mode-reference).
 
 ## One RAG decision, not a wall of toggles

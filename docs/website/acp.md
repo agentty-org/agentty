@@ -6,7 +6,9 @@ nav_order: 20
 slug: acp
 ---
 
-agentty speaks the [Agent Client Protocol](https://agentclientprotocol.com) — the same protocol Zed and JetBrains use to drive Claude Code, Codex and Gemini. Point your editor at the `agentty acp` subcommand and your terminal agent becomes a first-class agent panel inside it: streaming responses, inline diffs for every edit, and native permission prompts before any file write or shell command.
+This page shows how to run agentty inside Zed or a JetBrains IDE. Most people only need the Zed setting below: point the editor at the `agentty acp` subcommand.
+
+agentty speaks the [Agent Client Protocol](https://agentclientprotocol.com), the same protocol these editors use for Claude Code, Codex and Gemini. You get an agent panel with streaming replies, inline diffs for every edit, and the editor's own permission prompts before any file write or shell command.
 
 ## Set up in Zed
 
@@ -23,7 +25,13 @@ Add this to Zed's `settings.json` (`zed: open settings`):
 }
 ```
 
-Then open the agent panel (`cmd-?` / `ctrl-?`), pick **agentty** from the agent list, and prompt. Auth is whatever `agentty login` already set up — the ACP process reads the same `~/.agentty/credentials/credentials.json`, so there's nothing extra to configure.
+Then:
+
+1. Open the agent panel (`cmd-?` / `ctrl-?`).
+2. Pick **agentty** from the agent list.
+3. Type a prompt.
+
+There is nothing else to configure. The ACP process uses the login from `agentty login`, stored in `~/.agentty/credentials/credentials.json`.
 
 ## Set up in a JetBrains IDE
 
@@ -156,34 +164,9 @@ detail (option ids, values, ambient config) is in
 The ACP agent is the *same* engine as the TUI — same provider, same tools, same wire-message shaping, same permission policy — just driven over JSON-RPC on stdio instead of a terminal. Any other ACP client (not just Zed) works the same way.
 :::
 
-## The protocol surface
-
-`agentty acp` speaks newline-delimited JSON-RPC 2.0 over stdio and implements
-ACP v1 as of 1.11:
-
-- **methods:** `initialize`, `authenticate`, `logout`, `session/new`, `load`, `resume`, `fork`, `list`, `close`, `delete`, `set_mode`, `set_config_option`, `prompt`, `cancel`, and `$/cancel_request`
-- **updates:** `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` (replay), `tool_call`, `tool_call_update`, `plan`, `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `usage_update`, `notice`, `compaction_update`, `compaction_summary_chunk`
-- **calls to the editor:** `session/request_permission`, `elicitation/create`, `fs/read_text_file`, `fs/write_text_file`, `terminal/*` when the editor offers them; notifications `elicitation/complete` and `$/cancel_request`
-
-Notices, compaction entries and toggle options are only sent when the editor
-advertises them in `clientCapabilities.session`; live terminals only when it
-advertises `_meta.terminal_output` (Zed) or `terminal_output_delta`; MCP
-elicitations only when it advertises `elicitation.form` (or `elicitation.url`
-for links); AIR extras only when it declares `_meta.jetbrains.air` (patches
-only with `diffPatch`). Diagnostics go to stderr;
-stdout is only the protocol.
-
-`tests/acp/run_acp_client.sh` drives the real binary the way Zed and JetBrains
-do and checks every message against the official ACP v1 schema
-(`tests/acp/schema/v1`). It runs in ctest as `acp_client_test`.
-
-:::tip
-Run `agentty acp` by hand and it sits waiting for newline-delimited JSON-RPC on stdin (diagnostics go to stderr; stdout is the protocol channel). The repo ships two reference clients: `scripts/acp_smoke.py` drives a full initialize → prompt → tool → permission round-trip, and `scripts/acp_methods_test.py` exercises the rest of the v1 method surface (modes, list/resume/close/delete, logout) offline. The wire protocol itself lives in the `acp-cpp` submodule — agentty no longer hand-rolls JSON-RPC.
-:::
-
 ## Loosen the workspace or sandbox
 
-The same `--workspace` and `--sandbox` switches the TUI accepts apply in ACP mode (they run before the agent starts), so you can loosen or disable both from the Zed `args`:
+ACP mode accepts the same `--workspace` (`-w`) and `--sandbox` flags as the TUI. Add them to `args` to widen or turn off both:
 
 ```json
 {
@@ -196,7 +179,7 @@ The same `--workspace` and `--sandbox` switches the TUI accepts apply in ACP mod
 }
 ```
 
-## agentty-in-Zed on an air-gapped remote
+## agentty-in-Zed on an air-gapped remote {#airgap}
 
 Yes — you can run agentty inside Zed against a server with **zero internet access**. Your laptop relays every byte; nothing runs on the remote besides the agent and your shell session. `agentty airgap <host> --acp` generates the whole Zed config for you, so there's no hand-assembled `ssh -N -R` tunnel or `env` block to maintain.
 
@@ -274,5 +257,33 @@ That's it. Zed spawns `ssh` directly — a single process is the tunnel, the age
 - **The remote needs a non-default ssh port / key / jump host** — export `AGENTTY_AIRGAP_SSH="-p 2222 -i ~/.ssh/work -J bastion"` before running `agentty airgap … --acp`. Those flags get embedded into the printed config.
 
 :::tip
-Want to confirm the tunnel works before touching Zed? `agentty airgap user@remote` (no `--acp`) launches the agentty *TUI* running on the remote, in your local terminal. If that works, the ACP version will too — same tunnel, different transport.
+Want to confirm the tunnel works before touching Zed? `agentty airgap user@remote` (no `--acp`) launches the agentty *TUI* running on the remote, in your local terminal. If that works, the ACP version will too: same tunnel, different transport.
 :::
+
+## The protocol surface
+
+`agentty acp` speaks newline-delimited JSON-RPC 2.0 over stdio. It implements ACP v1 as of 1.11. Stdout carries only the protocol; diagnostics go to stderr.
+
+| Kind | Names |
+|---|---|
+| Methods | `initialize`, `authenticate`, `logout`, `session/new`, `load`, `resume`, `fork`, `list`, `close`, `delete`, `set_mode`, `set_config_option`, `prompt`, `cancel`, `$/cancel_request` |
+| Updates | `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` (replay), `tool_call`, `tool_call_update`, `plan`, `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `usage_update`, `notice`, `compaction_update`, `compaction_summary_chunk` |
+| Calls to the editor | `session/request_permission`, `elicitation/create`, `fs/read_text_file`, `fs/write_text_file`, `terminal/*` (when offered); notifications `elicitation/complete` and `$/cancel_request` |
+
+Some output is sent only when the editor asks for it:
+
+| Feature | Required client capability |
+|---|---|
+| Notices, compaction entries, toggle options | listed in `clientCapabilities.session` |
+| Live terminals | `_meta.terminal_output` (Zed) or `terminal_output_delta` |
+| MCP elicitation forms / links | `elicitation.form` / `elicitation.url` |
+| AIR extras | `_meta.jetbrains.air` (patches only with `diffPatch`) |
+
+### Testing a client
+
+- Run `agentty acp` by hand. It waits for JSON-RPC on stdin.
+- `scripts/acp_smoke.py` drives a full initialize → prompt → tool → permission round-trip.
+- `scripts/acp_methods_test.py` covers the rest of the v1 methods (modes, list/resume/close/delete, logout) offline.
+- `tests/acp/run_acp_client.sh` drives the real binary like Zed and JetBrains do, and checks every message against the ACP v1 schema in `tests/acp/schema/v1`. It runs in ctest as `acp_client_test`.
+
+The JSON-RPC layer comes from the `acp-cpp` submodule.

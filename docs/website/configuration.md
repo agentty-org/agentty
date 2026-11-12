@@ -6,7 +6,25 @@ nav_order: 50
 slug: configuration
 ---
 
-agentty is configured through flags, environment variables, and two on-disk paths. There is no sprawling config file to learn.
+This page lists the settings agentty reads: the settings file, environment variables, folders, and the guidance files (CLAUDE.md, AGENTS.md) it adds to the prompt. Most people never edit a file by hand; the in-app pickers save your choices for you.
+
+## Settings file
+
+Your settings live in `~/.agentty/settings.json` (under `$AGENTTY_HOME` if you set it). agentty writes it whenever you change something in the app, so the next launch picks up where you left off. The settings people change most, and where to change them:
+
+| Setting | Change it with |
+|---|---|
+| Provider and model (`--provider`, `-m`/`--model`) | [[Ctrl+P]] / [[Ctrl+/]] |
+| Reasoning effort, favourite models | the model picker ([[Ctrl+/]]) |
+| Permission profile | [[S-Tab]] |
+| Compaction depth | [[Ctrl+K]] → *Compaction depth* (see [Providers](/docs/providers#1m-context-models) for when to raise it on a 1M-context model) |
+| Appearance (theme, colours, density…) | [[Ctrl+K]] → **Appearance** ([details](/docs/interface#appearance)) |
+| Smart Mode toggles | [[Ctrl+S]] |
+| Web search (`"web_search"`) | [[Ctrl+K]] → Settings → Web Search ([below](#web-search)) |
+| Paste (`"paste"`) | Settings → Paste, or `agentty paste config` ([below](#paste)) |
+| Automatic thread names (`"auto_title"`) | Settings → **Chat names** |
+
+To use a different project folder without `cd`, see [Choosing a workspace](#choosing-a-workspace).
 
 ## Environment variables
 
@@ -36,7 +54,7 @@ variable agentty reads, grouped by subsystem — see
 | `AGENTTY_EMBED_MODEL / AGENTTY_OLLAMA_HOST` | Embedding model + Ollama host (`host:port`, default `127.0.0.1:11434`) for the meaning half of hybrid search. On Auto the model is `qwen3-embedding:0.6b` when pulled, else `nomic-embed-text`. No reachable embedder → search stays keyword-only (BM25) and says so in its result header. |
 | `AGENTTY_RAG_SKILLS / AGENTTY_RAG_MEMORY` | Fold installed skills / learned memory into the search_docs corpus. **On by default**; set `=0` to disable. |
 | `AGENTTY_RAG_MCP` | Fold connected MCP `resources/*` into the search_docs corpus. Off unless truthy **and** an MCP config is present. |
-| `AGENTTY_RAG_DENSE_WEIGHT / AGENTTY_RAG_BM25_WEIGHT` | Fusion weights for the dense (embedding) vs lexical (BM25) lists. Default `1.0` each. Fusion is **convex (TM2C2)** — it preserves score magnitude and, per rag-cpp's benchmarks, beats RRF on NDCG. |
+| `AGENTTY_RAG_DENSE_WEIGHT / AGENTTY_RAG_BM25_WEIGHT` | Fusion weights for the dense (embedding) vs lexical (BM25) lists. Default `1.0` each. Fusion is convex (TM2C2), which keeps score magnitude. |
 | `AGENTTY_RAG_CONTEXTUAL` | Anthropic **Contextual Retrieval**: situate each chunk in its document before indexing so a fragment that lost its heading still ranks. **On by default** (deterministic extractive fallback — no model, index-time cost only); `=0` disables. |
 | `AGENTTY_RAG_PRF` | Pseudo-relevance-feedback (RM3-lite) query expansion: harvest the most discriminative terms from the top BM25 hits and fuse a second, down-weighted probe. **On by default** (deterministic, sub-ms); `=0` disables. |
 | `AGENTTY_RAG_MMR / AGENTTY_RAG_MMR_LAMBDA` | MMR diversification: drop near-duplicate passages so the model sees distinct information. **On by default**; `_LAMBDA` trades relevance vs diversity (default `0.5`); `AGENTTY_RAG_MMR=0` disables. |
@@ -55,7 +73,6 @@ variable agentty reads, grouped by subsystem — see
 | `AGENTTY_RAG_LEARN` | The **learning loop**: fold each passage's Beta-smoothed win-rate (`.agentty/rag_feedback.tsv`) back into ranking as a bounded (±15%) nudge, so passages that repeatedly prove useful **in this workspace** edge ahead of near-tied ones. A `read` of a path retrieval just surfaced counts as a win; unseen paths are untouched (neutral). **Off by default**; `=1` enables (delete the TSV to forget). |
 | `AGENTTY_RAG_TRACE` | Fold rag-cpp's per-stage trace into the retrieval `mode` string shown on the tool card. **On by default**; `=0` gives a one-line header. |
 | `AGENTTY_RAG_PROACTIVE / AGENTTY_RAG_PROACTIVE_MIN` | Pre-turn auto-retrieval that injects a `<retrieved-context>` block when a query looks knowledge-shaped. **Off by default** (explicit opt-in — the `search_docs` tool is usually more economical); `=1` enables for the session, or turn it on persistently in `/settings` → *Proactive retrieval (RAG)*. `_MIN` is the CRAG-calibrated confidence bar to inject (default `0.35`). |
-| `AGENTTY_RAG_PROACTIVE_BUDGET_MS` | Fast-path **hedge** for the proactive pre-turn retrieval. The submit thread waits at most this long for the funnel; if it lands, grounding is injected inline with zero added latency. If it overruns the submit thread never blocks — the turn enters its normal streaming state (status shows *retrieving context…*, the UI never feels hung) and the stream launch is HELD behind a background retrieval that injects the block **same-turn** the moment it lands. Grounding is always for the question just asked; it is never dropped or deferred to a later turn. Default `250`; `0` skips the inline hedge. |
 | `BM25_USE_STEMMER / BM25_HEADING_BOOST` | Lexical tuning. Porter stemming ("run/runs/running" match) is **on by default**; set `BM25_USE_STEMMER=0` to disable (e.g. a code-symbol corpus). `BM25_HEADING_BOOST` (default 3) is how many times a chunk's heading breadcrumb is folded into its BM25 tokens — heading matches out-score body matches; 1 disables the boost. |
 | `AGENTTY_LOG` | **The** diagnostic knob — one log, every subsystem. RUST_LOG-style filter: `trace`, `debug`, `wire=trace`, `warn,auth=debug`, `off`. Channels: `wire` (raw request/response bytes, untruncated, tagged by dialect), `auth`, `persist`, `tool`, `ui`, `rag`, `mcp`, `acp`, `smart`, `net`, `general`. **Release builds keep warnings + errors by default** (~2 lines per healthy session), so `agentty diagnostics` produces a useful bug report with no setup; non-release builds capture everything. When a model "ignores tools", sends empty tool arguments, or a turn fails in a way that looks like model quality, `AGENTTY_LOG=wire=trace` shows the actual bytes instead of leaving you to guess. The file holds your conversation (prompts, file contents, tool results); request headers are not logged, so API keys stay out of it. See **[Logging & diagnostics](/docs/logging)**. |
 | `AGENTTY_LOG_BODIES` | Include payloads (wire bodies, tool args) in the log. Off by default; these carry user data. The log destination is the `--log-file` flag, not a variable. |
@@ -69,7 +86,7 @@ variable agentty reads, grouped by subsystem — see
 
 ### Smart Mode tuning
 
-The Smart Mode *feature* toggles (which layers run) live in the `Ctrl+S` overlay and persist to `settings.json`. These are the numeric **policy** knobs below that — advanced tuning, read at point of use and clamped to a safe range (unset ⇒ the shipped default). Only genuine policy is exposed; the signature hash space, storage compaction thresholds, and individual classifier feature weights are deliberately fixed (changing them corrupts stored learning or breaks invariants).
+Which Smart Mode features run is set in the [[Ctrl+S]] overlay and saved to `settings.json`. The variables below are advanced number knobs. Each is clamped to a safe range, and unset means the default. Other internals (hash space, storage thresholds, classifier weights) are fixed on purpose, because changing them would break stored learning.
 
 | Variable | Meaning |
 |----------|---------|
@@ -244,7 +261,7 @@ AGENTS.md is the cross-tool public standard (works with Codex, Cursor, Jules, Ai
 
 ## Persisted settings
 
-`--provider`, `-m`/`--model`, the reasoning effort tier, favourited models, your permission profile, and your compaction depth are written to `~/.agentty/settings.json` whenever you change them in-app — so the next launch resumes exactly where you left off. There is nothing to hand-edit; the picker (`^P` / `^/`) and `S-Tab` manage it. Compaction depth is set from the command palette's *Compaction depth* entry — see [Providers](/docs/providers#1m-context-models) for why you'd raise it on a 1M-context model.
+`--provider`, `-m`/`--model`, the reasoning effort tier, favourited models, your permission profile and your compaction depth are written to `~/.agentty/settings.json` whenever you change them in the app. You don't need to edit the file: the pickers ([[Ctrl+P]] / [[Ctrl+/]]) and [[S-Tab]] manage it. See [Settings file](#settings-file) for the full list of where each is changed.
 
 ## Choosing a workspace
 

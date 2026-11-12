@@ -6,13 +6,12 @@ nav_order: 90
 slug: rust-critique
 ---
 
-Companion to [Why modern C++ (not Rust)](/docs/why-not-rust). That page is the
-case *for* staying. This one is honest opposition research: the places a Rust
-user can correctly say *"the borrow checker / `Send`+`Sync` / `Mutex<T>` would
-not have let you do that."* Listing them is what makes the "don't move"
-position **earned** rather than asserted. Every item is either a real bug we
-fixed or a place we consciously trade a Rust guarantee for something and say
-so out loud.
+Companion to [Why modern C++ (not Rust)](/docs/why-not-rust). That page makes
+the case *for* staying. This one lists the places a Rust user can rightly say
+*"the borrow checker / `Send`+`Sync` / `Mutex<T>` would not have let you do
+that."* Listing them is what **earns** the "don't move" position. Each item is
+either a real bug we fixed or a Rust guarantee we knowingly trade away, said
+openly.
 
 ## Scorecard
 
@@ -33,13 +32,13 @@ The findings, ranked, after the work:
 `Session::model`/`profile`/`cwd` were guarded by neither the session-map mutex
 nor the per-session thread mutex. `find_session()` releases the map lock before
 returning, so a `session/set_config_option` writing `model` mid-turn raced the
-streaming worker reading it — a torn `std::string` read, i.e. UB. **This is the
-Rust thesis in one bug:** a lock-by-convention scheme covered `messages` but
-silently missed three fields, and the compiler said nothing.
+streaming worker reading it: a torn `std::string` read, which is UB. **This is
+the Rust thesis in one bug:** locking by convention covered `messages` but
+missed three fields, and the compiler said nothing.
 
-Fixed by locking the write sites and snapshotting `model`/`profile` once under
-the lock at turn start (a mid-turn change applies next turn). Fixed *the way
-the argument demands* — with a lock a reviewer can see.
+The fix locks the write sites and snapshots `model`/`profile` once under the
+lock at turn start (a mid-turn change applies next turn). The lock is one a
+reviewer can see.
 
 ## 2 & 3. The two structural gaps (now beat Rust)
 
@@ -49,19 +48,19 @@ captureless body that can't take a second lock or leak a reference into a
 session. The turn loop works on snapshots and writes results back by id, so
 no lock is held across a stream or a tool run.
 
-**Detached worker threads** meant an escaping exception → `std::terminate` →
-every session dies. Now both spawn sites go through a primitive whose body
-makes `std::terminate` structurally unreachable, and the owned variant joins on
-destruction (structured concurrency). You can't forget the isolation because
-the spawn primitive owns it.
+**Detached worker threads** meant one escaping exception called
+`std::terminate` and killed every session. Now both spawn sites use a
+primitive whose body makes `std::terminate` unreachable, and the owned variant
+joins on destruction (structured concurrency). The isolation can't be
+forgotten because the spawn primitive owns it.
 
 ## 4. The footgun (hardened)
 
 `run_tools` holds a `Message&` into the messages vector across the whole tool
-loop — safe only because "the worker never appends here." Rust's borrow checker
-would enforce that at compile time; we can't, so we made it **loud**: the code
-captures the vector's storage identity up front and `std::abort`s with a marker
-if it ever reallocates. Silent use-after-realloc → immediate, debuggable abort.
+loop. That is safe only because "the worker never appends here." Rust would
+enforce that at compile time. We can't, so we made it **loud**: the code
+records the vector's storage address up front and `std::abort`s with a marker
+if it reallocates. A silent use-after-realloc becomes an immediate abort.
 
 ## 5–7. Washes and non-issues
 
@@ -74,7 +73,7 @@ application logic.
 ## Bottom line
 
 Every finding a Rust advocate can raise is now closed. The one real bug is
-fixed; the aliasing footgun is a loud abort; and the two structural gaps have
-been closed with C++ primitives that **exceed** what stock Rust offers. On the
-exact axes people move to Rust for, agentty now demonstrably does more — with
-the proofs in the headers and a green, zero-warning build as the receipt.
+fixed, the aliasing footgun is a loud abort, and the two structural gaps are
+closed with C++ primitives that **exceed** stock Rust. On the axes people move
+to Rust for, agentty does more, with the proofs in the headers and a green,
+zero-warning build as evidence.
