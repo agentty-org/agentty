@@ -1428,7 +1428,6 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             }
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
-                auto& amsg = m.d.current.messages.back();
                 // A tool call ends the thinking phase too (reasoning→tool
                 // turns) — seal before the tool's own timer starts. Same
                 // accumulate-and-close as the answer path: a turn that

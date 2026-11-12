@@ -100,11 +100,6 @@ namespace {
     return body;
 }
 
-// Resolve the user's home directory portably — shared wire::home_dir.
-[[nodiscard]] std::filesystem::path home_dir() noexcept {
-    return wire::home_dir();
-}
-
 // CLAUDE.md memory hierarchy, same paths as Claude Code (see
 // wire::resolve_user_claude_md):
 //

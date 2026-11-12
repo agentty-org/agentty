@@ -47,6 +47,7 @@ channel list and line format.
 | `AGENTTY_MAX_SKILLS` | Override the tier-1 skill catalog cap (default 64, clamped to 8–4096). Lower it for small-context models, raise it for large skill libraries. |
 | `AGENTTY_FORCE_EFFORT` | Force a reasoning-effort tier for every turn, overriding what the model's capabilities imply. For A/B-ing effort, not everyday use. |
 | `AGENTTY_CHATGPT_DEVICE_AUTH` | Use the device-code flow for ChatGPT sign-in instead of the loopback browser flow — for headless or remote machines. |
+| `AGENTTY_CODEX_CLIENT_VERSION` | The Codex CLI version agentty reports to ChatGPT (`x.y.z`). The model list shrinks or empties for versions the server considers old; set a newer one if the ChatGPT picker comes back empty before agentty is updated. Anything that isn't plain `x.y.z` is ignored. |
 | `AGENTTY_NO_PREWARM` | Skip the TLS/connection prewarm at startup. |
 | `AGENTTY_POOL_IDLE_TTL` | Seconds an idle HTTP/2 connection may be reused (default 90, or 450 under a SOCKS proxy; `0` disables pooling). **Lower this if you see `h2 socket hangup (server accepted request; not replayed automatically)` mid-answer** — that means a proxy/VPN/CDN killed the connection before agentty did. Set it below your network's idle timeout and the pool evicts first, turning a visible failure into an invisible re-dial. `grep http.stream_hangup` in the log shows each hangup's idle age, so the right value is measurable. |
 | `AGENTTY_FORCE_REMOTE` | No effect since 0.9.42: there is no separate remote cadence any more. Still accepted. |

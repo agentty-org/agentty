@@ -1,8 +1,9 @@
 name: ci
 
 # Push/PR gate: build the agentty binary ONCE per platform (linux, macos,
-# msvc, msys2) and check it starts. No tests here; they all run in
-# nightly.yml (schedule + manual dispatch), which takes over an hour.
+# msvc, msys2) and check it starts, plus the static source lints (a minute,
+# no build). The test suite runs in nightly.yml (schedule + manual dispatch),
+# which takes over an hour.
 #
 # The MSVC lane exists because MSVC-only breakage (POSIX-only headers like
 # <unistd.h> / <ext/stdio_filebuf.h>) is invisible to the Linux build and
@@ -232,7 +233,12 @@ jobs:
         # Only the binary. Tests (and the perf gate) run in nightly.yml.
         run: cmake --build build -j"$(nproc)" --target agentty
       - name: Smoke
-        run: ./build/agentty --version
+        # Also: agentty.org/paste must be what this binary prints (the one
+        # static check that needs a built binary).
+        run: |
+          ./build/agentty --version
+          cmake -DBIN=./build/agentty -DPAGE=docs/website/static/paste.html \
+                -P tests/lint/paste_page_sync.cmake
 
   # macOS. Not a courtesy leg: a Mac is a first-class sandbox platform
   # (seatbelt via claybin), and with no mac job every one of these shipped
@@ -518,6 +524,46 @@ jobs:
         with:
           path: D:\a\_temp\msys64\home\runneradmin\.ccache
           key: windows-mingw-ucrt64-ccache-${{ github.sha }}
+
+  # ── Static checks ── the source lints (elm purity, layering, io roots,
+  # i18n, prefs sync ...). They read the tree and compile nothing but a few
+  # -fsyntax-only probes, so they cost a minute, against ~40 for the full
+  # suite in nightly.yml. Without them a broken lint sat red in nightly while
+  # every push looked green.
+  lint:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Init submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          for attempt in 1 2 3; do
+            git submodule update --init --recursive --force && break
+            git submodule sync --recursive; sleep $((attempt * 10))
+          done
+      - name: Install deps
+        # g++-16 for the -fsyntax-only probes (C++26); the rest is python + cmake.
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          for i in 1 2 3; do
+            sudo apt-get -o Acquire::Retries=5 update \
+              && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+                   g++-16 cmake ninja-build pkg-config ripgrep libssl-dev libnghttp2-dev zlib1g-dev \
+              && break
+            [ $i = 3 ] && exit 1; sleep 30
+          done
+      - name: Configure (no build)
+        env:
+          CC: gcc-16
+          CXX: g++-16
+        run: |
+          cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Debug \
+            -DAGENTTY_AUTO_PULL_MAYA=OFF -DAGENTTY_USE_MIMALLOC=OFF \
+            -DAGENTTY_BUILD_TESTS=ON
+      - name: Static checks
+        # paste_page_sync runs the binary, so it lives in the linux build lane.
+        run: ctest --test-dir build -L static -E '^paste_page_sync$' --output-on-failure -j"$(nproc)"
 
   # ── AUR source package: does agentty-git still CONFIGURE? ────────────────
   #
