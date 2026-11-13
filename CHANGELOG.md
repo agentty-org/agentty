@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.55] - 2026-11-13
+
 ### Fixed
 - **The ChatGPT model list no longer comes back empty.** The server hid models
   from the client version agentty reported, and one bad field in any row threw
