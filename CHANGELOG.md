@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.56] - 2026-11-13
+
 ### Fixed
 - **A command the sandbox blocks now says so.** The note telling the model
   the sandbox was the likely cause never reached it, so it blamed your
