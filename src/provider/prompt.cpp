@@ -283,7 +283,13 @@ namespace {
            "sandbox's own proxy).\n"
            "    Do NOT retry it unchanged and do NOT tell the user to check "
            "their firewall. Work inside the workspace, or say plainly which "
-           "wall you hit and what you would need.\n";
+           "wall you hit and what you would need.\n"
+           "    Approval (and the Write profile running commands unasked) does "
+           "not widen the "
+           "sandbox. Never claim the machine lacks a capability the sandbox "
+           "may be hiding; say the sandbox is the likely cause and offer: run "
+           "it in your own terminal, add the folder in Settings > Sandbox "
+           "(applies after a restart), or restart with --sandbox off.\n";
     return out;
 }
 

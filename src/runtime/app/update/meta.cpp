@@ -29,6 +29,7 @@
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/tool/tool_plan.hpp"  // CycleToolLoading (#98)
+#include "agentty/tool/util/sandbox.hpp"  // profile toast: sandbox still applies
 #include "agentty/workspace/checkpoint.hpp"
 #include "agentty/runtime/panel/smart_form.hpp"
 #include "agentty/runtime/app/settings_cache.hpp"
@@ -255,6 +256,8 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             auto toast = set_status_toast(
                 m, "profile: " + std::string{ui::profile_label(m.d.profile)}
                      + " \xc2\xb7 " + gist
+                     + (tools::util::sandbox::is_active()
+                            ? " \xc2\xb7 sandbox still applies" : "")
                      + (had_grants ? " \xc2\xb7 always-allow grants reset" : ""),
                 std::chrono::seconds{4});
             return toast;

@@ -1228,6 +1228,11 @@ std::string describe_state() {
         "Tunnel connection failed",
         "refused by the sandbox proxy",
         "Received HTTP code 403 from proxy",
+        // macOS: opening apps or URLs needs Launch Services, which the
+        // sandbox blocks, so `open .` reports a missing app instead.
+        "No application knows how to open",
+        "Unable to find application named",
+        "LSOpenURLsWithRole",
     };
     for (auto s : kSigns)
         if (out.find(s) != std::string_view::npos) return true;
@@ -1260,10 +1265,17 @@ std::string describe_state() {
         n += ". Any other host, and every IP address, is refused.";
     } else
         n += " Private, loopback and cloud-metadata addresses are refused.";
-    n += " The workspace is writable; most paths outside it are not. "
-         "Do not retry the same command unchanged \xe2\x80\x94 work inside the "
-         "workspace, or tell the user which wall you hit and what access you "
-         "would need.";
+    n += " The workspace is writable; most paths outside it are not.";
+#if defined(__APPLE__)
+    n += " Opening apps, Finder or URLs (open, osascript) needs macOS "
+         "services the sandbox blocks.";
+#endif
+    n += " Approving a command, or the Write profile running it unasked, "
+         "doesn't widen the sandbox. Do not retry the same command unchanged. Say "
+         "the sandbox is the likely cause (not certain), then offer next "
+         "steps: the user runs it in their own terminal, adds the folder in "
+         "Settings > Sandbox (applies after a restart), or restarts agentty "
+         "with --sandbox off for that run.";
     return n;
 }
 

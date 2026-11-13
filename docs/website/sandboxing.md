@@ -31,6 +31,10 @@ agentty: sandbox: active (claybin) · turn it off entirely with --sandbox off
 
 agentty prints `active` only after it has actually built a test sandbox and the kernel allowed it. If the sandbox can't run, the line says so.
 
+Approving a command doesn't give it more access. The approval profile you pick with [[Shift+Tab]] (Write, Ask, Minimal) only decides whether agentty asks you first. Every command still runs inside the sandbox.
+
+On macOS, opening apps, Finder or URLs (`open .`, `osascript`) needs system services the sandbox blocks. It fails with errors like `No application knows how to open URL` or `Unable to find application named 'Finder'`. Run it in your own terminal, or restart with `--sandbox off`.
+
 To loosen the sandbox, open **Settings → Sandbox**. There you can:
 
 - pick a looser preset, such as `permissive` (see [presets](#pick-a-posture-not-28-switches))
@@ -193,7 +197,7 @@ Where it can, the sandbox also mounts the existing ones read-only, so the write 
 
 A model that doesn't know it's confined misreads every wall it hits. A permission error becomes "your corporate proxy is blocking this". Then it sends you after a problem that doesn't exist, or retries a command that will never be allowed.
 
-So agentty tells it twice: in the system prompt (what's *allowed*, so it works in the right place first time), and on the output of any command that was denied.
+So agentty tells it twice: in the system prompt (what's *allowed*, so it works in the right place first time), and on the output of any command that was denied. Both tell it that approval doesn't widen the sandbox, to say the sandbox is the likely cause rather than certain, and to offer you a next step: run the command yourself, add the folder in Settings → Sandbox, or restart with `--sandbox off`.
 
 ## Locking down a single run
 
