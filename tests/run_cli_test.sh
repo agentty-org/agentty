@@ -179,11 +179,10 @@ sig_case() {
 import json, os, signal, subprocess, sys, time
 a, name, want = sys.argv[1], sys.argv[2], int(sys.argv[3])
 marker = "agentty_run_sig_%d" % os.getpid()
-# A symlink named after the marker, not `exec -a`: that is a bash extension,
-# and on Ubuntu /bin/sh is dash, where the tool failed instantly and the run
-# exited 0 before the signal was ever sent. argv[0] = ./marker puts the
-# marker in the cmdline for pgrep -f on every POSIX sh.
-cmd = 'ln -sf "$(command -v sleep)" ./%s && exec ./%s 40' % (marker, marker)
+# The marker is an argument so pgrep -f finds it. Not `exec -a` (bash only)
+# and not a symlink to sleep (rust coreutils on ubuntu 26.04 picks the tool
+# from argv[0], so it exited at once and the run ended before the signal).
+cmd = 'exec python3 -c "import time; time.sleep(40)" %s' % marker
 p = subprocess.Popen([a, "run", 'CALL shell ' + json.dumps({"command": cmd})],
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
 time.sleep(2.0)
