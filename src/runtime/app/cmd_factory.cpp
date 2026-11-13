@@ -34,6 +34,7 @@
 #endif
 #include "agentty/util/dbglog.hpp"
 #include "agentty/tool/registry.hpp"
+#include "agentty/tool/util/sandbox.hpp"   // permission prompt: runs sandboxed
 #include "agentty/tool/tool_loading.hpp"
 #include "agentty/tool/tool_plan.hpp"
 #include "agentty/tool/skills.hpp"   // active_in: derived "already active" set
@@ -2214,7 +2215,11 @@ Cmd kick_pending_tools(Model& m) {
                 tc.id, tc.name,
                 "Tool " + tc.name.value + " needs permission under "
                     + std::string{ui::profile_label(m.d.profile)} + " profile",
-                shown ? shown->definition_hash() : 0};
+                shown ? shown->definition_hash() : 0,
+                // task is Exec too, but a subagent isn't one command.
+                shown && shown->effects.has(tools::Effect::Exec)
+                    && tc.name.value != "task"
+                    && tools::util::sandbox::is_active()};
             if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx)
                 m.s.phase = phase::AwaitingPermission{std::move(*ctx)};
             else

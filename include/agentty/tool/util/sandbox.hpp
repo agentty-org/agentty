@@ -179,6 +179,12 @@ void reset_config_for_test() noexcept;
 // flag is the obvious one to query).
 [[nodiscard]] bool is_active() noexcept;
 
+// A failed command's output that looks like the sandbox refused it, and the
+// note telling the model so. The note starts with kDenialTag on its own line.
+inline constexpr std::string_view kDenialTag = "[sandbox] ";
+[[nodiscard]] bool looks_like_denial(std::string_view out);
+[[nodiscard]] std::string denial_note();
+
 // Is the workspace the user's home directory? Then every dotfile is writable
 // to sandboxed commands (login files, ~/.local/bin). The Sandbox pane warns.
 [[nodiscard]] bool workspace_is_home();

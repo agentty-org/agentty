@@ -714,6 +714,14 @@ std::vector<ToolDef> build_mcp_tool_defs() {
                 (void)tools::util::handoff::review_trusted(before, who);
             }
 
+            // The shell tool runs through JaalExec, not run_shell_command, so
+            // the denial note has to be added here or the model never sees it.
+            if ((tool_name == "shell" || tool_name == "test")
+                && tools::util::sandbox::is_active()
+                && r.text.find("failed with exit code ") != std::string::npos
+                && tools::util::sandbox::looks_like_denial(r.text))
+                r.text += tools::util::sandbox::denial_note();
+
             return decode_result(tool_name, std::move(r));
         };
         defs.push_back(std::move(def));

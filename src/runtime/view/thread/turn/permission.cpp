@@ -102,6 +102,9 @@ maya::Permission::Config inline_permission_config(const PendingPermission& pp,
     }
 
     cfg.description = desc.empty() ? pp.reason : desc;
+    if (pp.sandboxed)
+        cfg.note = "sandboxed \xc2\xb7 approving lets it run, it doesn't widen "
+                   "what it can reach";
     // A commit message or heredoc can run long; keep the prompt compact and
     // say how much is hidden. Shell commands are kept whole: every byte of
     // what runs is part of the decision.

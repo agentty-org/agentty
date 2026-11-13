@@ -147,6 +147,19 @@ TEST_CASE("permission card: a plain shell call reads exactly as before") {
 
     const auto cfg = agentty::ui::inline_permission_config(pp, tc);
     CHECK(cfg.description == "cargo test");
+    CHECK(cfg.note.empty());
+}
+
+TEST_CASE("permission card: a sandboxed command says approving doesn't widen it") {
+    agentty::ToolUse tc;
+    tc.id   = agentty::ToolCallId{"c1"};
+    tc.name = agentty::ToolName{"shell"};
+    tc.args = json{{"command", "open ."}};
+    agentty::PendingPermission pp{tc.id, tc.name, "needs permission", 0, true};
+
+    const auto cfg = agentty::ui::inline_permission_config(pp, tc);
+    CHECK(cfg.note.find("sandboxed") != std::string::npos);
+    CHECK(cfg.note.find("approving") != std::string::npos);
 }
 
 TEST_CASE("permission card: bash shows its command, not raw json") {

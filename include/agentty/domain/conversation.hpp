@@ -1221,6 +1221,9 @@ struct PendingPermission {
     // prompt is on screen and the grant is recorded against the name.
     // 0 means "not recorded", which skips the check.
     std::uint64_t def_hash = 0;
+    // The command will run inside the OS sandbox. The prompt says so, since
+    // approving it doesn't widen what it can reach.
+    bool sandboxed = false;
 };
 
 } // namespace agentty

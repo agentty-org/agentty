@@ -55,6 +55,7 @@ bool text_is_visible(std::string_view text) {
 
 bool has_visible_body(const maya::ToolBodyPreview::Config& body) {
     using Kind = maya::ToolBodyPreview::Kind;
+    if (!body.note.empty()) return true;
     switch (body.kind) {
     case Kind::None:      return false;
     case Kind::EditDiff:  return !body.hunks.empty();

@@ -1145,5 +1145,15 @@
   },
   "status": "done",
   "output": "Created /w/elsewhere (175+ 0-)"
+ },
+ {
+  "tool": "shell",
+  "kind": "failed",
+  "args": {
+   "command": "open .",
+   "display_description": "Open the project in Finder"
+  },
+  "status": "done",
+  "output": "Command \"open .\" failed with exit code 1.\n```\nNo application knows how to open URL file:///Users/me/project/ (Error Domain=NSOSStatusErrorDomain Code=-10814 \"kLSApplicationNotFoundErr\")\n```\n\n[sandbox] This command ran inside an OS-level sandbox, so a permission or network error above is most likely the sandbox refusing it."
  }
 ]

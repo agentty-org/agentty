@@ -720,6 +720,44 @@ TEST_CASE("edit diff card strips model budget marker + caps huge diffs") {
     }
 }
 
+TEST_CASE("shell card: a sandbox denial shows a hint, not the model's note") {
+    std::string out =
+        "Command \"open .\" failed with exit code 1.\n```\n"
+        "No application knows how to open URL file:///w/\n```"
+        "\n\n[sandbox] This command ran inside an OS-level sandbox, so ...";
+    auto tc = make_tool("shell", A::ToolUse::Failed{{}, {}, out},
+                        {{"command", "open ."}});
+    const auto body = U::tool_body_preview_config(tc);
+    CHECK(body.text.find("No application knows") != std::string::npos);
+    CHECK(body.text.find("[sandbox]") == std::string::npos);
+    CHECK(body.note.find("likely blocked by the sandbox") != std::string::npos);
+    CHECK(body.note.find("--sandbox off") != std::string::npos);
+
+    // The row is on the rendered card, in full at a normal width.
+    maya::StylePool pool;
+    maya::Canvas canvas(100, 20, &pool);
+    canvas.clear();
+    maya::render_tree(maya::ToolBodyPreview{body}.build(), canvas, pool,
+                      maya::theme::native, true);
+    std::string screen;
+    for (int y = 0; y <= canvas.max_content_row(); ++y) {
+        for (int x = 0; x < 100; ++x) {
+            char32_t ch = canvas.get(x, y).character;
+            screen.push_back(ch > 0 && ch < 128 ? static_cast<char>(ch) : ' ');
+        }
+        screen += '\n';
+    }
+    INFO(screen);
+    CHECK(screen.find("likely blocked by the sandbox") != std::string::npos);
+    CHECK(screen.find("--sandbox off") != std::string::npos);
+
+    // A plain failure gets no hint.
+    auto plain = make_tool("shell",
+        A::ToolUse::Failed{{}, {}, "Command \"false\" failed with exit code 1."},
+        {{"command", "false"}});
+    CHECK(U::tool_body_preview_config(plain).note.empty());
+}
+
 TEST_CASE("tool_display_name always capitalises") {
     using agentty::ui::tool_display_name;
     // Mapped built-ins keep their curated brand labels.

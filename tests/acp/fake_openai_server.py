@@ -58,6 +58,9 @@ class H(BaseHTTPRequestHandler):
         text = last.get("content") if isinstance(last.get("content"), str) else json.dumps(last.get("content"))
         if os.environ.get("FAKE_DEBUG"):
             sys.stderr.write(f"REQ role={last.get('role')} text={(text or '')[:80]!r} n={len(msgs)} stream={body.get('stream')}\n")
+        if os.environ.get("FAKE_TOOL_RESULT") and last.get("role") == "tool":
+            with open(os.environ["FAKE_TOOL_RESULT"], "w") as f:
+                f.write(text or "")
         if os.environ.get("FAKE_TOOLS_LOG"):
             names = [t.get("function", {}).get("name", "") for t in body.get("tools") or []]
             with open(os.environ["FAKE_TOOLS_LOG"], "a") as f:

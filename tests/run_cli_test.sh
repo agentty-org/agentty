@@ -8,7 +8,7 @@ set -u
 A="$1"
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$(mktemp -d "${TMPDIR:-/tmp}/agentty_run_XXXXXX")
-python3 "$HERE/acp/fake_openai_server.py" 0 > "$S/port" 2>/dev/null </dev/null &
+FAKE_TOOL_RESULT="$S/tool_result" python3 "$HERE/acp/fake_openai_server.py" 0 > "$S/port" 2>/dev/null </dev/null &
 SRV=$!
 trap 'kill $SRV 2>/dev/null; rm -rf "$S"' EXIT INT TERM
 # Up to 30s, not 3: a cold CI VM starting python under a parallel ctest can
@@ -146,6 +146,19 @@ else
         || fail "no-network: curl blocked (rc '$nrc')"
 fi
 "$A" run --sandbox off --no-network "x" >/dev/null 2>&1; check "no-network + sandbox off: exit 2" "$?" 2
+
+# A command the sandbox blocks: the model gets the [sandbox] note, so it
+# doesn't blame the machine (#125). A host that can't sandbox exits 2.
+rm -f "$S/tool_result"
+"$A" run --sandbox on 'CALL shell {"command":"touch /usr/agentty_denied_probe"}' >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ]; then
+    pass "sandbox note: skipped (no sandbox on this host)"
+elif grep -q '\[sandbox\]' "$S/tool_result" 2>/dev/null \
+     && grep -q "doesn't widen the sandbox" "$S/tool_result"; then
+    pass "sandbox note: the model sees it on a blocked command"
+else
+    fail "sandbox note: missing (rc $rc, result: $(head -c 300 "$S/tool_result" 2>/dev/null))"
+fi
 
 # A fork reopened in a new process can still read its parent's transcript,
 # which lives outside the workspace (#83). Other files there stay closed.

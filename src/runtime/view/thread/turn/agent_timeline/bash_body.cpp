@@ -18,6 +18,11 @@
 
 namespace agentty::ui::detail {
 
+namespace {
+// Matches the start of tools::util::sandbox::denial_note().
+constexpr std::string_view kSandboxNoteTag = "\n\n[sandbox] ";
+}
+
 bool bash_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     using Kind = maya::ToolBodyPreview::Kind;
 
@@ -29,9 +34,17 @@ bool bash_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         return true;
     }
     if (tc.is_terminal()) {
-        auto stripped = clean_output(tc.is_failed()
-            ? strip_bash_output_fence(failure_body_text(tc))
-            : strip_bash_output_fence(card_output(tc)));
+        std::string raw = tc.is_failed() ? failure_body_text(tc)
+                                         : std::string{card_output(tc)};
+        // The [sandbox] note is written for the model. The card shows the
+        // user a short version instead.
+        if (auto at = raw.find(kSandboxNoteTag); at != std::string::npos) {
+            raw.resize(at);
+            out.note = "likely blocked by the sandbox (approving doesn't change that)\n"
+                       "run it yourself, allow it in Settings \xe2\x80\xba Sandbox, "
+                       "or use --sandbox off";
+        }
+        auto stripped = clean_output(strip_bash_output_fence(raw));
         if (!stripped.empty()) {
             out.kind = Kind::BashOutput;
             out.text = std::move(stripped);
