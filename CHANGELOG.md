@@ -4,6 +4,21 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A command the sandbox blocks now says so.** The note telling the model
+  the sandbox was the likely cause never reached it, so it blamed your
+  machine instead (#125). Now it hears that, hears that approving doesn't
+  widen the sandbox, and offers a way out. The card shows you two short lines:
+  likely blocked by the sandbox, then run it yourself, allow it in
+  Settings › Sandbox, or use `--sandbox off`. On macOS, `open` and Finder
+  errors count too.
+- **The model picker no longer warns about an Ollama you don't use** (#126).
+  The error still shows in ^P, and once Ollama is active.
+
+### Changed
+- The permission prompt for a sandboxed command says approving doesn't widen
+  what it can reach, and Shift+Tab says the sandbox still applies.
+
 ## [0.9.55] - 2026-11-13
 
 ### Fixed
