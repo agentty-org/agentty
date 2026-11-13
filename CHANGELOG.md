@@ -4,6 +4,18 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The ChatGPT model list no longer comes back empty.** The server hid models
+  from the client version agentty reported, and one bad field in any row threw
+  away the whole list. Both are fixed, and `AGENTTY_CODEX_CLIENT_VERSION`
+  lets you report a newer version if it happens again. Thanks @cloudbouz53 (#124).
+- Pinning a tool that fails now shows a toast instead of doing nothing.
+
+### Changed
+- **The docs are rewritten to be easy to read**, and checked against the code.
+  Quick Start is a short path from install to first answer, with a section on
+  turning the sandbox off when you need full access.
+
 ## [0.9.54] - 2026-11-12
 
 ### Changed
