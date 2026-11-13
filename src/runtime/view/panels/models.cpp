@@ -68,12 +68,23 @@ Element models_panel(const Model& m) {
     // list visibly reads as "more coming", not "that's all". Failed providers
     // are surfaced separately so a network blip doesn't look like "that's all".
     {
+        // A local preset (Ollama) is probed for everyone. If you aren't using
+        // it, "can't reach localhost" is noise; ^P still shows the error.
+        const std::string active_id = m.d.selection.catalog_id();
+        auto unused_local = [&](const ProviderCatalog& c) {
+            const auto* p = provider::preset_for(c.provider_id);
+            return p && p->is_local && c.models.empty()
+                && c.provider_id != active_id
+                && c.provider_id != picker->provider_scope
+                && !m.d.persisted.provider_keys.contains(c.provider_id);
+        };
         std::vector<std::string_view> pending;
         std::vector<const ProviderCatalog*> failed;
         for (const auto& c : m.d.provider_catalogs) {
             if (c.state == ProviderCatalog::State::Loading)
                 pending.push_back(c.label);
-            else if (!c.error.empty() || c.state == ProviderCatalog::State::Failed)
+            else if ((!c.error.empty() || c.state == ProviderCatalog::State::Failed)
+                     && !unused_local(c))
                 failed.push_back(&c);
         }
         if (!pending.empty()) {

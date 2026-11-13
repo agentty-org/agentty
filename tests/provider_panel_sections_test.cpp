@@ -594,3 +594,44 @@ TEST_CASE("model picker: a single-account provider adds no chrome") {
     CHECK_FALSE(has(screen, "WORK"));
 }
 
+TEST_CASE("model picker: an unused Ollama failure isn't a warning") {
+    auto render_models = [](const Model& m) {
+        auto root = ui::models_panel(m);
+        maya::StylePool pool;
+        maya::Canvas canvas(110, 120, &pool);
+        canvas.clear();
+        maya::render_tree(root, canvas, pool, maya::theme::native, true);
+        std::string out;
+        for (int y = 0; y <= canvas.max_content_row(); ++y) {
+            for (int x = 0; x < 110; ++x) {
+                char32_t ch = canvas.get(x, y).character;
+                out.push_back(ch > 0 && ch < 128 ? static_cast<char>(ch) : ' ');
+            }
+            out += '\n';
+        }
+        return out;
+    };
+    auto failed = [](std::string id, std::string label) {
+        ProviderCatalog c;
+        c.provider_id = std::move(id);
+        c.label = std::move(label);
+        c.state = ProviderCatalog::State::Failed;
+        c.error = "can't reach localhost: connect";
+        return c;
+    };
+
+    Model m;
+    m.d.selection = provider::parse_selection("openai");
+    m.ui.panel.descend(pn::Models{});
+    m.d.provider_catalogs = {failed("ollama", "Ollama")};
+    CHECK_FALSE(has(render_models(m), "Ollama"));
+
+    // A provider you use still warns.
+    m.d.provider_catalogs.push_back(failed("groq", "Groq"));
+    CHECK(has(render_models(m), "Groq"));
+
+    // Ollama warns once it's the active provider.
+    m.d.selection = provider::parse_selection("ollama");
+    CHECK(has(render_models(m), "Ollama"));
+}
+
