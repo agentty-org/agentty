@@ -87,11 +87,13 @@ void add_tool(Message& m, const char* name, int ms, bool ok = true) {
     if (ok) {
         ToolUse::Done d;
         d.started_at  = start;
+        d.executing_since = start;   // what latency is measured from
         d.finished_at = start + std::chrono::milliseconds{ms};
         t.status = d;
     } else {
         ToolUse::Failed f;
         f.started_at  = start;
+        f.executing_since = start;
         f.finished_at = start + std::chrono::milliseconds{ms};
         t.status = f;
     }

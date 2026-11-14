@@ -540,6 +540,32 @@ Element stats_panel(const Model& m) {
     for (const auto& sec : sections)
         build_cards(sec, f, scratch, text_groups, pictures, tall_picture, picture_title);
 
+    // What the column widths depend on: every figure this tab shows, the
+    // tab, and the viewport height (a donut sizes to it). The fit layout
+    // keeps its plan until this changes, so a settled tab doesn't re-measure
+    // its cards every frame.
+    std::uint64_t fit_key = 0xcbf29ce484222325ull;
+    {
+        auto mix = [&](const void* p, std::size_t n) {
+            const auto* b = static_cast<const unsigned char*>(p);
+            for (std::size_t i = 0; i < n; ++i) { fit_key ^= b[i]; fit_key *= 0x100000001b3ull; }
+        };
+        auto mix_s = [&](const std::string& s) { mix(s.data(), s.size()); mix("\0", 1); };
+        const int vh = panel_detail::panel_viewport_h();
+        mix(&active, sizeof active);
+        mix(&vh, sizeof vh);
+        std::vector<stats::Metric> all;
+        for (const auto& sec : sections) if (sec.extract) sec.extract(f, all);
+        for (const auto& mt : all) {
+            mix_s(mt.label);
+            mix_s(mt.detail);
+            mix(&mt.value, sizeof mt.value);
+            for (const auto& p : mt.parts) { mix_s(p.label); mix(&p.value, sizeof p.value); }
+            mix(mt.series.data(), mt.series.size() * sizeof(double));
+        }
+        if (fit_key == 0) fit_key = 1;   // 0 means "don't cache"
+    }
+
     // Past two charts, share a cell — but only with one that FITS.
     //
     // Every chart as its own cell makes a chart-heavy tab too many columns
@@ -668,20 +694,16 @@ Element stats_panel(const Model& m) {
         if (!text_b.empty()) text_cards.push_back(card({}, hue::cyan(), std::move(text_b)));
         if (!text_cards.empty()) {
             const int n = static_cast<int>(text_cards.size());
-            // The readout is the LEAD cell and holds two columns of text, so
-            // it takes half the body — the charts divide the rest. Splitting
-            // the width evenly between every outer cell left the figures
-            // 20 columns each and wrapped their labels mid-phrase ("of
-            // generated / tokens were / reasoning").
-            const int share = std::max(34, body_width() / 2);
+            // Each text column is as wide as its longest line, no more.
             readout = maya::viewport(std::move(text_cards),
-                                     maya::ViewportOpts{.max_width = std::max(16, share / n),
-                                                        .max_cols  = n,
+                                     maya::ViewportOpts{.max_cols  = n,
                                                         .min_width = 14,
                                                         .gap       = 2,
                                                         .gap_y     = 2,
-                                                        .width     = share,
-                                                        .flow      = maya::Flow::Row})
+                                                        .flow      = maya::Flow::Row,
+                                                        .fit       = true,
+                                                        .spread    = false,
+                                                        .fit_key   = fit_key ^ 0x9e3779b97f4a7c15ull})
                           .build();
             has_readout = true;
         }
@@ -695,33 +717,22 @@ Element stats_panel(const Model& m) {
     for (auto& p : pictures) cards.push_back(std::move(p));
 
     const int ncards = static_cast<int>(cards.size());
+    // Columns sized to their content: the readout and a donut take what they
+    // need, a histogram or line chart takes the rest. When nothing stretches,
+    // the spare width spaces the columns out evenly.
     cfg.prebuilt.push_back(
         maya::viewport(std::move(cards),
-                       maya::ViewportOpts{// A tab is usually the readout plus
-                                          // one or two pictures, so let a
-                                          // column get wide.
-                                          .max_width = 56,
-                                          // Never ask for more columns than
-                                          // there are cards. Without this the
-                                          // width can afford THREE columns
-                                          // while the tab has two cards, and
-                                          // viewport treats that as underfull
-                                          // — it holds both at max_width and
-                                          // leaves the surplus empty, which is
-                                          // the dead strip on the right. Capped
-                                          // at the card count the grid is full,
-                                          // so it divides the whole slot
-                                          // exactly and the cards FILL it.
-                                          .max_cols  = ncards,
+                       maya::ViewportOpts{.max_cols  = ncards,
                                           // A chart still needs its label, a
-                                          // bar and the value; below this the
-                                          // grid stays one column rather than
-                                          // truncating in two.
+                                          // bar and the value; below this a
+                                          // row takes fewer cards.
                                           .min_width = 30,
                                           .gap       = 3,
                                           .gap_y     = 2,
                                           .width     = body_width(),
-                                          .flow      = maya::Flow::Row})
+                                          .flow      = maya::Flow::Row,
+                                          .fit       = true,
+                                          .fit_key   = fit_key})
             .build());
 
     // No row selection: this is a document, not a picker.

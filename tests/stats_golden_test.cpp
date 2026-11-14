@@ -446,7 +446,7 @@ TEST_CASE("stats_golden: every tab renders byte-identically") {
     // width pressure like every other panel. Only the footer line changed;
     // the clip scan, the overrun check and every feature assertion stayed
     // green across the sweep.
-    const std::uint64_t kGoldenHash = 0x8e5da69de71f780aull;
+    const std::uint64_t kGoldenHash = 0x4bcc011bcc446fa3ull;
     const std::uint64_t got = fnv1a(out);
 
     if (kGoldenHash == 0) {
