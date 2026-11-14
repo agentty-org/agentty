@@ -36,8 +36,29 @@ std::string as_cut_marker(std::string_view t) {
 } // namespace
 
 std::string display_text(const Entry& e) {
-    // Thinking is the model's own prose: nothing to clean.
-    if (e.thinking) return e.output;
+    // Thinking is the model's own prose. Only trim blank lines at the edges
+    // and squeeze blank runs to one, so the reader has no empty rail rows.
+    if (e.thinking) {
+        std::string out;
+        out.reserve(e.output.size());
+        int blanks = 0;
+        std::string_view s{e.output};
+        for (std::size_t p = 0; p <= s.size();) {
+            auto nl = s.find('\n', p);
+            if (nl == std::string_view::npos) nl = s.size();
+            const auto ln = s.substr(p, nl - p);
+            const bool blank = ln.find_first_not_of(" \t\r") == std::string_view::npos;
+            if (blank) ++blanks;
+            else {
+                if (!out.empty()) out.append(blanks > 0 ? "\n\n" : "\n");
+                out.append(ln);
+                blanks = 0;
+            }
+            if (nl == s.size()) break;
+            p = nl + 1;
+        }
+        return out;
+    }
     // Tools echo their own description as line 1; the header already says it.
     std::string_view s{e.output};
     if (e.call.args.is_object())

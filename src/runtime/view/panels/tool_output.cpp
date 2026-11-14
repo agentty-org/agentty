@@ -13,6 +13,10 @@
 #include <maya/element/text.hpp>          // decode_utf8
 #include <maya/text/unicode_width.hpp>   // char_width
 #include <maya/widget/tool_body_preview.hpp>
+#include <maya/widget/scrollbar.hpp>   // the body's scrollbar
+
+#include <cmath>    // lround: tok/s
+#include <format>
 
 #include "agentty/runtime/panel/tool_output.hpp"
 
@@ -412,9 +416,10 @@ Element tool_output_panel(const Model& m) {
     };
     static BodyCache cache;   // UI thread only, like the other pickers' statics
 
-    // Text width inside the pane: the frame and its padding take 6 columns,
-    // and while searching a 1-column margin marks the current match.
-    const int pane_w   = std::max(20, panel_terminal_cols() - 6 - (o->query.empty() ? 0 : 1));
+    // Text width inside the pane. The overlay is 4 columns narrower than
+    // the terminal, the frame and its padding take 6 more, and 1 is the
+    // scrollbar gutter. While searching, a 1-column margin marks the match.
+    const int pane_w   = std::max(20, panel_terminal_cols() - 11 - (o->query.empty() ? 0 : 1));
     const void* entries_key = static_cast<const void*>(o->entries.data());
     const void* bytes_key   = static_cast<const void*>(e.output.data());
     const auto call_key     = e.call.compute_render_key();
@@ -656,12 +661,48 @@ Element tool_output_panel(const Model& m) {
         }
     }
 
+    // Thinking ends the way the transcript's block does: a blank row, then
+    // "✦ Reasoned · 216 tokens · 4.3s · 50 tok/s". Built per frame (the
+    // clock ticks while live), so it sits after the cached rows.
+    std::vector<Element> tail_rows;
+    if (e.thinking && !cache.rows.empty() && o->query.empty()) {
+        const std::size_t toks = (e.output.size() + 3) / 4;
+        auto tok_label = [](std::size_t t) {
+            if (t < 1000) return std::to_string(t);
+            if (t < 10000) return std::format("{}.{}k", t / 1000, (t % 1000) / 100);
+            return std::format("{}k", (t + 500) / 1000);
+        };
+        std::string meta;
+        if (toks > 0)
+            meta += "  \xc2\xb7  " + tok_label(toks) + (thinking_live ? " tok" : " tokens");
+        if (thought_ms > 0) {
+            meta += "  \xc2\xb7  ";
+            if (thought_ms >= 60'000)
+                meta += std::format("{}m{:02}s", thought_ms / 60'000, (thought_ms / 1000) % 60);
+            else if (thought_ms >= 10'000)
+                meta += std::format("{}s", (thought_ms + 500) / 1000);
+            else
+                meta += std::format("{:.1f}s", static_cast<double>(thought_ms) / 1000.0);
+        }
+        if (thought_ms >= 1500 && toks > 0)
+            if (const long r = std::lround(static_cast<double>(toks) * 1000.0
+                                           / static_cast<double>(thought_ms)); r > 0)
+                meta += std::format("  \xc2\xb7  {} tok/s", r);
+        tail_rows.push_back(text("") | height(1));
+        tail_rows.push_back(hstack()(
+            text("\xe2\x9c\xa6 ", thinking_live ? fg_of(role_brand) : fg_dim(role_brand)),   // ✦
+            text(thinking_live ? "Thinking" : "Reasoned", fg_bold(text_secondary)),
+            text(meta, fg_italic(text_secondary)) | clip | shrink(1.0f)
+        ).build() | height(1) | overflow(Overflow::Hidden));
+    }
+
     // Window the cached rows into the pane. The pane must never be taller
     // than the terminal (a too-tall frame scrolls into scrollback), and the
     // header, status and hint rows can each wrap at some width, so rather
     // than guess the chrome we build, measure, and give the body less until
     // it fits.
-    const int total_rows = static_cast<int>(cache.rows.size());
+    const int cached_rows = static_cast<int>(cache.rows.size());
+    const int total_rows = cached_rows + static_cast<int>(tail_rows.size());
     auto& sc = m.ui.tool_viewer_scroll;
     const int nhits = static_cast<int>(cache.hit_rows.size());
     const int cur_hit = nhits > 0 ? ((o->hit % nhits) + nhits) % nhits : -1;
@@ -748,19 +789,35 @@ Element tool_output_panel(const Model& m) {
         sc.y = std::clamp(sc.y, 0, sc.max_y);
         const int first = sc.y;
         const int last  = std::min(total_rows, first + vh);
+        std::vector<Element> win;
         for (int i = first; i < last; ++i) {
+            if (i >= cached_rows) {
+                win.push_back(tail_rows[static_cast<std::size_t>(i - cached_rows)]);
+                continue;
+            }
             // While searching, a one-column margin marks the current match.
             if (!o->query.empty())
-                c.prebuilt.push_back(hstack().width(Dimension::percent(100))(
+                win.push_back(hstack().width(Dimension::percent(100))(
                     text(i == cur_row ? "\xe2\x96\xb8" : " ", fg_bold(warn)),   // ▸
                     cache.rows[static_cast<std::size_t>(i)] | grow(1.0f) | shrink(1.0f)
                 ).build() | height(1) | overflow(Overflow::Hidden));
             else
-                c.prebuilt.push_back(reveal_row(i, cache.rows[static_cast<std::size_t>(i)]));
+                win.push_back(reveal_row(i, cache.rows[static_cast<std::size_t>(i)]));
         }
         if (total_rows == 0)
-            c.prebuilt.push_back(text("  waiting for output\xe2\x80\xa6", fg_italic(muted))
-                                 | height(1) | overflow(Overflow::Hidden));
+            win.push_back(text("  waiting for output\xe2\x80\xa6", fg_italic(muted))
+                          | height(1) | overflow(Overflow::Hidden));
+        // The scrollbar column is always there, so text never reflows when
+        // the output grows past the pane; it only gets a thumb then.
+        const int win_h = std::max(1, static_cast<int>(win.size()));
+        maya::ScrollbarStyle bar = maya::ScrollbarStyle::overlay();
+        bar.thumb_color = base.accent;
+        Element gutter = total_rows > vh
+            ? maya::scrollbar_y(sc, win_h, bar)
+            : (text("") | width(1) | height(win_h));
+        c.prebuilt.push_back(hstack()(
+            vstack()(std::move(win)) | grow(1.0f) | shrink(1.0f),
+            std::move(gutter)).build());
         if (compact_body) return c;
 
         // Status line: the find prompt or result, then where we are.

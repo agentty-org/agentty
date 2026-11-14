@@ -1452,3 +1452,96 @@ TEST_CASE("thinking reader: a streaming block updates in place") {
     check(o && o->entries[0].output == "first part and more", "new text reaches the reader");
     check(o && !o->entries[0].streaming, "a sealed block drops the streaming tag");
 }
+
+namespace {
+// The ^U reader on a block of `thinking`, rendered at cols x rows. Lines keep
+// their real glyphs (UTF-8), so … and the scrollbar can be checked.
+std::vector<std::string> render_reader(const std::string& thinking, int cols, int rows) {
+    A::Model m;
+    A::Message u;
+    u.role = A::Role::User;
+    u.text = "go";
+    u.id = A::MessageId{"u"};
+    A::Message a;
+    a.role = A::Role::Assistant;
+    a.text = "done";
+    a.thinking = thinking;
+    a.id = A::MessageId{"a"};
+    m.d.current.messages = {u, a};
+    m = std::move(agentty::app::update(std::move(m), A::Msg{A::OpenThinking{}}).first);
+    setenv("LINES", std::to_string(rows).c_str(), 1);
+    setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+    auto el = U::tool_output_panel(m);
+    maya::StylePool pool;
+    maya::Canvas canvas(cols, rows, &pool);
+    canvas.clear();
+    maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+    std::vector<std::string> out;
+    for (int y = 0; y <= canvas.max_content_row(); ++y) {
+        std::string line;
+        for (int x = 0; x < cols; ++x) {
+            const auto& c = canvas.get(x, y);
+            if (c.width == 2) continue;   // second half of a wide glyph
+            char32_t ch = c.character ? c.character : U' ';
+            char buf[5] = {};
+            int n = 0;
+            if (ch < 0x80) buf[n++] = static_cast<char>(ch);
+            else if (ch < 0x800) { buf[n++] = char(0xC0 | (ch >> 6)); buf[n++] = char(0x80 | (ch & 0x3F)); }
+            else { buf[n++] = char(0xE0 | (ch >> 12)); buf[n++] = char(0x80 | ((ch >> 6) & 0x3F)); buf[n++] = char(0x80 | (ch & 0x3F)); }
+            line.append(buf, n);
+        }
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+}  // namespace
+
+TEST_CASE("thinking reader: text fits the pane, no blank tail, a meter line") {
+    std::string words;
+    for (int i = 0; i < 60; ++i) words += "word" + std::to_string(i) + " ";
+    const auto lines = render_reader(words + "END_MARK\n\n\n", 90, 40);
+    std::string all;
+    for (const auto& l : lines) all += l + "\n";
+    INFO(all);
+    // Every word made it on screen whole: nothing cut with an ellipsis.
+    CHECK(all.find("\xe2\x80\xa6") == std::string::npos);
+    CHECK(all.find("END_MARK") != std::string::npos);
+    for (int i = 0; i < 60; ++i)
+        CHECK(all.find("word" + std::to_string(i) + " ") != std::string::npos);
+    // No rail-only rows after the text.
+    std::size_t end_row = 0;
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        if (lines[i].find("END_MARK") != std::string::npos) end_row = i;
+    const auto& next = lines[end_row + 1];
+    CHECK(next.find("\xe2\x94\x83 ") == std::string::npos);   // not "┃ " + nothing
+    // The transcript's summary line: Reasoned · N tokens.
+    CHECK(all.find("Reasoned") != std::string::npos);
+    CHECK(all.find(" tokens") != std::string::npos);
+}
+
+TEST_CASE("thinking reader: a long block gets a scrollbar") {
+    std::string text;
+    for (int i = 0; i < 120; ++i) text += "line " + std::to_string(i) + "\n";
+    const auto lines = render_reader(text, 80, 24);
+    std::string all;
+    for (const auto& l : lines) all += l + "\n";
+    INFO(all);
+    CHECK(all.find("line 0") != std::string::npos);     // opens at the top
+    CHECK(all.find("line 119") == std::string::npos);
+    // A thumb (▐, ▗ or ▝) sits in the gutter just inside the right border.
+    int thumb_rows = 0;
+    for (const auto& l : lines) {
+        auto last = l.find_last_not_of(' ');
+        if (last == std::string::npos) continue;
+        const std::string_view sv{l};
+        const auto border = sv.rfind("\xe2\x94\x82");   // │ frame
+        if (border == std::string_view::npos || border < 4) continue;
+        const auto before = sv.substr(0, border);
+        auto e = before.find_last_not_of(' ');
+        if (e == std::string_view::npos || e < 2) continue;
+        const auto cell = before.substr(e - 2, 3);
+        if (cell == "\xe2\x96\x90" || cell == "\xe2\x96\x97" || cell == "\xe2\x96\x9d")
+            ++thumb_rows;
+    }
+    CHECK(thumb_rows >= 1);
+}
