@@ -388,6 +388,19 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active,
         s.select    = [] { return Msg{SettingsListSubmitInput{}}; };
         s.filter_bs = [] { return Msg{SettingsListBackspace{}}; };
         s.filter_ch = [](char32_t c) { return Msg{SettingsListChar{c}}; };
+        s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
+            const auto* sk = std::get_if<SpecialKey>(&e.key);
+            if (!sk) return std::nullopt;
+            using To = SettingsListCursor::To;
+            switch (*sk) {
+                case SpecialKey::Left:   return Msg{SettingsListCursor{To::Left}};
+                case SpecialKey::Right:  return Msg{SettingsListCursor{To::Right}};
+                case SpecialKey::Home:   return Msg{SettingsListCursor{To::Home}};
+                case SpecialKey::End:    return Msg{SettingsListCursor{To::End}};
+                case SpecialKey::Delete: return Msg{SettingsListDelete{}};
+                default:                 return std::nullopt;
+            }
+        };
         return nav::translate(s, ev);
     }
     if (hub) {
@@ -962,8 +975,11 @@ std::optional<Msg> on_login(const ui::login::State& state, const KeyEvent& ev) {
         switch (std::get<SpecialKey>(ev.key)) {
             case SpecialKey::Enter:     return LoginSubmit{};
             case SpecialKey::Backspace: return LoginBackspace{};
+            case SpecialKey::Delete:    return LoginDelete{};
             case SpecialKey::Left:      return LoginCursorLeft{};
             case SpecialKey::Right:     return LoginCursorRight{};
+            case SpecialKey::Home:      return LoginCursorHome{};
+            case SpecialKey::End:       return LoginCursorEnd{};
             default: return std::nullopt;
         }
     }
@@ -1133,6 +1149,7 @@ std::optional<Msg> on_composer(ComposerKeyState s, const KeyEvent& ev) {
                 if (ev.mods.alt && s.text_empty && s.has_queued && !s.in_queue_peek)
                     return Msg{ComposerQueuePopLast{}};
                 return ComposerBackspace{};
+            case SpecialKey::Delete:    return ComposerDeleteForward{};
             case SpecialKey::Left:
                 // Ctrl+Left = jump-by-word. Mirrors readline / every
                 // text editor. Plain Left is per-character (chip-aware).

@@ -554,6 +554,17 @@ Cmd composer_update(Model& m, msg::ComposerMsg cm) {
             }
             return Cmd::none();
         },
+        [&](ComposerDeleteForward) -> Cmd {
+            // Mirror of Backspace: chip_next spans a whole placeholder, so
+            // Delete in front of an attachment removes the chip in one key.
+            const int n = static_cast<int>(m.ui.composer.text.size());
+            if (m.ui.composer.cursor < n) {
+                begin_edit(m.ui.composer);
+                const int q = ui::chip_next(m.ui.composer.text, m.ui.composer.cursor);
+                m.ui.composer.text.erase(m.ui.composer.cursor, q - m.ui.composer.cursor);
+            }
+            return Cmd::none();
+        },
         [&](ComposerEnter)  { return submit_message(m); },
         [&](ComposerSubmit) { return submit_message(m); },
         [&](ComposerNewline) -> Cmd {

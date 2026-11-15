@@ -22,6 +22,8 @@
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/panel/appearance.hpp"
+#include "agentty/runtime/panel/settings/categories.hpp"
+#include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/app/deps.hpp"
 
 using namespace agentty;
@@ -189,4 +191,80 @@ TEST_CASE("routing: every way ^/ arrives opens the model picker") {
         CHECK(press(m, ev));
         CHECK(m.ui.panel.get<pn::Models>() != nullptr);
     }
+}
+
+// The caret-based text inputs must all answer Delete (forward erase) and
+// Home/End, through the real router, not only the reducer.
+TEST_CASE("routing: Delete in the main prompt erases forward, a chip whole") {
+    install_stub_deps();
+    Model m;
+    m.ui.composer.text   = "caf\xc3\xa9!";   // 2-byte code point before '!'
+    m.ui.composer.cursor = 3;
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));
+    CHECK(m.ui.composer.text == "caf!");
+    CHECK(m.ui.composer.cursor == 3);
+    REQUIRE(press(m, special(maya::SpecialKey::End)));
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));   // at end: no-op
+    CHECK(m.ui.composer.text == "caf!");
+
+    Model c;
+    Attachment att;
+    att.kind = Attachment::Kind::Paste;
+    att.body.set_bytes("x");
+    c.ui.composer.attachments.push_back(std::move(att));
+    c.ui.composer.text   = "a" + attachment::make_placeholder(0) + "b";
+    c.ui.composer.cursor = 1;
+    REQUIRE(press(c, special(maya::SpecialKey::Delete)));
+    CHECK(c.ui.composer.text == "ab");
+    CHECK(c.ui.composer.cursor == 1);
+}
+
+TEST_CASE("routing: login text fields answer Delete, Home and End") {
+    install_stub_deps();
+    Model m;
+    m.ui.login = ui::login::ApiKeyInput{.key_input = "sk-\xc3\xa9x", .cursor = 0};
+    const auto field = [&] { return std::get<ui::login::ApiKeyInput>(m.ui.login); };
+    REQUIRE(press(m, special(maya::SpecialKey::End)));
+    CHECK(field().cursor == 6);
+    REQUIRE(press(m, special(maya::SpecialKey::Home)));
+    CHECK(field().cursor == 0);
+    REQUIRE(press(m, special(maya::SpecialKey::Right)));
+    REQUIRE(press(m, special(maya::SpecialKey::Right)));
+    REQUIRE(press(m, special(maya::SpecialKey::Right)));
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));   // the whole e-acute
+    CHECK(field().key_input == "sk-x");
+    CHECK(field().cursor == 3);
+    REQUIRE(press(m, special(maya::SpecialKey::End)));
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));   // at end: no-op
+    CHECK(field().key_input == "sk-x");
+}
+
+TEST_CASE("routing: the settings add prompt answers Delete, arrows, Home and End") {
+    install_stub_deps();
+    Model m = app::update(Model{}, Msg{OpenSettingsList{settings::Category::Plugins}}).first;
+    // `n` is the one-line add prompt (`a` on Plugins opens the add form).
+    maya::KeyEvent a;
+    a.key = maya::CharKey{U'n'};
+    REQUIRE(press(m, a));
+    const auto list = [&] { return m.ui.panel.get<pn::SettingsList>(); };
+    REQUIRE(list() != nullptr);
+    REQUIRE(list()->input_active);
+    for (char32_t c : std::u32string{U"abc"}) {
+        maya::KeyEvent ev;
+        ev.key = maya::CharKey{c};
+        REQUIRE(press(m, ev));
+    }
+    REQUIRE(press(m, special(maya::SpecialKey::Home)));
+    CHECK(list()->cursor == 0);
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));
+    CHECK(list()->input == "bc");
+    REQUIRE(press(m, special(maya::SpecialKey::Right)));
+    CHECK(list()->cursor == 1);
+    REQUIRE(press(m, special(maya::SpecialKey::Left)));
+    CHECK(list()->cursor == 0);
+    REQUIRE(press(m, special(maya::SpecialKey::End)));
+    CHECK(list()->cursor == 2);
+    REQUIRE(press(m, special(maya::SpecialKey::Delete)));   // at end: no-op
+    CHECK(list()->input == "bc");
+    CHECK(list()->input_active);
 }
