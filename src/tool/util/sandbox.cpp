@@ -406,6 +406,14 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     }
 #else
     for (const char* r : kSystemReadRoots) p.system_read_roots.emplace_back(r);
+#if defined(__linux__)
+    // /usr/lib32 (and Debian's /usr/lib/i386-linux-gnu) are already under
+    // the read-only /usr bind. Separate top-level multilib roots are optional.
+    for (const char* r : {"/lib32", "/libx32"}) {
+        std::error_code ec;
+        if (fs::is_directory(r, ec)) p.system_read_roots.emplace_back(r);
+    }
+#endif
     for (const char* f : kEtcReadable) p.etc_readable.emplace_back(f);
     if (cfg.fs_scope == sandbox_cfg::FsScope::Toolchain) {
         if (const char* home = std::getenv("HOME"); home && *home) {

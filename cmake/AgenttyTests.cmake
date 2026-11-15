@@ -310,8 +310,7 @@ target_compile_definitions(ws_bind_probe PRIVATE
 # exec_exit_probe: does a (sandboxed) command come back when it exits, or only
 # at its timeout? Same sources and rationale as ws_bind_probe; run by hand:
 #     cmake --build build --target exec_exit_probe && ./build/exec_exit_probe <dir> [on|off] [syscall_mode]
-add_executable(exec_exit_probe EXCLUDE_FROM_ALL
-    ${CMAKE_SOURCE_DIR}/tests/exec_exit_probe.cpp
+set(_AGENTTY_EXEC_SANDBOX_SOURCES
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
@@ -327,6 +326,9 @@ add_executable(exec_exit_probe EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/src/util/home_dir.cpp
     ${CMAKE_SOURCE_DIR}/src/util/user_root.cpp
     ${CMAKE_SOURCE_DIR}/src/util/teardown.cpp)
+add_executable(exec_exit_probe EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/exec_exit_probe.cpp
+    ${_AGENTTY_EXEC_SANDBOX_SOURCES})
 target_include_directories(exec_exit_probe PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(exec_exit_probe PRIVATE
     claybin nlohmann_json::nlohmann_json Threads::Threads maya::app)
@@ -339,6 +341,27 @@ if(TARGET maya::app)
 endif()
 target_compile_definitions(exec_exit_probe PRIVATE
     AGENTTY_MCP=0)
+
+# Real native Linux x86_64 multilib enforcement, not a plan/mock test.
+# Missing host multilib or sandbox capabilities are explicit CTest skips;
+# run sandbox_multilib_test --require to make those failures instead.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$"
+   AND NOT CMAKE_CROSSCOMPILING)
+    add_executable(sandbox_multilib_test
+        ${CMAKE_SOURCE_DIR}/tests/sandbox_multilib_test.cpp
+        ${_AGENTTY_EXEC_SANDBOX_SOURCES})
+    target_include_directories(sandbox_multilib_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(sandbox_multilib_test PRIVATE
+        claybin nlohmann_json::nlohmann_json Threads::Threads maya::app)
+    if(TARGET mcp::tools)
+        target_link_libraries(sandbox_multilib_test PRIVATE mcp::tools)
+    endif()
+    target_compile_definitions(sandbox_multilib_test PRIVATE AGENTTY_MCP=0)
+    agentty_test(sandbox_multilib_test MODE raw TIMEOUT 180 LABELS sandbox multilib)
+    add_test(NAME sandbox_multilib_test COMMAND sandbox_multilib_test)
+    set_tests_properties(sandbox_multilib_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 180 LABELS "sandbox;multilib")
+endif()
 
 # sandbox_audit: what does agentty ACTUALLY enforce on THIS host?
 #

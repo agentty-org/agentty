@@ -42,6 +42,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -66,6 +67,7 @@ extern "C" char** environ;
 #include "claybin/policy/profiles.hpp"
 
 #if defined(__linux__)
+#include "claybin/policy/profiles_i386.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "claybin/broker/notify.hpp"
@@ -272,6 +274,25 @@ namespace {
 
     // ── the read set, from the SHARED lists ───────────────────────────────
     for (const auto& root : p.system_read_roots) {
+#if defined(__linux__)
+        // A bind follows the SOURCE symlink and creates a real directory at
+        // the destination. Flattening /lib -> usr/lib makes the loader's
+        // ../lib32/ld-linux.so.2 resolve to /lib32 rather than /usr/lib32.
+        // Recreate only the well-known merged-/usr aliases; /usr is already
+        // read-only. Never follow an alias into an unrelated host directory.
+        if (root == "/bin" || root == "/sbin" || root == "/lib" ||
+            root == "/lib64" || root == "/lib32" || root == "/libx32") {
+            std::error_code ec;
+            const auto target = std::filesystem::read_symlink(root, ec);
+            if (!ec) {
+                const auto resolved = std::filesystem::canonical(root, ec);
+                if (!ec && resolved.string().starts_with("/usr/")) {
+                    d = std::move(d).symlink(target.string(), root);
+                    continue;
+                }
+            }
+        }
+#endif
         // /usr and /bin must exist for a shell to run at all; the rest are
         // best-effort, matching --ro-bind-try.
         if (root == "/usr" || root == "/bin")
@@ -520,6 +541,35 @@ namespace {
                             std::span<const std::uint32_t>{kFamilies},
                             clay::SysAction::errno_, 97 /* EAFNOSUPPORT */);
     }
+#endif
+#if defined(__linux__) && defined(__x86_64__)
+    // Enabling the second ABI is explicit in Claybin; never reinterpret native
+    // syscall numbers as compatibility numbers. A kernel without IA32 emulation
+    // still rejects i386 exec with ENOEXEC, without changing native execution.
+    auto compat = p.syscall_mode == 0 ? SyscallPolicy::everything()
+        : (p.syscall_mode == 2 && p.net_mode == 1
+            ? profiles_i386::compiler() : profiles_i386::compiler_with_network());
+    if (p.wx_protect) {
+        // Legacy mmap hides prot behind a pointer and cannot be inspected.
+        compat.deny(90, 38 /* ENOSYS */);
+        for (auto nr : {192u /* mmap2 */, 125u /* mprotect */, 380u /* pkey_mprotect */})
+            compat.deny_arg_all(nr, 2, 6, SysAction::errno_, 1);
+    } else {
+        for (auto nr : {192u, 125u, 380u}) compat.drop_arg_rules(nr, 2);
+    }
+    if (p.syscall_mode != 0) {
+        static constexpr std::uint32_t families[] = {1, 2, 10};
+        compat.allow_arg32_only(359 /* socket */, 0, std::span<const std::uint32_t>{families},
+                               SysAction::errno_, 97);
+        compat.allow_arg32_only(360 /* socketpair */, 0, std::span<const std::uint32_t>{families},
+                               SysAction::errno_, 97);
+        // socketcall hides the socket family in guest memory; allowing it would
+        // bypass the family filter above. Modern i386 libc uses direct calls.
+        compat.deny(102 /* socketcall */, 38);
+    }
+    // Compatibility ptrace/signal calls remain denied, not sent to a broker
+    // whose syscall decoding currently understands only the native ABI.
+    d = std::move(d).syscall_profile_i386(std::move(compat));
 #endif
     d = std::move(d).syscall_profile(std::move(sp));
 
