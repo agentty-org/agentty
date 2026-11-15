@@ -650,6 +650,28 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
             o->cursor = p;
             return Cmd::none();
         },
+        [&](SettingsListDelete) -> Cmd {
+            auto* o = m.ui.panel.get<pn::SettingsList>();
+            if (!o || !o->input_active
+                || o->cursor >= static_cast<int>(o->input.size()))
+                return Cmd::none();
+            const int q = ui::utf8_next(o->input, o->cursor);
+            o->input.erase(static_cast<std::size_t>(o->cursor),
+                           static_cast<std::size_t>(q - o->cursor));
+            return Cmd::none();
+        },
+        [&](SettingsListCursor& e) -> Cmd {
+            auto* o = m.ui.panel.get<pn::SettingsList>();
+            if (!o || !o->input_active) return Cmd::none();
+            using To = SettingsListCursor::To;
+            switch (e.to) {
+                case To::Left:  o->cursor = ui::utf8_prev(o->input, o->cursor); break;
+                case To::Right: o->cursor = ui::utf8_next(o->input, o->cursor); break;
+                case To::Home:  o->cursor = 0; break;
+                case To::End:   o->cursor = static_cast<int>(o->input.size()); break;
+            }
+            return Cmd::none();
+        },
         [&](SettingsListCancelInput) -> Cmd {
             auto* o = m.ui.panel.get<pn::SettingsList>();
             if (!o) return Cmd::none();

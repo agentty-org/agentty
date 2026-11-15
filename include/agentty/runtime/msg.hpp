@@ -57,6 +57,9 @@ namespace agentty {
 // ── Composer ─────────────────────────────────────────────────────────────
 struct ComposerCharInput { char32_t ch; };
 struct ComposerBackspace {};
+// Forward Delete: removes the code point (or whole attachment chip) after
+// the caret; the caret stays put.
+struct ComposerDeleteForward {};
 struct ComposerEnter {};
 struct ComposerNewline {};
 struct ComposerSubmit {};
@@ -988,9 +991,12 @@ struct AccountRemove {};
 struct LoginPickMethod  { char32_t key; };          // '1' = ApiKey, '2' = OAuth, '3' = ChatGPT
 struct LoginCharInput   { char32_t ch; };
 struct LoginBackspace   {};
+struct LoginDelete      {};
 struct LoginPaste       { std::string text; };
 struct LoginCursorLeft  {};
 struct LoginCursorRight {};
+struct LoginCursorHome  {};
+struct LoginCursorEnd   {};
 struct LoginSubmit      {};
 // User pressed the "copy URL to clipboard" key while the OAuthCode
 // modal is up. The reducer issues a cmd::write_clipboard with
@@ -1225,6 +1231,9 @@ struct PluginEdited {
     bool        parse_error    = false;
 };
 struct SettingsListBackspace  {};
+// Add prompt caret editing: forward Delete, and caret moves.
+struct SettingsListDelete     {};
+struct SettingsListCursor     { enum class To { Left, Right, Home, End }; To to; };
 // `p` on a plugin's tool row: pin it (always loaded) or unpin it (#98).
 struct SettingsListPin        {};
 // → / ← on Plugins: show or hide a server's tools.
@@ -1435,7 +1444,7 @@ struct GitSignalsRefreshed {};
 namespace msg {
 
 using ComposerMsg = std::variant<
-    ComposerCharInput, ComposerBackspace, ComposerEnter, ComposerNewline,
+    ComposerCharInput, ComposerBackspace, ComposerDeleteForward, ComposerEnter, ComposerNewline,
     ComposerSubmit, ComposerToggleExpand, ComposerToggleLoop,
     ComposerCursorLeft, ComposerCursorRight, ComposerCursorHome, ComposerCursorEnd,
     ComposerSlashMove, ComposerSlashComplete, ComposerSlashDismiss, SlashPromptRendered,
@@ -1546,6 +1555,7 @@ using SettingsListMsg = std::variant<
     SettingsListEditOpen,
     SettingsListChar, SettingsListPaste, PluginsUpdated, PluginEdited,
     SettingsListBackspace, SettingsListSubmitInput, SettingsListCancelInput,
+    SettingsListDelete, SettingsListCursor,
     SettingsAddDone>;
 
 using ForkMsg = std::variant<
@@ -1557,8 +1567,9 @@ using TodoMsg = std::variant<
 using LoginMsg = std::variant<
     OpenLogin, CloseLogin, LoginBack, SignOut,
     OpenAccounts, AccountMove, AccountSelect, AccountRemove,
-    LoginPickMethod, LoginCharInput, LoginBackspace,
-    LoginPaste, LoginCursorLeft, LoginCursorRight, LoginSubmit,
+    LoginPickMethod, LoginCharInput, LoginBackspace, LoginDelete,
+    LoginPaste, LoginCursorLeft, LoginCursorRight,
+    LoginCursorHome, LoginCursorEnd, LoginSubmit,
     LoginCopyAuthUrl, LoginCopyCode, LoginOpenBrowserAgain,
     LoginExchanged, LoginOAuthMinted, CodexDeviceCodeReady, CodexLoginDone,
     DeviceCodeReady, DeviceLoginDone, TokenRefreshed, OAuthRefreshNotDue,

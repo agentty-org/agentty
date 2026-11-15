@@ -906,6 +906,40 @@ Cmd login_paste(Model& m, std::string text) {
     return Cmd::none();
 }
 
+// Every editable login field: (text, caret). Lets Delete/Home/End share one
+// body instead of repeating the three-state visit per key.
+template <class F>
+void with_login_field(Model& m, F&& f) {
+    std::visit(overload{
+        [&](login::OAuthCode& s)       { f(s.code_input, s.cursor); },
+        [&](login::ApiKeyInput& s)     { f(s.key_input, s.cursor); },
+        [&](login::CustomHostInput& s) { f(s.host_input, s.cursor); },
+        [](auto&) {},
+    }, m.ui.login);
+}
+
+Cmd login_delete(Model& m) {
+    with_login_field(m, [](std::string& text, int& cursor) {
+        if (cursor >= static_cast<int>(text.size())) return;
+        const int q = ui::utf8_next(text, cursor);
+        text.erase(static_cast<std::size_t>(cursor),
+                   static_cast<std::size_t>(q - cursor));
+    });
+    return Cmd::none();
+}
+
+Cmd login_cursor_home(Model& m) {
+    with_login_field(m, [](std::string&, int& cursor) { cursor = 0; });
+    return Cmd::none();
+}
+
+Cmd login_cursor_end(Model& m) {
+    with_login_field(m, [](std::string& text, int& cursor) {
+        cursor = static_cast<int>(text.size());
+    });
+    return Cmd::none();
+}
+
 Cmd login_cursor_left(Model& m) {
     std::visit(overload{
         [](login::OAuthCode& s) {
@@ -1390,6 +1424,9 @@ Cmd login_update(Model& m, msg::LoginMsg lm) {
         [&](LoginPaste& e)          -> Cmd { return login_paste(m, std::move(e.text)); },
         [&](LoginCursorLeft)        -> Cmd { return login_cursor_left(m); },
         [&](LoginCursorRight)       -> Cmd { return login_cursor_right(m); },
+        [&](LoginDelete)            -> Cmd { return login_delete(m); },
+        [&](LoginCursorHome)        -> Cmd { return login_cursor_home(m); },
+        [&](LoginCursorEnd)         -> Cmd { return login_cursor_end(m); },
         [&](LoginSubmit)            -> Cmd { return login_submit(m); },
         [&](LoginCopyAuthUrl)       -> Cmd { return login_copy_auth_url(m); },
         [&](LoginCopyCode)          -> Cmd { return login_copy_code(m); },
