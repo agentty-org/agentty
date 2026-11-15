@@ -15,6 +15,7 @@ Library read_library(Io io) {
     l.commands        = tools::commands::all(io);
     l.hooks_file      = tools::hooks::active_file(io);
     l.hooks_pending   = !l.hooks_file.empty() && tools::hooks::pending_approval(io);
+    l.hooks_pre_tool  = tools::hooks::pre_tool_matchers(io);
     try { l.project_agents = tools::project_agent_names(); } catch (...) {}
     l.loaded          = true;
     return l;

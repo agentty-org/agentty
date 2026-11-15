@@ -25,6 +25,7 @@
 #include "agentty/runtime/view/helpers.hpp"   // pretty_model_label
 #include "agentty/runtime/view/thread/turn/turn.hpp"   // turn_run_end
 #include "agentty/store/store.hpp"
+#include "agentty/tool/hooks.hpp"   // PreToolDecision::Permission
 #include "agentty/tool/spec.hpp"
 #include "agentty/tool/util/utf8.hpp"
 #include "agentty/util/logx.hpp"
@@ -729,6 +730,12 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             apply_tool_output(m, e.id, std::move(e.result), std::move(e.change),
                               std::move(e.changes), std::move(e.images),
                               e.exec_seq);
+            if (e.hook_stop) {
+                m.s.hook_stop = true;
+                m.s.hook_stop_reason = std::move(e.hook_stop_reason);
+            }
+            Cmd hook_toast = e.hook_message.empty() ? Cmd::none()
+                : set_status_toast(m, "hook: " + e.hook_message, std::chrono::seconds{5});
             // If the Ctrl+O viewer is open, refresh it so the Live row settles
             // into a finished entry the instant this tool completes.
             resync_live_tool_viewer(m);
@@ -775,14 +782,10 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             // the output; StreamFinished → finalize_turn runs the normal
             // kick and finds this tool already terminal.
             if (m.s.is_streaming()) {
-                if (host_cmd.is_none()) return Cmd::none();
-                return host_cmd;
+                return Cmd::batch(std::move(hook_toast), std::move(host_cmd));
             }
             auto kick = cmd::kick_pending_tools(m);
-            if (host_cmd.is_none())
-                return kick;
-            return Cmd::batch(
-                std::move(kick), std::move(host_cmd));
+            return Cmd::batch(std::move(kick), std::move(host_cmd), std::move(hook_toast));
         },
 
         // ── Permission ──────────────────────────────────────────────
@@ -817,6 +820,35 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             m.d.pending_permission.reset();
             auto cmd = cmd::kick_pending_tools(m);
             return cmd;
+        },
+        // ── PreToolUse hooks reported ── apply their verdict, then kick so
+        // the call goes on to the permission check and dispatch.
+        [&](PreToolHooksDone& e) -> Cmd {
+            using P = tools::hooks::PreToolDecision::Permission;
+            const auto perm = static_cast<P>(e.permission);
+            bool found = false;
+            with_live_tool(m, e.id, [&](ToolUse& tc) {
+                if (!tc.is_pending() || tc.hook_stage != ToolUse::HookStage::Running) return;
+                found = true;
+                tc.hook_stage = ToolUse::HookStage::Done;
+                if (e.updated_args) tc.args = std::move(*e.updated_args);
+                tc.hook_verdict = perm == P::Allow ? ToolUse::HookVerdict::Allow
+                                : perm == P::Ask   ? ToolUse::HookVerdict::Ask
+                                                   : ToolUse::HookVerdict::None;
+                tc.hook_reason  = e.reason;
+                tc.hook_context = std::move(e.additional_context);
+            });
+            if (!found) return Cmd::none();   // cancelled or settled meanwhile
+            if (perm == P::Deny)
+                // The model reads the reason as the tool's error and adapts.
+                mark_tool_rejected(m, e.id, "blocked by PreToolUse hook: " + e.reason);
+            if (e.stop) {
+                m.s.hook_stop = true;
+                m.s.hook_stop_reason = e.stop_reason;
+            }
+            Cmd toast = e.system_message.empty() ? Cmd::none()
+                      : set_status_toast(m, "hook: " + e.system_message, std::chrono::seconds{5});
+            return Cmd::batch(std::move(toast), cmd::kick_pending_tools(m));
         },
         [&](PermissionApproveAlways) -> Cmd {
             if (!m.d.pending_permission) return Cmd::none();

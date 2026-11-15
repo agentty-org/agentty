@@ -205,6 +205,16 @@ inline constexpr std::string_view kDenialTag = "[sandbox] ";
     std::size_t max_bytes,
     std::chrono::seconds timeout);
 
+// The same, with bytes fed to the command's stdin and stderr kept apart in
+// SubprocessResult::err. For hooks, which read a JSON payload on stdin and
+// answer with JSON on stdout. No denial note: the caller decides what the
+// model sees.
+[[nodiscard]] SubprocessResult run_shell_command_io(
+    std::string_view cmd,
+    std::string stdin_data,
+    std::size_t max_bytes,
+    std::chrono::seconds timeout);
+
 // argv-form variant for callers that already build a typed argv (e.g.
 // `diagnostics` invoking `cmake --build build`). Same wrap policy as
 // the shell variant: the sandbox applied when active, no-op otherwise.
@@ -246,7 +256,9 @@ inline constexpr std::string_view kDenialTag = "[sandbox] ";
     const std::vector<std::string>& argv, std::string_view cwd, int out_fd,
     const std::vector<std::string>& extra_roots = {},
     const handoff::TrustedSnapshot* trusted = nullptr,
-    const std::vector<std::pair<std::string, std::string>>& env = {});
+    const std::vector<std::pair<std::string, std::string>>& env = {},
+    int err_fd = -1,    // -1: stderr shares out_fd
+    int in_fd = -1);    // -1: stdin is /dev/null
 
 #if defined(__APPLE__)
 // macOS counterpart of spawn_in_sandbox for the jaal exec path. jaal cannot

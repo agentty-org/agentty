@@ -619,6 +619,11 @@ struct StreamState {
     // only ever true when phase != Idle (the transition is paired
     // with the launch of the compaction stream).
     bool compacting = false;
+    // A hook answered continue:false. The agent run ends once the current
+    // tools settle, instead of sending their results for another turn.
+    // Cleared when the user sends the next message.
+    bool        hook_stop = false;
+    std::string hook_stop_reason;
     // Smart Mode CASCADE feedback (session-scoped, not persisted). The
     // complexity heuristic sets each turn's effort FLOOR upfront; this signed
     // bias, in effort-steps, is the loop's correction on top of it — the

@@ -285,6 +285,16 @@ struct ToolUse {
     // mcp reload) cannot swap a different tool under an approved name.
     // 0 means nothing was recorded and the check is skipped.
     std::uint64_t  approved_def_hash = 0;
+    // PreToolUse hooks for this call: not run yet, running on a worker, or
+    // done. Runtime-only, not persisted (a reloaded call is terminal).
+    enum class HookStage : std::uint8_t { None, Running, Done };
+    HookStage      hook_stage = HookStage::None;
+    // What they decided. Ask forces the permission prompt even when the
+    // profile would run the call; Allow skips it.
+    enum class HookVerdict : std::uint8_t { None, Allow, Ask };
+    HookVerdict    hook_verdict = HookVerdict::None;
+    std::string    hook_reason;    // for Ask: shown in the prompt
+    std::string    hook_context;   // additionalContext: added to the result
     Status         status   = Pending{};
 
     // ── State predicates ─────────────────────────────────────────────────

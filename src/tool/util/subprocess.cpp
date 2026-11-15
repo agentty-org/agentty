@@ -55,12 +55,13 @@ SubprocessResult run_via_child(std::vector<std::string> argv, const SubprocessOp
     }();
     run.max_output_bytes = opts.max_bytes;
     run.stop_requested   = opts.stop_requested;
+    run.stdin_data       = opts.stdin_data;
+    run.split_stderr     = opts.split_stderr;
     if (opts.on_progress)
         run.on_progress = [&opts](std::string_view raw) { opts.on_progress(clean_capture(std::string{raw})); };
-#if !defined(_WIN32)
     if (opts.spawner) {
-        run.spawn_adopted = [&opts](int out_fd) {
-            auto c = opts.spawner(opts, out_fd);
+        run.spawn_adopted = [&opts](int out_fd, int err_fd, int in_fd) {
+            auto c = opts.spawner(opts, out_fd, err_fd, in_fd);
             AdoptedChild a;
             a.pid   = c.pid;
             a.pidfd = c.pidfd;
@@ -72,13 +73,13 @@ SubprocessResult run_via_child(std::vector<std::string> argv, const SubprocessOp
             return a;
         };
     }
-#endif
 
     auto c = run_child(run);
     SubprocessResult r;
     r.started     = c.started;
     r.start_error = c.start_error;
     r.output      = clean_capture(std::move(c.output));
+    if (opts.split_stderr) r.err = clean_capture(std::move(c.err));
     r.truncated   = c.truncated;
     r.timed_out   = c.timed_out_idle || c.timed_out_wall;
     r.hard_capped = c.timed_out_wall;

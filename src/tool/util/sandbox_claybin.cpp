@@ -664,7 +664,7 @@ Report describe(const Posture& p) {
 }
 
 SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdout_fd,
-                        int stderr_fd) {
+                        int stderr_fd, int stdin_fd) {
     SpawnResult out;
 
     auto sealed = build_policy(p);
@@ -697,6 +697,9 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     req.envp = envp.data();
     req.stdout_fd = stdout_fd;
     req.stderr_fd = stderr_fd;
+    // /dev/null unless the caller piped something in. -1 would inherit
+    // agentty's own terminal, and nothing a tool runs should read that.
+    req.stdin_fd = stdin_fd >= 0 ? stdin_fd : ::clay::macos::SpawnRequest::kDevNull;
     if (!p.cwd.empty())
         req.workdir = p.cwd;
     else if (!p.workspace.empty())
@@ -788,7 +791,8 @@ Report describe(const Posture& p) {
 
 SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in,
                        int stdout_fd, int stderr_fd,
-                       const std::vector<std::pair<std::string, std::string>>& env) {
+                       const std::vector<std::pair<std::string, std::string>>& env,
+                       int stdin_fd) {
     SpawnResult out;
 
     if (argv_in.empty()) {
@@ -879,8 +883,10 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     // below cover the spawn_shell path where no map was provided: inherit
     // stdout/stderr, NUL on stdin.
     req.stdin_fd = ::clay::windows::SpawnRequest::kDevNull;
-    if (stdout_fd >= 0 || stderr_fd >= 0) {
+    if (stdout_fd >= 0 || stderr_fd >= 0 || stdin_fd >= 0) {
         int n = 0;
+        if (stdin_fd >= 0)
+            req.fds[n++] = {reinterpret_cast<void*>(static_cast<intptr_t>(stdin_fd)), 0};
         if (stdout_fd >= 0)
             req.fds[n++] = {reinterpret_cast<void*>(static_cast<intptr_t>(stdout_fd)), 1};
         if (stderr_fd >= 0)
@@ -927,8 +933,9 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
 }
 
 SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdout_fd,
-                        int stderr_fd) {
-    return spawn_argv(p, {"cmd.exe", "/d", "/s", "/c", shell_cmd}, stdout_fd, stderr_fd);
+                        int stderr_fd, int stdin_fd) {
+    return spawn_argv(p, {"cmd.exe", "/d", "/s", "/c", shell_cmd}, stdout_fd, stderr_fd,
+                      {}, stdin_fd);
 }
 
 #else  // __linux__
@@ -1006,7 +1013,8 @@ Report describe(const Posture& p) {
 
 SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in,
                        int stdout_fd, int stderr_fd,
-                       const std::vector<std::pair<std::string, std::string>>& env) {
+                       const std::vector<std::pair<std::string, std::string>>& env,
+                       int stdin_fd) {
     SpawnResult out;
 
     if (argv_in.empty()) {
@@ -1088,7 +1096,8 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     Command cmd{program.c_str(), argv.data(), envp.data()};
     // stdin from /dev/null explicitly rather than inherited -- a guest that can
     // read the user's terminal can prompt them, and nothing a tool runs should.
-    cmd.stdin_fd = Command::kDevNull;
+    // A caller with something to feed it (a hook's payload) passes a pipe.
+    cmd.stdin_fd = stdin_fd >= 0 ? stdin_fd : Command::kDevNull;
     cmd.stdout_fd = stdout_fd;
     cmd.stderr_fd = stderr_fd;
 
@@ -1231,8 +1240,8 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
 // genuine convenience rather than a second implementation -- there is one
 // spawn path and it is above.
 SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdout_fd,
-                        int stderr_fd) {
-    return spawn_argv(p, {"/bin/sh", "-c", shell_cmd}, stdout_fd, stderr_fd);
+                        int stderr_fd, int stdin_fd) {
+    return spawn_argv(p, {"/bin/sh", "-c", shell_cmd}, stdout_fd, stderr_fd, {}, stdin_fd);
 }
 
 #endif  // __APPLE__ / __linux__

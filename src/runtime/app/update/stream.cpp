@@ -35,6 +35,7 @@
 #include "agentty/runtime/view/cache.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/tool/spec.hpp"
+#include "agentty/tool/hooks.hpp"   // has_pre_tool: no speculative start past a hook
 #include "agentty/tool/skills.hpp"   // active_in: derived "already active" set
 #include "agentty/tool/tool.hpp"   // DynamicDispatch::needs_permission (speculative dispatch)
 #include <maya/widget/markdown.hpp>
@@ -1621,7 +1622,12 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             if (m.s.is_streaming() && !m.s.compacting
                 && !m.d.pending_permission) {
                 if (auto* tcp2 = find_streaming_tool(e.id);
-                    tcp2 && tcp2->is_pending() && !tcp2->args.is_null()) {
+                    tcp2 && tcp2->is_pending() && !tcp2->args.is_null()
+                    // A PreToolUse hook gets its say first (it may rewrite
+                    // or deny), so a call it could match isn't run early.
+                    && m.ui.library.loaded
+                    && !tools::hooks::pre_tool_matches(m.ui.library.hooks_pre_tool,
+                                                       tcp2->name.value)) {
                     auto& tc2 = *tcp2;
                     const auto def = tools::find(tc2.name.value);
                     const bool read_only =

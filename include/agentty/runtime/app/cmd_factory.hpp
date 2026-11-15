@@ -122,6 +122,11 @@ void soft_trim_to_ceiling(std::vector<Message>& v, int ceiling);
 // ToolUse::Running and pass the same value to run_tool.
 [[nodiscard]] std::uint64_t next_tool_exec_seq() noexcept;
 
+// Run the PreToolUse hooks for one pending call on a worker; replies with
+// PreToolHooksDone. kick_pending_tools starts it before the permission check.
+[[nodiscard]] Cmd run_pre_tool_hooks(ToolCallId id, ToolName tool_name,
+                                     nlohmann::json args, std::string conversation);
+
 [[nodiscard]] Cmd run_tool(ToolCallId id,
                                       ToolName tool_name,
                                       nlohmann::json args,

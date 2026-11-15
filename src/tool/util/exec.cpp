@@ -41,6 +41,12 @@
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <cerrno>
+#  include <cstdlib>      // mkstemp
+#  include <filesystem>
+#endif
+#if defined(__linux__)
+#  include <sys/mman.h>   // MFD_CLOEXEC
+#  include <sys/syscall.h>
 #endif
 
 namespace agentty::tools::util {
@@ -57,6 +63,7 @@ constexpr std::uint64_t kExitToken = 1;
 constexpr std::uint64_t kOutToken  = 2;
 constexpr std::uint64_t kBrokerToken = 3;
 constexpr std::uint64_t kInToken   = 4;
+constexpr std::uint64_t kErrToken  = 5;
 
 // AGENTTY_STOP_TRACE=1 logs the exec stop sequence to stderr, each line
 // prefixed with ms since `since`.
@@ -91,7 +98,7 @@ void stop_trace(clock_t_::time_point since, const char* fmt, ...) {
 /// a cgroup -- none of it expressible as "fork then exec" -- so it spawns,
 /// and run_child adopts the result. After that line the two paths are the
 /// same object with the same conformance suite behind it.
-[[nodiscard]] std::function<AdoptedChild(int)>
+[[nodiscard]] std::function<AdoptedChild(int, int, int)>
 sandbox_spawner(const std::vector<std::string>& argv, const std::string& cwd,
                 std::vector<std::string> extra_roots = {},
                 const handoff::TrustedSnapshot* trusted = nullptr,
@@ -100,8 +107,10 @@ sandbox_spawner(const std::vector<std::string>& argv, const std::string& cwd,
     if (sb::is_active() && sb::detected_backend() == sb::Backend::Claybin) {
         // `trusted` is the dispatcher's, alive for the whole call; the spawn
         // runs inside that call (start_child), never later.
-        return [argv, cwd, extra_roots, trusted, env = std::move(env)](int out_fd) {
-            auto r = sb::spawn_in_sandbox(argv, cwd, out_fd, extra_roots, trusted, env);
+        return [argv, cwd, extra_roots, trusted, env = std::move(env)](int out_fd, int err_fd,
+                                                                      int in_fd) {
+            auto r = sb::spawn_in_sandbox(argv, cwd, out_fd, extra_roots, trusted, env,
+                                          err_fd, in_fd);
             AdoptedChild c;
             if (!r.started) { c.error = r.start_error; return c; }
             c.pid            = r.pid;
@@ -128,36 +137,75 @@ struct started {
 };
 
 /// Spawn, or let the sandbox spawn and adopt. stdout and stderr share one
-/// pipe: the interleaving a terminal would show.
+/// pipe (the interleaving a terminal would show) unless split_stderr; stdin
+/// is /dev/null unless stdin_data is set.
 [[nodiscard]] std::expected<started, std::string>
 start_child(const ChildRun& run) {
     if (run.argv.empty()) return std::unexpected(std::string{"empty command"});
 #if !defined(_WIN32)
     if (run.spawn_adopted) {
-        int fds[2];
+        auto make_pipe = [](int fds[2]) -> bool {
 #if defined(__linux__)
-        if (::pipe2(fds, O_CLOEXEC) != 0)
-            return std::unexpected(std::string{"pipe: "} + std::strerror(errno));
+            return ::pipe2(fds, O_CLOEXEC) == 0;
 #else
-        // No pipe2 on macOS/BSD: set CLOEXEC after the fact. The race with a
-        // concurrent fork is the same one every non-Linux spawner accepts;
-        // jaal closes every fd above stderr in the child anyway.
-        if (::pipe(fds) != 0)
-            return std::unexpected(std::string{"pipe: "} + std::strerror(errno));
-        ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-        ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+            // No pipe2 on macOS/BSD: set CLOEXEC after the fact. The race
+            // with a concurrent fork is the same one every non-Linux spawner
+            // accepts; jaal closes every fd above stderr in the child anyway.
+            if (::pipe(fds) != 0) return false;
+            ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+            ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+            return true;
 #endif
-        auto a = run.spawn_adopted(fds[1]);
-        ::close(fds[1]);
+        };
+        int out[2] = {-1, -1}, err[2] = {-1, -1}, in[2] = {-1, -1};
+        auto close_all = [&] { for (int f : {out[0], out[1], err[0], err[1], in[0], in[1]})
+                                   if (f >= 0) ::close(f); };
+        if (!make_pipe(out) || (run.split_stderr && !make_pipe(err))) {
+            const std::string e = std::string{"pipe: "} + std::strerror(errno);
+            close_all();
+            return std::unexpected(e);
+        }
+        // stdin is a FILE holding the data, not a pipe. claybin's setup
+        // processes never exec, so they keep a copy of every descriptor we had
+        // at spawn time, and a pipe's write end held there means the guest
+        // never reads EOF. A file has no write end. It also can't fill up.
+        if (!run.stdin_data.empty()) {
+#if defined(__linux__)
+            in[0] = static_cast<int>(::syscall(SYS_memfd_create, "agentty-stdin", MFD_CLOEXEC));
+#endif
+            if (in[0] < 0) {
+                std::string tmpl = (std::filesystem::temp_directory_path() / "agentty-stdin-XXXXXX").string();
+                in[0] = ::mkstemp(tmpl.data());
+                if (in[0] >= 0) {
+                    ::unlink(tmpl.c_str());
+                    ::fcntl(in[0], F_SETFD, FD_CLOEXEC);
+                }
+            }
+            bool ok = in[0] >= 0;
+            for (std::size_t off = 0; ok && off < run.stdin_data.size();) {
+                const auto n = ::write(in[0], run.stdin_data.data() + off, run.stdin_data.size() - off);
+                if (n > 0) off += static_cast<std::size_t>(n);
+                else if (!(n < 0 && errno == EINTR)) ok = false;
+            }
+            if (!ok || ::lseek(in[0], 0, SEEK_SET) != 0) {
+                const std::string e = std::string{"stdin: "} + std::strerror(errno);
+                close_all();
+                return std::unexpected(e);
+            }
+        }
+        auto a = run.spawn_adopted(out[1], run.split_stderr ? err[1] : out[1], in[0]);
+        // The child has its copies; ours go now, or the reads never see EOF.
+        for (int* f : {&out[1], &err[1], &in[0]}) if (*f >= 0) { ::close(*f); *f = -1; }
         if (!a.error.empty() || a.pid <= 0) {
-            ::close(fds[0]);
+            close_all();
             return std::unexpected(a.error.empty() ? std::string{"sandbox did not start"} : a.error);
         }
         pf::posix_process::adopted_child c;
         c.pid             = a.pid;
         c.pidfd           = a.pidfd;
-        c.stdout_fd       = fds[0];
-        c.merged          = true;
+        c.stdout_fd       = out[0];
+        c.stderr_fd       = err[0];
+        c.merged          = !run.split_stderr;
         c.leads_own_group = a.leads_own_group;
         auto adopted = pf::posix_process::adopt(c);
         if (!adopted) return std::unexpected(std::string{adopted.error().what});
@@ -169,32 +217,44 @@ start_child(const ChildRun& run) {
 
 #if defined(_WIN32)
     if (run.spawn_adopted) {
-        // One anonymous pipe; the sandbox gets the write end duplicated
-        // inheritable, we keep the read end. Same shape as the posix arm --
-        // one merged stream, the interleaving a terminal would show -- but
-        // with HANDLEs, because that is what every windows API takes.
+        // Anonymous pipes; the sandbox gets the child ends duplicated
+        // inheritable, we keep ours. Same shape as the posix arm, with
+        // HANDLEs, because that is what every windows API takes.
         SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-        HANDLE out_r = nullptr, out_w = nullptr;
-        if (!::CreatePipe(&out_r, &out_w, &sa, 0))
-            return std::unexpected(std::string{"pipe: "} +
-                                   std::to_string(::GetLastError()));
-        auto a = run.spawn_adopted(
-            static_cast<int>(reinterpret_cast<intptr_t>(out_w)));
-        // the spawner duplicated what it needed; OUR write end goes now, or
+        HANDLE out_r = nullptr, out_w = nullptr, err_r = nullptr, err_w = nullptr,
+               in_r = nullptr, in_w = nullptr;
+        auto close_all = [&] { for (HANDLE h : {out_r, out_w, err_r, err_w, in_r, in_w})
+                                   if (h) ::CloseHandle(h); };
+        if (!::CreatePipe(&out_r, &out_w, &sa, 0)
+            || (run.split_stderr && !::CreatePipe(&err_r, &err_w, &sa, 0))
+            || (!run.stdin_data.empty() && !::CreatePipe(&in_r, &in_w, &sa, 0))) {
+            const std::string e = std::string{"pipe: "} + std::to_string(::GetLastError());
+            close_all();
+            return std::unexpected(e);
+        }
+        // Our ends must not leak into the child.
+        for (HANDLE h : {out_r, err_r, in_w})
+            if (h) ::SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+        auto as_int = [](HANDLE h) { return h ? static_cast<int>(reinterpret_cast<intptr_t>(h)) : -1; };
+        auto a = run.spawn_adopted(as_int(out_w), as_int(run.split_stderr ? err_w : out_w),
+                                   as_int(in_r));
+        // the spawner duplicated what it needed; the child ends go now, or
         // the reader below never sees EOF.
-        ::CloseHandle(out_w);
+        for (HANDLE* h : {&out_w, &err_w, &in_r}) if (*h) { ::CloseHandle(*h); *h = nullptr; }
         if (a.error.empty() && a.pid <= 0) a.error = "sandbox did not start";
         if (!a.error.empty()) {
-            ::CloseHandle(out_r);
+            close_all();
             return std::unexpected(a.error);
         }
         pf::windows_process::adopted_child c;
         c.pid         = a.pid;
         c.process     = reinterpret_cast<void*>(static_cast<intptr_t>(a.pidfd));
         c.stdout_pipe = out_r;
+        c.stderr_pipe = err_r;
+        c.stdin_pipe  = in_w;
         auto adopted = pf::windows_process::adopt(std::move(c));
         if (!adopted) {
-            ::CloseHandle(out_r);
+            close_all();
             return std::unexpected(std::string{adopted.error().what});
         }
         return started{std::move(*adopted), -1 /*no seccomp on windows*/,
@@ -208,7 +268,7 @@ start_child(const ChildRun& run) {
     spec.windows_command_line = run.windows_command_line;
     spec.cwd          = run.cwd;
     spec.env          = run.env;
-    spec.merge_stderr = true;
+    spec.merge_stderr = !run.split_stderr;
     spec.new_session  = true;
     if (!run.stdin_data.empty()) spec.stdin_from = pf::stream_to::pipe;
     auto p = process_t::spawn(spec);
@@ -788,7 +848,8 @@ ChildResult run_child(const ChildRun& run) {
         stamp();
         return r;
     }
-    std::optional<reactor_t::registration> out_reg, in_reg, broker_reg;
+    std::optional<reactor_t::registration> out_reg, err_reg, in_reg, broker_reg;
+    bool err_truncated = false;
 #if defined(_WIN32)
     ::agentty::util::WorkerGroup feeder{"exec.stdin_feed"};   // destroyed after the reap
     bool feeder_started = false;   // a feeder job is running, so there's something to join
@@ -796,6 +857,10 @@ ChildResult run_child(const ChildRun& run) {
     if (auto h = proc.stdout_handle())
         if (auto reg = reactor->watch(h->get(), pf::interest::read, kOutToken))
             out_reg = std::move(*reg);
+    if (run.split_stderr)
+        if (auto h = proc.stderr_handle())
+            if (auto reg = reactor->watch(h->get(), pf::interest::read, kErrToken))
+                err_reg = std::move(*reg);
 #if !defined(_WIN32)
     // The seccomp broker, when the policy delegates syscalls. It MUST be
     // serviced: the kernel blocks the guest until someone answers.
@@ -902,6 +967,12 @@ ChildResult run_child(const ChildRun& run) {
                 // Hung up and drained: stop watching, or the reactor reports
                 // the hangup on every wait and this loop spins until exit.
                 else if (e.hangup) out_reg.reset();
+            } else if (e.token == kErrToken && (e.readable || e.hangup)) {
+                std::size_t got = 0;
+                if (auto h = proc.stderr_handle())
+                    got = drain_into(*h, r.err, run.max_output_bytes, err_truncated);
+                if (got > 0) saw_output = true;
+                else if (e.hangup) err_reg.reset();
             } else if (e.token == kExitToken && (e.readable || e.hangup)) {
                 exited = true;
             } else if (e.token == kInToken && (e.writable || e.hangup)) {
@@ -969,6 +1040,9 @@ ChildResult run_child(const ChildRun& run) {
     stop_trace(started_at, "loop ended");
     if (auto h = proc.stdout_handle())
         drain_into(*h, r.output, run.max_output_bytes, r.truncated);
+    if (run.split_stderr)
+        if (auto h = proc.stderr_handle())
+            drain_into(*h, r.err, run.max_output_bytes, err_truncated);
     stop_trace(started_at, "drained");
     progress(true);
 

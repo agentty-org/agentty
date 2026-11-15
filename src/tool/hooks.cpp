@@ -1,13 +1,13 @@
 // hooks.cpp — user-authored lifecycle hooks. See hooks.hpp for the design
 // and the consent-gate rationale. Implementation notes:
 //
-//   • The payload travels via AGENTTY_HOOK_PAYLOAD_FILE (a mode-0600 temp
-//     file) instead of stdin: run_shell_command has no stdin-pipe seam,
-//     and a file keeps multi-MB tool results out of the environment block
-//     (env vars have hard platform caps).
-//   • Hook commands run through run_shell_command — the SAME bwrap /
-//     sandbox-exec wrapper the bash tool uses — so an approved hook is
-//     workspace-confined exactly like model-driven shell.
+//   • The payload is JSON on the hook's stdin, in Claude Code's shape, so a
+//     hook written for Claude Code runs unchanged. It is also written to
+//     AGENTTY_HOOK_PAYLOAD_FILE for hooks written before stdin existed.
+//   • Hook commands run through run_shell_command_io — the SAME sandbox the
+//     shell tool uses — so an approved hook is workspace-confined exactly
+//     like model-driven shell. stdout and stderr come back apart: stdout is
+//     the JSON reply, stderr the reason for exit 2.
 //   • Approval store: content-hash trust via the SHARED scope::Approvals
 //     primitive (the same one plugins use), persisted at
 //     ~/.agentty/hooks_approved.json as a list of approved file hashes. Any
@@ -26,9 +26,12 @@
 #include "agentty/tool/util/sandbox.hpp"    // run_shell_command
 #include "agentty/tool/util/subprocess.hpp"
 #include "agentty/tool/util/utf8.hpp"        // strip_terminal_controls, to_valid_utf8
+#include "agentty/util/logx.hpp"             // AGT_LOG: broken hooks
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -67,8 +70,12 @@ constexpr auto        kHookTimeout       = std::chrono::seconds{30};
 }
 
 struct HookEntry {
-    std::string match;   // ERE on the tool name
-    std::string run;     // sh -c command
+    std::string match;   // matcher on the tool name (see name_matches)
+    std::string run;     // shell command
+    std::chrono::seconds timeout{kHookTimeout};
+    // Claude Code's protocol (exit 2 blocks, JSON reply) vs agentty's own
+    // (any non-zero exit blocks, stdout is the reason).
+    bool cc = false;
 };
 
 struct HooksFile {
@@ -76,6 +83,7 @@ struct HooksFile {
     std::string            hash;      // sha256 of the raw bytes
     std::vector<HookEntry> pre_tool;
     std::vector<HookEntry> post_tool;
+    std::vector<HookEntry> post_tool_failure;
     bool                   ok = false;
     // Set when a hooks file EXISTS but is past the size cap, so nothing
     // could be loaded from it. Distinct from "no file": a user whose
@@ -124,11 +132,41 @@ struct HooksFile {
                 HookEntry h;
                 h.match = e.value("match", std::string{});
                 h.run   = e.value("run", std::string{});
+                if (e.contains("timeout") && e["timeout"].is_number())
+                    h.timeout = std::chrono::seconds{std::clamp(e["timeout"].get<int>(), 1, 600)};
                 if (!h.run.empty()) dst.push_back(std::move(h));
             }
         };
         read_list("pre_tool",  out.pre_tool);
         read_list("post_tool", out.post_tool);
+        // Claude Code's shape: hooks.<Event>[] = {matcher, hooks[]: {type,
+        // command, timeout}}. Only command hooks; other types are skipped.
+        auto read_cc = [&](const char* event, std::vector<HookEntry>& dst) {
+            const auto hooks = j.find("hooks");
+            if (hooks == j.end() || !hooks->is_object()) return;
+            const auto groups = hooks->find(event);
+            if (groups == hooks->end() || !groups->is_array()) return;
+            for (const auto& g : *groups) {
+                if (!g.is_object()) continue;
+                const std::string matcher = g.value("matcher", std::string{});
+                const auto list = g.find("hooks");
+                if (list == g.end() || !list->is_array()) continue;
+                for (const auto& e : *list) {
+                    if (!e.is_object() || e.value("type", std::string{"command"}) != "command")
+                        continue;
+                    HookEntry h;
+                    h.cc    = true;
+                    h.match = matcher;
+                    h.run   = e.value("command", std::string{});
+                    if (e.contains("timeout") && e["timeout"].is_number())
+                        h.timeout = std::chrono::seconds{std::clamp(e["timeout"].get<int>(), 1, 600)};
+                    if (!h.run.empty()) dst.push_back(std::move(h));
+                }
+            }
+        };
+        read_cc("PreToolUse",         out.pre_tool);
+        read_cc("PostToolUse",        out.post_tool);
+        read_cc("PostToolUseFailure", out.post_tool_failure);
         out.ok = true;
         return out;
     }
@@ -192,14 +230,57 @@ void store_approval(Io io, const maya::unlocked& cap, const HooksFile& hf) {
     (void)scope::save_approvals(io, cap, kHooksApprovalsLeaf, a);   // rewrites as the array form
 }
 
-[[nodiscard]] bool name_matches(const std::string& ere, std::string_view tool) {
-    if (ere.empty()) return true;   // no match key ⇒ every tool
+// ── matching ────────────────────────────────────────────────────────────
+//
+// Claude Code's matcher rules, so its configs mean the same thing here:
+// empty or "*" matches all; only letters, digits, _ - space , | is an exact
+// name or a list of them; anything else is an unanchored regex. A tool
+// matches under its agentty name or its Claude Code name, so "Bash" and
+// "shell" both pick the shell tool.
+[[nodiscard]] bool one_matches(const std::string& m, std::string_view name) {
+    if (m.empty() || m == "*") return true;
+    const bool plain = std::all_of(m.begin(), m.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-'
+            || c == ' ' || c == ',' || c == '|';
+    });
+    if (plain) {
+        std::size_t p = 0;
+        while (p <= m.size()) {
+            auto q = m.find_first_of(",|", p);
+            if (q == std::string::npos) q = m.size();
+            auto tok = std::string_view{m}.substr(p, q - p);
+            while (!tok.empty() && tok.front() == ' ') tok.remove_prefix(1);
+            while (!tok.empty() && tok.back() == ' ') tok.remove_suffix(1);
+            if (!tok.empty() && tok == name) return true;
+            p = q + 1;
+        }
+        return false;
+    }
+    try {
+        std::regex re(m, std::regex::ECMAScript | std::regex::nosubs);
+        return std::regex_search(std::string{name}, re);
+    } catch (const std::regex_error&) {
+        return false;   // a bad pattern never matches
+    }
+}
+
+[[nodiscard]] bool name_matches(const std::string& m, std::string_view tool) {
+    return one_matches(m, tool) || one_matches(m, cc_tool_name(tool));
+}
+
+// agentty's own `match`: a POSIX ERE on agentty's tool name, unchanged.
+[[nodiscard]] bool legacy_matches(const std::string& ere, std::string_view tool) {
+    if (ere.empty()) return true;
     try {
         std::regex re(ere, std::regex::extended | std::regex::nosubs);
         return std::regex_search(std::string{tool}, re);
     } catch (const std::regex_error&) {
-        return false;   // bad pattern never matches (fail closed for pre)
+        return false;   // a bad pattern never matches
     }
+}
+
+[[nodiscard]] bool entry_matches(const HookEntry& h, std::string_view tool) {
+    return h.cc ? name_matches(h.match, tool) : legacy_matches(h.match, tool);
 }
 
 // Write the payload to a private temp file; returns its path ('' on error).
@@ -259,12 +340,11 @@ void store_approval(Io io, const maya::unlocked& cap, const HooksFile& hf) {
     return out;
 }
 
-// Run one hook command with the payload plumbed via env + file. Returns
-// {exit_code, captured output}.
-struct HookRun { int exit_code = 0; std::string output; };
+// Run one hook: payload on stdin and in AGENTTY_HOOK_PAYLOAD_FILE, stdout
+// and stderr kept apart.
+struct HookRun { int exit_code = 0; bool timed_out = false; std::string out, err; };
 [[nodiscard]] HookRun run_hook(const HookEntry& h, std::string_view event,
-                               std::string_view tool,
-                               const std::string& payload) {
+                               std::string_view tool, const std::string& payload) {
     const std::string pf = write_payload(payload);
     // The hook's context goes in ITS command line, not the process env:
     // setenv/unsetenv mutate state every thread shares, so concurrent tools
@@ -273,83 +353,371 @@ struct HookRun { int exit_code = 0; std::string output; };
         {"AGENTTY_HOOK_EVENT",        std::string{event}},
         {"AGENTTY_HOOK_TOOL",         std::string{tool}},
         {"AGENTTY_HOOK_PAYLOAD_FILE", pf},
+        {"AGENTTY_PROJECT_DIR",       fs::current_path().string()},
+        {"CLAUDE_PROJECT_DIR",        fs::current_path().string()},
     });
-    auto res = util::sandbox::run_shell_command(cmd, kMaxPayloadBytes,
-                                                kHookTimeout);
+    auto res = util::sandbox::run_shell_command_io(cmd, payload, kMaxPayloadBytes, h.timeout);
     if (!pf.empty()) {
         std::error_code ec;
         fs::remove(pf, ec);
     }
-    return {res.exit_code, std::move(res.output)};
+    HookRun r;
+    r.exit_code = res.started ? res.exit_code : 1;
+    r.timed_out = res.timed_out;
+    r.out = std::move(res.output);
+    r.err = res.started ? std::move(res.err) : res.start_error;
+    return r;
+}
+
+// Text from a hook that the model or the user will read: no terminal
+// controls, valid UTF-8, and capped (Claude Code caps at 10,000 chars too).
+[[nodiscard]] std::string clean_text(std::string s, std::size_t cap = 10'000) {
+    s = util::to_valid_utf8(util::strip_terminal_controls(s));
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+    if (s.size() > cap) {
+        s.resize(cap);
+        s = util::to_valid_utf8(std::move(s));
+        s += "\n[hook output truncated]";
+    }
+    return s;
+}
+
+// The JSON object a hook printed, if stdout is one. Leading noise (a shell
+// profile echoing something) defeats it, like in Claude Code.
+[[nodiscard]] std::optional<json> reply_json(const std::string& out) {
+    std::string_view s{out};
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    if (s.empty() || s.front() != '{') return std::nullopt;
+    try {
+        auto j = json::parse(s);
+        if (j.is_object()) return j;
+    } catch (const json::exception&) {}
+    return std::nullopt;
+}
+
+// The fields every event shares.
+[[nodiscard]] json base_payload(std::string_view event, std::string_view tool,
+                                const json& args, std::string_view tool_use_id,
+                                std::string_view session_id) {
+    json p = {
+        {"hook_event_name", std::string{event}},
+        {"session_id",      std::string{session_id}},
+        {"cwd",             fs::current_path().string()},
+        {"permission_mode", "default"},
+        {"tool_name",       cc_tool_name(tool)},
+        {"tool_input",      to_cc_input(tool, args)},
+        // agentty's own names, for hooks written against agentty.
+        {"agentty_tool",    std::string{tool}},
+        {"event",           event == "PreToolUse" ? "pre_tool" : "post_tool"},
+        {"tool",            std::string{tool}},
+        {"args",            args.dump(-1, ' ', false, json::error_handler_t::replace)},
+    };
+    if (!tool_use_id.empty()) p["tool_use_id"] = std::string{tool_use_id};
+    return p;
+}
+
+[[nodiscard]] std::string dump(const json& j) {
+    // replace: args and results can carry raw bytes, and dump() throws on
+    // invalid UTF-8 by default, a crash inside the tool path.
+    return j.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
+// continue:false / systemMessage, shared by every event.
+template <class D>
+void read_common(const json& j, D& d) {
+    if (j.contains("continue") && j["continue"].is_boolean() && !j["continue"].get<bool>()) {
+        d.stop = true;
+        if (auto it = j.find("stopReason"); it != j.end() && it->is_string())
+            d.stop_reason = clean_text(it->get<std::string>(), 2000);
+    }
+    if (auto it = j.find("systemMessage"); it != j.end() && it->is_string())
+        d.system_message = clean_text(it->get<std::string>(), 2000);
+}
+
+void append_context(std::string& dst, std::string add) {
+    add = clean_text(std::move(add));
+    if (add.empty()) return;
+    if (!dst.empty()) dst += "\n";
+    dst += add;
+}
+
+// The shell tool wraps output for the model: a ``` fence, a "Command ...
+// failed" header, [elapsed] notes. Claude Code's Bash hands hooks the plain
+// stdout, and output filters (RTK) expect that, so unwrap it.
+[[nodiscard]] std::string shell_stdout(std::string_view s) {
+    const auto open = s.find("```");
+    if (open == std::string_view::npos) return std::string{s};
+    auto body = s.find('\n', open);
+    if (body == std::string_view::npos) return std::string{s};
+    ++body;
+    const auto close = s.rfind("```");
+    if (close == std::string_view::npos || close < body) return std::string{s.substr(body)};
+    return std::string{s.substr(body, close - body)};
 }
 
 } // namespace
 
-PreToolDecision run_pre_tool(std::string_view tool,
-                             const std::string& args_json) {
+// ── Claude Code names ───────────────────────────────────────────────────
+
+std::string cc_tool_name(std::string_view tool) {
+    static constexpr std::pair<std::string_view, std::string_view> kNames[] = {
+        {"shell", "Bash"}, {"bash", "Bash"}, {"read", "Read"}, {"write", "Write"},
+        {"edit", "Edit"}, {"grep", "Grep"}, {"glob", "Glob"}, {"web_fetch", "WebFetch"},
+        {"web_search", "WebSearch"}, {"todo", "TodoWrite"}, {"task", "Task"},
+        {"list_dir", "LS"},
+    };
+    for (const auto& [a, c] : kNames)
+        if (a == tool) return std::string{c};
+    return std::string{tool};
+}
+
+json to_cc_input(std::string_view tool, const json& args) {
+    if (!args.is_object()) return args;
+    json in = args;
+    auto rekey = [&](const char* from, const char* to) {
+        if (auto it = in.find(from); it != in.end() && !in.contains(to)) {
+            in[to] = *it;
+            in.erase(from);
+        }
+    };
+    const auto name = cc_tool_name(tool);
+    if (name == "Bash") {
+        // Claude Code's Bash has `description`; agentty's shell has
+        // display_description. Timeout is ms there, seconds here.
+        rekey("display_description", "description");
+        if (auto it = in.find("timeout"); it != in.end() && it->is_number())
+            in["timeout"] = static_cast<std::int64_t>(it->get<double>() * 1000);
+    } else if (name == "Read" || name == "Write") {
+        rekey("path", "file_path");
+    } else if (name == "Edit") {
+        rekey("path", "file_path");
+        // One edit is Claude Code's shape; agentty batches them.
+        if (auto it = in.find("edits"); it != in.end() && it->is_array() && it->size() == 1) {
+            const auto& e = (*it)[0];
+            in["old_string"]  = e.value("old_text", e.value("old_string", std::string{}));
+            in["new_string"]  = e.value("new_text", e.value("new_string", std::string{}));
+            in["replace_all"] = e.value("replace_all", false);
+        }
+    }
+    return in;
+}
+
+json from_cc_input(std::string_view tool, const json& in, const json& original) {
+    if (!in.is_object()) return original;
+    json out = in;
+    auto rekey = [&](const char* from, const char* to) {
+        if (auto it = out.find(from); it != out.end()) {
+            out[to] = *it;
+            out.erase(from);
+        }
+    };
+    const auto name = cc_tool_name(tool);
+    if (name == "Bash") {
+        rekey("description", "display_description");
+        if (auto it = out.find("timeout"); it != out.end() && it->is_number())
+            out["timeout"] = std::max<std::int64_t>(1, static_cast<std::int64_t>(it->get<double>() / 1000));
+        // Claude Code-only fields agentty's shell would reject.
+        out.erase("run_in_background");
+        out.erase("dangerouslyDisableSandbox");
+    } else if (name == "Read" || name == "Write") {
+        rekey("file_path", "path");
+    } else if (name == "Edit") {
+        rekey("file_path", "path");
+        if (out.contains("old_string") && out.contains("edits") && out["edits"].is_array()
+            && out["edits"].size() == 1) {
+            auto& e = out["edits"][0];
+            e["old_text"]    = out["old_string"];
+            e["new_text"]    = out.value("new_string", std::string{});
+            e["replace_all"] = out.value("replace_all", false);
+            e.erase("old_string");
+            e.erase("new_string");
+        }
+        out.erase("old_string");
+        out.erase("new_string");
+        out.erase("replace_all");
+    }
+    return out;
+}
+
+// ── events ──────────────────────────────────────────────────────────────
+
+// A matcher string from pre_tool_matchers: "ere:<pattern>" for agentty's own
+// entries, the Claude Code matcher otherwise.
+bool pre_tool_matches(const std::vector<std::string>& matchers, std::string_view tool) {
+    return std::any_of(matchers.begin(), matchers.end(), [&](const std::string& m) {
+        return m.starts_with("ere:") ? legacy_matches(m.substr(4), tool) : name_matches(m, tool);
+    });
+}
+
+std::vector<std::string> pre_tool_matchers(Io) {
+    if (hooks_disabled()) return {};
+    HooksFile hf = load_hooks_file();
+    if (!hf.ok || !is_approved(hf)) return {};
+    std::vector<std::string> out;
+    for (const auto& h : hf.pre_tool)
+        out.push_back(h.cc ? (h.match.empty() ? std::string{"*"} : h.match) : "ere:" + h.match);
+    return out;
+}
+
+PreToolDecision run_pre_tool(std::string_view tool, const json& args,
+                             std::string_view tool_use_id, std::string_view session_id) {
+    using P = PreToolDecision::Permission;
     PreToolDecision d;
     if (hooks_disabled()) return d;
     HooksFile hf = load_hooks_file();
     if (!hf.ok || hf.pre_tool.empty()) return d;
     if (!is_approved(hf)) return d;   // unapproved file NEVER runs
 
-    json payload = {{"event", "pre_tool"},
-                    {"tool", std::string{tool}},
-                    {"args", args_json}};
-    // error_handler_t::replace: args_json may embed lossy bytes; dump()
-    // THROWS on invalid UTF-8 by default — a crash inside the tool path.
-    const std::string body =
-        payload.dump(-1, ' ', false, json::error_handler_t::replace);
+    json current = args;   // each hook sees what the one before it left
+    auto rank = [](P p) { return p == P::Deny ? 3 : p == P::Ask ? 2 : p == P::Allow ? 1 : 0; };
+    auto decide = [&](P p, std::string reason) {
+        if (rank(p) > rank(d.permission)) { d.permission = p; d.reason = std::move(reason); }
+    };
     for (const auto& h : hf.pre_tool) {
-        if (!name_matches(h.match, tool)) continue;
-        HookRun r = run_hook(h, "pre_tool", tool, body);
-        if (r.exit_code != 0) {
-            d.blocked = true;
-            if (r.output.empty()) {
-                d.reason = "blocked by pre_tool hook (`" + h.run + "` exited "
-                         + std::to_string(r.exit_code) + ")";
-            } else {
-                // Hook stdout becomes the error the MODEL reads — scrub
-                // terminal controls, force valid UTF-8, and cap it (a 4 MB
-                // guard-script dump would blow the turn's token budget).
-                std::string reason = util::to_valid_utf8(
-                    util::strip_terminal_controls(r.output));
-                if (reason.size() > 4096) {
-                    reason.resize(4096);
-                    reason = util::to_valid_utf8(std::move(reason));
-                    reason += "\n[hook output truncated at 4 KiB]";
-                }
-                d.reason = std::move(reason);
+        if (!entry_matches(h, tool)) continue;
+        HookRun r = run_hook(h, "pre_tool", tool,
+                             dump(base_payload("PreToolUse", tool, current, tool_use_id, session_id)));
+        const auto reply = r.exit_code == 0 ? reply_json(r.out) : std::nullopt;
+
+        if (!h.cc) {
+            // agentty's own protocol: any non-zero exit blocks, stdout is
+            // the reason. A JSON reply on exit 0 is read like Claude Code's.
+            if (r.exit_code != 0) {
+                std::string why = clean_text(r.out.empty() ? r.err : r.out, 4096);
+                if (why.empty())
+                    why = "blocked by pre_tool hook (`" + h.run + "` exited "
+                        + std::to_string(r.exit_code) + ")";
+                decide(P::Deny, std::move(why));
+                return d;
             }
+        } else if (r.exit_code == 2) {
+            std::string why = clean_text(r.err);
+            if (why.empty()) why = "blocked by PreToolUse hook (`" + h.run + "`)";
+            decide(P::Deny, std::move(why));
             return d;
+        } else if (r.exit_code != 0) {
+            // A broken hook doesn't stop the call. Claude Code shows it as a
+            // non-blocking error; here it lands in the log.
+            AGT_LOG(Tool, Warn, "hook.error", "event=PreToolUse cmd={} exit={} timed_out={} err={}",
+                    h.run, r.exit_code, r.timed_out, clean_text(r.err, 500));
+            continue;
         }
+        if (!reply) continue;
+
+        read_common(*reply, d);
+        const json* hso = nullptr;
+        if (auto it = reply->find("hookSpecificOutput"); it != reply->end() && it->is_object())
+            hso = &*it;
+        // The deprecated top-level shape: decision approve|block + reason.
+        if (auto it = reply->find("decision"); it != reply->end() && it->is_string()) {
+            const auto v = it->get<std::string>();
+            const std::string why = clean_text(reply->value("reason", std::string{}));
+            if (v == "block") decide(P::Deny, why);
+            else if (v == "approve") decide(P::Allow, why);
+        }
+        if (hso) {
+            if (auto it = hso->find("permissionDecision"); it != hso->end() && it->is_string()) {
+                const auto v = it->get<std::string>();
+                const std::string why = clean_text(hso->value("permissionDecisionReason", std::string{}));
+                if (v == "deny") decide(P::Deny, why.empty() ? "blocked by PreToolUse hook" : why);
+                else if (v == "ask") decide(P::Ask, why);
+                else if (v == "allow") decide(P::Allow, why);
+            }
+            if (auto it = hso->find("updatedInput"); it != hso->end() && it->is_object()) {
+                current = from_cc_input(tool, *it, current);
+                d.updated_args = current;
+            }
+            if (auto it = hso->find("additionalContext"); it != hso->end() && it->is_string())
+                append_context(d.additional_context, it->get<std::string>());
+        }
+        if (d.permission == P::Deny || d.stop) return d;
     }
     return d;
 }
 
-void run_post_tool(std::string_view tool, const std::string& args_json,
-                   const std::string& result_text) {
-    if (hooks_disabled()) return;
+PostToolDecision run_post_tool(std::string_view tool, const json& args,
+                               const std::string& result_text, bool failed,
+                               std::string_view tool_use_id, std::string_view session_id,
+                               std::int64_t duration_ms) {
+    PostToolDecision d;
+    if (hooks_disabled()) return d;
     HooksFile hf = load_hooks_file();
-    if (!hf.ok || hf.post_tool.empty()) return;
-    if (!is_approved(hf)) return;
+    if (!hf.ok || !is_approved(hf)) return d;
+    // agentty's own post_tool hooks fire on every result; Claude Code's
+    // PostToolUse only on success, PostToolUseFailure only on failure.
+    std::vector<const HookEntry*> todo;
+    for (const auto& h : hf.post_tool)
+        if (!h.cc || !failed) todo.push_back(&h);
+    if (failed)
+        for (const auto& h : hf.post_tool_failure) todo.push_back(&h);
+    if (todo.empty()) return d;
 
-    json payload = {{"event", "post_tool"},
-                    {"tool", std::string{tool}},
-                    {"args", args_json},
-                    {"result",
-                     result_text.size() > kMaxPayloadBytes
-                         ? result_text.substr(0, kMaxPayloadBytes)
-                         : result_text}};
-    // replace-handler: result_text is arbitrary tool output (bash can emit
-    // raw bytes); default dump() throws on invalid UTF-8.
-    const std::string body =
-        payload.dump(-1, ' ', false, json::error_handler_t::replace);
-    for (const auto& h : hf.post_tool) {
-        if (!name_matches(h.match, tool)) continue;
-        (void)run_hook(h, "post_tool", tool, body);   // fire-and-forget
+    const std::string_view event = failed ? "PostToolUseFailure" : "PostToolUse";
+    std::string current = result_text;
+    for (const auto* h : todo) {
+        if (!entry_matches(*h, tool)) continue;
+        const std::string shown = current.size() > kMaxPayloadBytes
+                                      ? current.substr(0, kMaxPayloadBytes) : current;
+        json p = base_payload(h->cc ? event : "PostToolUse", tool, args, tool_use_id, session_id);
+        p["event"]  = "post_tool";
+        p["result"] = shown;   // agentty's own name
+        if (failed) {
+            p["error"] = shown;
+        } else if (cc_tool_name(tool) == "Bash") {
+            p["tool_response"] = {{"stdout", shell_stdout(shown)}, {"stderr", ""},
+                                  {"interrupted", false}, {"isImage", false}};
+        } else {
+            p["tool_response"] = shown;
+        }
+        if (duration_ms >= 0) p["duration_ms"] = duration_ms;
+        HookRun r = run_hook(*h, "post_tool", tool, dump(p));
+
+        if (h->cc && r.exit_code == 2) {
+            // The tool already ran; exit 2 shows stderr to the model.
+            append_context(d.additional_context, r.err);
+            continue;
+        }
+        if (r.exit_code != 0) {
+            AGT_LOG(Tool, Warn, "hook.error", "event={} cmd={} exit={} timed_out={} err={}",
+                    event, h->run, r.exit_code, r.timed_out, clean_text(r.err, 500));
+            continue;
+        }
+        const auto reply = reply_json(r.out);
+        if (!reply) continue;
+        read_common(*reply, d);
+        if (reply->value("decision", std::string{}) == "block")
+            append_context(d.additional_context, reply->value("reason", std::string{}));
+        if (auto hso = reply->find("hookSpecificOutput"); hso != reply->end() && hso->is_object()) {
+            if (auto it = hso->find("additionalContext"); it != hso->end() && it->is_string())
+                append_context(d.additional_context, it->get<std::string>());
+            // updatedToolOutput: Bash's shape is {stdout, stderr}; anything
+            // else is taken as text. Never applied to a failure.
+            const json* upd = nullptr;
+            if (auto it = hso->find("updatedToolOutput"); it != hso->end()) upd = &*it;
+            else if (auto it2 = hso->find("updatedMCPToolOutput"); it2 != hso->end()) upd = &*it2;
+            if (upd && !failed) {
+                std::string text;
+                if (upd->is_string()) text = upd->get<std::string>();
+                else if (upd->is_object() && (upd->contains("stdout") || upd->contains("stderr"))) {
+                    text = upd->value("stdout", std::string{});
+                    const auto e = upd->value("stderr", std::string{});
+                    if (!e.empty()) text += (text.empty() ? "" : "\n") + e;
+                } else if (upd->is_object() && upd->contains("content") && (*upd)["content"].is_array()) {
+                    for (const auto& b : (*upd)["content"])
+                        if (b.is_object() && b.value("type", "") == "text")
+                            text += b.value("text", std::string{});
+                } else {
+                    text = upd->dump();
+                }
+                current = util::to_valid_utf8(std::move(text));
+                d.updated_output = current;
+            }
+        }
+        if (d.stop) break;
     }
+    return d;
 }
+
 
 bool pending_approval(Io) {
     if (hooks_disabled()) return false;
@@ -387,14 +755,15 @@ int cli(Io io, const maya::unlocked& cap, const std::string& verb) {
                     is_approved(hf) ? "APPROVED"
                                     : "NOT APPROVED (hooks will not run — "
                                       "`agentty hooks approve`)");
-        auto show = [](const char* ev, const std::vector<HookEntry>& v) {
+        auto show = [](const char* ev, const char* cc_ev, const std::vector<HookEntry>& v) {
             for (const auto& h : v)
-                std::printf("  %-9s match=%-20s run=%s\n", ev,
+                std::printf("  %-19s match=%-20s run=%s\n", h.cc ? cc_ev : ev,
                             h.match.empty() ? "(all)" : h.match.c_str(),
                             h.run.c_str());
         };
-        show("pre_tool",  hf.pre_tool);
-        show("post_tool", hf.post_tool);
+        show("pre_tool",  "PreToolUse",  hf.pre_tool);
+        show("post_tool", "PostToolUse", hf.post_tool);
+        show("post_tool", "PostToolUseFailure", hf.post_tool_failure);
         return 0;
     }
     if (verb == "approve") {

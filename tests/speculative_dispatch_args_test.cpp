@@ -51,6 +51,9 @@ A::Model apply(A::Model m, A::msg::StreamMsg event) {
 A::Model streaming_model() {
     A::Model m;
     m.d.profile = A::Profile::Write;
+    // Loaded with no hooks, as at a normal startup. Before it loads, no call
+    // starts early: a PreToolUse hook might want to see it.
+    m.ui.library.loaded = true;
     A::Message assistant;
     assistant.role = A::Role::Assistant;
     m.d.current.messages.push_back(std::move(assistant));

@@ -615,10 +615,14 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 
 [[nodiscard]] SubprocessResult run_wrapped(std::string_view cmd,
                                            std::size_t max_bytes,
-                                           std::chrono::seconds timeout) {
+                                           std::chrono::seconds timeout,
+                                           std::string stdin_data = {},
+                                           bool split_stderr = false) {
     SubprocessOptions opts;
     opts.max_bytes = max_bytes;
     opts.timeout = timeout;
+    opts.stdin_data = std::move(stdin_data);
+    opts.split_stderr = split_stderr;
 
 #if defined(__linux__) || defined(__APPLE__)
     if (detected_backend() == Backend::Claybin) {
@@ -636,14 +640,12 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         // error messages read the same for both backends.
         opts.command = SubprocessOptions::Shell{std::string{cmd}};
         std::string shell_cmd{cmd};
-        opts.spawner = [shell_cmd](const SubprocessOptions&,
-                                   int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
+        opts.spawner = [shell_cmd](const SubprocessOptions&, int out_fd, int err_fd,
+                                   int in_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
             relax_wx_for_jit(posture, shell_cmd);
-            // Both streams onto the one pipe the runner already made.
-            auto r = claybin_backend::spawn_shell(posture, shell_cmd, pipe_write_fd,
-                                                  pipe_write_fd);
+            auto r = claybin_backend::spawn_shell(posture, shell_cmd, out_fd, err_fd, in_fd);
             if (!r.started) {
                 out.error = r.start_error;
                 return out;
@@ -701,13 +703,12 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     if (detected_backend() == Backend::Claybin) {
         opts.command = SubprocessOptions::Argv{user_argv};
         std::vector<std::string> argv = user_argv;
-        opts.spawner = [argv](const SubprocessOptions&,
-                              int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
+        opts.spawner = [argv](const SubprocessOptions&, int out_fd, int err_fd,
+                              int in_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
             relax_wx_for_jit(posture, join_argv(argv));
-            auto r = claybin_backend::spawn_argv(posture, argv, pipe_write_fd,
-                                                 pipe_write_fd);
+            auto r = claybin_backend::spawn_argv(posture, argv, out_fd, err_fd, {}, in_fd);
             if (!r.started) { out.error = r.start_error; return out; }
             out.pid           = r.pid;
             out.pidfd         = r.pidfd;
@@ -839,10 +840,14 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 
 [[nodiscard]] SubprocessResult run_wrapped(std::string_view cmd,
                                            std::size_t max_bytes,
-                                           std::chrono::seconds timeout) {
+                                           std::chrono::seconds timeout,
+                                           std::string stdin_data = {},
+                                           bool split_stderr = false) {
     SubprocessOptions opts;
     opts.max_bytes = max_bytes;
     opts.timeout = timeout;
+    opts.stdin_data = std::move(stdin_data);
+    opts.split_stderr = split_stderr;
 
     if (detected_backend() == Backend::Claybin) {
         // NOT claybin's spawn + adopt, as on Linux: darwin has no pidfd, so
@@ -904,24 +909,26 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 
 [[nodiscard]] SubprocessResult run_wrapped(std::string_view cmd,
                                            std::size_t max_bytes,
-                                           std::chrono::seconds timeout) {
+                                           std::chrono::seconds timeout,
+                                           std::string stdin_data = {},
+                                           bool split_stderr = false) {
     SubprocessOptions opts;
     opts.command = SubprocessOptions::Shell{std::string{cmd}};
     opts.max_bytes = max_bytes;
     opts.timeout   = timeout;
+    opts.stdin_data = std::move(stdin_data);
+    opts.split_stderr = split_stderr;
 
     if (detected_backend() == Backend::Claybin) {
         opts.spawner = [shell_cmd = std::string{cmd}](
-                           const SubprocessOptions&,
-                           int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
+                           const SubprocessOptions&, int out_fd, int err_fd,
+                           int in_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
             relax_wx_for_jit(posture, shell_cmd);
-            // Both streams onto the one pipe the runner already made. The
-            // window HANDLE arrives as an int (the runner's pipe was a
-            // HANDLE); the adapter maps it onto the child's stdout/stderr.
-            auto r = claybin_backend::spawn_shell(posture, shell_cmd, pipe_write_fd,
-                                                  pipe_write_fd);
+            // The window HANDLEs arrive as ints (the runner's pipes were
+            // HANDLEs); the adapter maps them onto the child's std streams.
+            auto r = claybin_backend::spawn_shell(posture, shell_cmd, out_fd, err_fd, in_fd);
             if (!r.started) { out.error = r.start_error; return out; }
             out.pid = r.pid;
             // HANDLES, not descriptors: the process handle is the waitable
@@ -952,13 +959,12 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 
     if (detected_backend() == Backend::Claybin) {
         opts.spawner = [argv = user_argv](
-                           const SubprocessOptions&,
-                           int pipe_write_fd) -> SubprocessOptions::SpawnedChild {
+                           const SubprocessOptions&, int out_fd, int err_fd,
+                           int in_fd) -> SubprocessOptions::SpawnedChild {
             SubprocessOptions::SpawnedChild out;
             auto posture = build_claybin_posture();
             relax_wx_for_jit(posture, join_argv(argv));
-            auto r = claybin_backend::spawn_argv(posture, argv, pipe_write_fd,
-                                                 pipe_write_fd);
+            auto r = claybin_backend::spawn_argv(posture, argv, out_fd, err_fd, {}, in_fd);
             if (!r.started) { out.error = r.start_error; return out; }
             out.pid = r.pid;
             out.pidfd = r.pidfd;
@@ -976,10 +982,18 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 
 [[nodiscard]] SubprocessResult run_wrapped(std::string_view cmd,
                                            std::size_t max_bytes,
-                                           std::chrono::seconds timeout) {
+                                           std::chrono::seconds timeout,
+                                           std::string stdin_data = {},
+                                           bool split_stderr = false) {
     // Should never be called — is_active() returns false on this
     // platform — but defensively fall through to the unsandboxed path.
-    return run_command_s(std::string{cmd}, max_bytes, timeout);
+    SubprocessOptions opts;
+    opts.command = SubprocessOptions::Shell{std::string{cmd}};
+    opts.max_bytes = max_bytes;
+    opts.timeout = timeout;
+    opts.stdin_data = std::move(stdin_data);
+    opts.split_stderr = split_stderr;
+    return Subprocess::run(std::move(opts));
 }
 
 [[nodiscard]] SubprocessResult run_wrapped_argv(const std::vector<std::string>& user_argv,
@@ -1293,6 +1307,21 @@ SubprocessResult run_shell_command(std::string_view cmd,
     return r;
 }
 
+SubprocessResult run_shell_command_io(std::string_view cmd, std::string stdin_data,
+                                      std::size_t max_bytes,
+                                      std::chrono::seconds timeout) {
+    if (!is_active()) {
+        SubprocessOptions opts;
+        opts.command      = SubprocessOptions::Shell{std::string{cmd}};
+        opts.max_bytes    = max_bytes;
+        opts.timeout      = timeout;
+        opts.stdin_data   = std::move(stdin_data);
+        opts.split_stderr = true;
+        return Subprocess::run(std::move(opts));
+    }
+    return run_wrapped(cmd, max_bytes, timeout, std::move(stdin_data), true);
+}
+
 SubprocessResult run_argv(const std::vector<std::string>& argv,
                           std::size_t max_bytes,
                           std::chrono::seconds timeout) {
@@ -1311,7 +1340,8 @@ claybin_backend::SpawnResult spawn_in_sandbox(
         const std::vector<std::string>& argv, std::string_view cwd, int out_fd,
         const std::vector<std::string>& extra_roots,
         const handoff::TrustedSnapshot* trusted,
-        const std::vector<std::pair<std::string, std::string>>& env) {
+        const std::vector<std::pair<std::string, std::string>>& env,
+        int err_fd, int in_fd) {
 #if defined(__linux__) || defined(_WIN32)
     if (detected_backend() == Backend::Claybin) {
         auto posture = build_claybin_posture(trusted);
@@ -1321,10 +1351,12 @@ claybin_backend::SpawnResult spawn_in_sandbox(
         // may write there too, like the workspace.
         for (const auto& r : extra_roots)
             if (!r.empty()) posture.write_paths.push_back(r);
-        return claybin_backend::spawn_argv(posture, argv, out_fd, out_fd, env);
+        return claybin_backend::spawn_argv(posture, argv, out_fd,
+                                           err_fd >= 0 ? err_fd : out_fd, env, in_fd);
     }
 #else
     (void)argv; (void)cwd; (void)out_fd; (void)extra_roots; (void)trusted; (void)env;
+    (void)err_fd; (void)in_fd;
 #endif
     claybin_backend::SpawnResult r;
     r.started = false;

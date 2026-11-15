@@ -101,6 +101,15 @@ struct SubprocessOptions {
     // without coupling this low-level utility to a particular token type.
     std::function<bool()> stop_requested;
 
+    // Bytes written to the child's stdin, then closed. Empty = /dev/null,
+    // which is what every tool gets: nothing a tool runs should read the
+    // user's terminal. Hooks use it for their JSON payload.
+    std::string stdin_data;
+    // Keep stderr apart from stdout (SubprocessResult::err). Off by default:
+    // a tool's output is the interleaving a terminal would show. Hooks need
+    // them apart, stdout is their JSON reply and stderr their reason.
+    bool split_stderr = false;
+
     // Optional replacement for the fork/exec step ONLY.
     //
     // A sandbox that is a LIBRARY rather than a binary cannot be expressed as
@@ -179,13 +188,17 @@ struct SubprocessOptions {
         // which is the normal case for an unsandboxed spawn.
         std::function<bool()> kill_tree;
     };
-    // (command, pipe_write_fd) -> child. `command` is the resolved shell string
-    // or argv, already chosen by the variant above.
-    std::function<SpawnedChild(const SubprocessOptions&, int pipe_write_fd)> spawner;
+    // (command, out_fd, err_fd, in_fd) -> child. `command` is the resolved
+    // shell string or argv, already chosen by the variant above. err_fd is
+    // out_fd unless split_stderr; in_fd is -1 (stdin from /dev/null) unless
+    // stdin_data is set.
+    std::function<SpawnedChild(const SubprocessOptions&, int out_fd, int err_fd,
+                               int in_fd)> spawner;
 };
 
 struct SubprocessResult {
     std::string output;                // captured stdout+stderr, UTF-8 valid
+    std::string err;                   // stderr, only with split_stderr
     int  exit_code   = 0;
     bool timed_out   = false;
     // True when it was the WALL-CLOCK ceiling that stopped it, not silence.

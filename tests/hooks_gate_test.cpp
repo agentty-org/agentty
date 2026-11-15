@@ -79,8 +79,8 @@ void unapproved_never_runs(const fs::path& sandbox) {
                }.dump());
 
     check(hooks::pending_approval(::agentty::IoAccess::grant()), "unapproved file reports pending");
-    auto d = hooks::run_pre_tool("shell", "{}");
-    check(!d.blocked, "unapproved hooks never block");
+    auto d = hooks::run_pre_tool("shell", nlohmann::json::object());
+    check(!d.blocked(), "unapproved hooks never block");
     check(!fs::exists(marker), "unapproved hook COMMAND NEVER EXECUTED");
     std::println("PASS\n");
 }
@@ -112,20 +112,20 @@ void approved_runs_and_blocks(const fs::path& sandbox, const fs::path& home) {
     check(!hooks::pending_approval(::agentty::IoAccess::grant()), "approved file no longer pending");
 
     // Benign call: allowed, post fires.
-    auto ok = hooks::run_pre_tool("shell", R"({"command":"ls -la"})");
-    check(!ok.blocked, "benign bash allowed");
-    hooks::run_post_tool("shell", R"({"command":"ls"})", "listing…");
+    auto ok = hooks::run_pre_tool("shell", nlohmann::json{{"command", "ls -la"}});
+    check(!ok.blocked(), "benign bash allowed");
+    (void)hooks::run_post_tool("shell", nlohmann::json{{"command", "ls"}}, "listing…");
     check(fs::exists(marker), "post_tool hook executed for approved file");
 
     // Dangerous call: blocked with the hook's stdout as reason.
-    auto bad = hooks::run_pre_tool("shell", R"({"command":"rm -rf /tmp/x"})");
-    check(bad.blocked, "matching pre_tool guard blocks");
+    auto bad = hooks::run_pre_tool("shell", nlohmann::json{{"command", "rm -rf /tmp/x"}});
+    check(bad.blocked(), "matching pre_tool guard blocks");
     check(bad.reason.find("dangerous command blocked") != std::string::npos,
           "hook stdout becomes the block reason (got '" + bad.reason + "')");
 
     // Non-matching tool: guard does not fire.
-    auto other = hooks::run_pre_tool("read", R"({"path":"rm -rf"})");
-    check(!other.blocked, "match=bash guard ignores the read tool");
+    auto other = hooks::run_pre_tool("read", nlohmann::json{{"path", "rm -rf"}});
+    check(!other.blocked(), "match=bash guard ignores the read tool");
     std::println("PASS\n");
 }
 
@@ -140,7 +140,7 @@ void byte_change_regates(const fs::path& sandbox) {
                    }.dump() + " ");
     check(hooks::pending_approval(::agentty::IoAccess::grant()),
           "byte change to an approved file re-gates (pending again)");
-    (void)hooks::run_pre_tool("shell", "{}");
+    (void)hooks::run_pre_tool("shell", nlohmann::json::object());
     check(!fs::exists(marker), "re-gated hook did not execute");
     std::println("PASS\n");
 }
@@ -160,7 +160,7 @@ void kill_switch(const fs::path& sandbox, const fs::path& home) {
     ::setenv("AGENTTY_NO_HOOKS", "1", 1);
 #endif
     check(!hooks::pending_approval(::agentty::IoAccess::grant()), "kill switch silences pending notice");
-    (void)hooks::run_pre_tool("shell", "{}");
+    (void)hooks::run_pre_tool("shell", nlohmann::json::object());
     check(!fs::exists(marker), "AGENTTY_NO_HOOKS=1 disables approved hooks");
 #ifdef _WIN32
     _putenv_s("AGENTTY_NO_HOOKS", "");   // empty value removes it
@@ -202,6 +202,121 @@ void oversized_file_is_reported(const fs::path& sandbox) {
 
 } // namespace
 
+#ifndef _WIN32
+namespace {
+
+// A hooks file in Claude Code's shape, approved.
+void cc_hooks(const fs::path& sandbox, const fs::path& home, nlohmann::json hooks) {
+    write_file(sandbox / ".agentty" / "hooks.json", nlohmann::json{{"hooks", std::move(hooks)}}.dump());
+    approve_current(sandbox / ".agentty" / "hooks.json", home);
+}
+nlohmann::json one(const char* matcher, std::string cmd) {
+    return nlohmann::json::array({{{"matcher", matcher},
+                                   {"hooks", {{{"type", "command"}, {"command", std::move(cmd)}}}}}});
+}
+
+void claude_code_protocol(const fs::path& sandbox, const fs::path& home) {
+    std::println("--- claude_code_protocol ---");
+
+    // The payload is JSON on stdin, in Claude Code's shape.
+    const fs::path got = sandbox / "stdin.json";
+    cc_hooks(sandbox, home, {{"PreToolUse", one("Bash", "cat > '" + got.string() + "'")}});
+    (void)hooks::run_pre_tool("shell", nlohmann::json{{"command", "ls"}, {"timeout", 5}}, "call_7", "thr_1");
+    const auto p = nlohmann::json::parse(read_all(got), nullptr, false);
+    check(p.is_object(), "payload arrives on stdin as JSON");
+    check(p.value("hook_event_name", "") == "PreToolUse", "hook_event_name");
+    check(p.value("tool_name", "") == "Bash", "shell is Bash to a Claude Code hook");
+    check(p["tool_input"].value("command", "") == "ls", "tool_input.command");
+    check(p["tool_input"].value("timeout", 0) == 5000, "timeout in ms, like Claude Code's Bash");
+    check(p.value("tool_use_id", "") == "call_7" && p.value("session_id", "") == "thr_1", "ids");
+
+    // Exit 2 denies with stderr; matcher "Bash" picks the shell tool.
+    cc_hooks(sandbox, home, {{"PreToolUse", one("Bash", "echo 'no network here' >&2; exit 2")}});
+    auto d = hooks::run_pre_tool("shell", nlohmann::json{{"command", "curl x"}});
+    check(d.blocked() && d.reason == "no network here", "exit 2 denies, stderr is the reason");
+    check(!hooks::run_pre_tool("read", nlohmann::json{{"path", "a"}}).blocked(), "matcher misses Read");
+
+    // Any other non-zero exit is a broken hook, not a block.
+    cc_hooks(sandbox, home, {{"PreToolUse", one("Bash", "exit 1")}});
+    check(!hooks::run_pre_tool("shell", nlohmann::json{{"command", "ls"}}).blocked(),
+          "exit 1 from a Claude Code hook doesn't block");
+
+    // updatedInput rewrites the command (RTK's whole mechanism), and the
+    // decision, reason and context come through.
+    const std::string rewrite =
+        R"(cat >/dev/null; printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse",)"
+        R"("permissionDecision":"allow","permissionDecisionReason":"rtk",)"
+        R"("updatedInput":{"command":"rtk git status","description":"st"},)"
+        R"("additionalContext":"filtered by rtk"}}')";
+    cc_hooks(sandbox, home, {{"PreToolUse", one("Bash", rewrite)}});
+    d = hooks::run_pre_tool("shell", nlohmann::json{{"command", "git status"}});
+    check(d.permission == hooks::PreToolDecision::Permission::Allow, "allow");
+    check(d.updated_args && (*d.updated_args).value("command", "") == "rtk git status",
+          "updatedInput rewrites the command");
+    check(d.updated_args && (*d.updated_args).value("display_description", "") == "st",
+          "description maps back to display_description");
+    check(d.additional_context == "filtered by rtk", "additionalContext");
+
+    // Two hooks: the second sees the first one's rewrite, and deny beats allow.
+    nlohmann::json chain = nlohmann::json::array();
+    chain.push_back(one("Bash", rewrite)[0]);
+    chain.push_back(one("Bash", "grep -q 'rtk git status' && { echo seen >&2; exit 2; }; exit 0")[0]);
+    cc_hooks(sandbox, home, {{"PreToolUse", chain}});
+    d = hooks::run_pre_tool("shell", nlohmann::json{{"command", "git status"}});
+    check(d.blocked() && d.reason == "seen", "hooks chain in order; deny wins over allow");
+
+    // ask, and continue:false.
+    cc_hooks(sandbox, home, {{"PreToolUse", one("*",
+        R"(cat >/dev/null; echo '{"continue":false,"stopReason":"done for today",)"
+        R"("hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"prod db"}}')")}});
+    d = hooks::run_pre_tool("write", nlohmann::json{{"path", "a"}});
+    check(d.permission == hooks::PreToolDecision::Permission::Ask && d.reason == "prod db", "ask");
+    check(d.stop && d.stop_reason == "done for today", "continue:false stops");
+
+    // PostToolUse: updatedToolOutput replaces the output (RTK's filter),
+    // and the hook gets the plain stdout, not the model's ``` fence.
+    const fs::path post_in = sandbox / "post.json";
+    cc_hooks(sandbox, home, {{"PostToolUse", one("Bash",
+        "cat > '" + post_in.string() + "'; "
+        R"(echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse",)"
+        R"("updatedToolOutput":{"stdout":"3 files changed","stderr":""}}}')")}});
+    auto post = hooks::run_post_tool("shell", nlohmann::json{{"command", "git diff --stat"}},
+                                     "```\na | 1 +\nb | 1 +\nc | 1 +\n```");
+    check(post.updated_output && *post.updated_output == "3 files changed", "updatedToolOutput");
+    const auto pp = nlohmann::json::parse(read_all(post_in), nullptr, false);
+    check(pp.is_object() && pp["tool_response"].value("stdout", "") == "a | 1 +\nb | 1 +\nc | 1 +\n",
+          "tool_response.stdout is the command's own output");
+
+    // PostToolUse doesn't fire on a failure; PostToolUseFailure does.
+    const fs::path fail_mark = sandbox / "failure.marker";
+    cc_hooks(sandbox, home, {{"PostToolUse", one("", "echo '{\"systemMessage\":\"ok\"}'")},
+                             {"PostToolUseFailure", one("", touch_cmd(fail_mark))}});
+    post = hooks::run_post_tool("shell", nlohmann::json{{"command", "false"}}, "exit 1", true);
+    check(post.system_message.empty(), "PostToolUse skips a failure");
+    check(fs::exists(fail_mark), "PostToolUseFailure fires on one");
+
+    // Arg translation round-trips for the file tools.
+    const auto in = hooks::to_cc_input("edit", nlohmann::json{{"path", "x.cpp"},
+        {"edits", {{{"old_text", "a"}, {"new_text", "b"}}}}});
+    check(in.value("file_path", "") == "x.cpp" && in.value("old_string", "") == "a",
+          "Edit gets file_path / old_string");
+    auto back = in;
+    back["new_string"] = "c";
+    const auto out = hooks::from_cc_input("edit", back, nlohmann::json::object());
+    check(out.value("path", "") == "x.cpp" && out["edits"][0].value("new_text", "") == "c",
+          "a hook's edit maps back to agentty's shape");
+
+    // Matchers, Claude Code's rules.
+    check(hooks::pre_tool_matches({"Edit|Write"}, "write"), "exact list");
+    check(!hooks::pre_tool_matches({"Edit"}, "edit_notebook"), "exact means exact");
+    check(hooks::pre_tool_matches({"^mcp__"}, "mcp__git__log"), "regex");
+    check(hooks::pre_tool_matches({"*"}, "anything"), "star");
+    std::println("PASS\n");
+}
+
+} // namespace
+#endif
+
 TEST_CASE("hooks_gate") {
     const fs::path sandbox =
         fs::temp_directory_path() / ("agentty_hooks_test_" +
@@ -230,6 +345,9 @@ TEST_CASE("hooks_gate") {
     byte_change_regates(sandbox);
     kill_switch(sandbox, home);
     oversized_file_is_reported(sandbox);
+#ifndef _WIN32
+    claude_code_protocol(sandbox, home);
+#endif
 
     std::error_code ec;
     fs::current_path(fs::temp_directory_path(), ec);

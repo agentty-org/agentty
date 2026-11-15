@@ -24,6 +24,9 @@ struct Library {
     std::vector<tools::commands::Command> commands;
     std::string                           hooks_file;      // "" when none
     bool                                  hooks_pending = false;
+    // Matchers of the approved PreToolUse hooks, so kick_pending_tools can
+    // tell which calls need the hook stage without reading the disk.
+    std::vector<std::string>              hooks_pre_tool;
     // Subagent types that came from a project .agentty/agents/. The task card
     // tags them; reading the directories from the view would be disk IO.
     std::vector<std::string>              project_agents;

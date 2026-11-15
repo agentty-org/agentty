@@ -125,6 +125,9 @@ struct ChildRun {
     std::vector<std::pair<std::string, std::string>> env;     ///< layered on ours
     /// Bytes written to the child's stdin, then closed. Empty = /dev/null.
     std::string stdin_data;
+    /// Keep stderr apart in ChildResult::err instead of merging it into
+    /// output. Off by default (one stream, the order a terminal shows).
+    bool split_stderr = false;
 
     std::chrono::milliseconds idle{120'000};   ///< silence budget; 0 = none
     std::chrono::milliseconds wall{0};         ///< ceiling from spawn; 0 = none
@@ -137,15 +140,17 @@ struct ChildRun {
     std::function<bool()> stop_requested;
     /// Given the output so far; true stops the child as "done early".
     std::function<bool(std::string_view)> stop_when;
-    /// Spawn inside a sandbox instead: receives the write end of the output
-    /// pipe (stdout and stderr both), returns what it started.
-    std::function<AdoptedChild(int out_fd)> spawn_adopted;
+    /// Spawn inside a sandbox instead: receives the write ends of the output
+    /// pipes (err_fd == out_fd unless split_stderr) and the read end of the
+    /// stdin pipe (-1 = /dev/null), returns what it started.
+    std::function<AdoptedChild(int out_fd, int err_fd, int in_fd)> spawn_adopted;
 };
 
 struct ChildResult {
     bool started = false;
     std::string start_error;
     std::string output;               ///< stdout+stderr, raw bytes
+    std::string err;                  ///< stderr, only with split_stderr
     bool truncated = false;
     /// How it ended. Exactly one of these describes it.
     bool exited = false;   int exit_code = 0;     ///< ran and returned

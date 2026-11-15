@@ -1645,11 +1645,6 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
             ctx.cancel.push_back(stop);
             if (cancel) ctx.cancel.push_back(cancel->token());
             try {
-                // ── pre_tool hooks (consent-gated, see hooks.hpp) ─────
-                // A blocking decision becomes the tool's error result: the
-                // model sees the hook's stdout and can adapt. Runs on this
-                // tool's own isolated thread, so a slow hook never wedges
-                // the UI — only this one call.
                 const std::string args_dump = args.dump();
 
                 // BEFORE the call, not just after. tool.exec below records
@@ -1669,20 +1664,8 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
                         name.value, exec_seq,
                         ::agentty::logx::body(args_dump));
 
-                if (auto pre = tools::hooks::run_pre_tool(name.value,
-                                                          args_dump);
-                    pre.blocked) {
-                    // A hook refusing the call is a decision someone made
-                    // about this run; without it the tool just reports an
-                    // error and the reason lives nowhere.
-                    AGT_LOG(Tool, Info, "tool.pre_hook_blocked",
-                            "name={} seq={} reason={}",
-                            name.value, exec_seq, pre.reason);
-                    sink.send(Msg{out(ToolExecOutput{id, std::unexpected(
-                        tools::ToolError::unknown(
-                            "blocked by pre_tool hook: " + pre.reason))})});
-                    return;
-                }
+                // PreToolUse hooks already ran before the permission check
+                // (run_pre_tool_hooks); `args` is what they left.
                 const auto t_start = std::chrono::steady_clock::now();
                 auto result = tool::DynamicDispatch::execute_approved(
                     cap, name.value, args, approved_def_hash, ctx);
@@ -1727,22 +1710,40 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
                                 : std::string{tools::to_string(result.error().kind)}
                                       + ": " + result.error().detail,
                          shell_cat, args_dump);
+                // PostToolUse hooks run BEFORE the result goes out: one may
+                // replace what the model reads (updatedToolOutput, how RTK
+                // filters output) or add to it. Still on this call's own
+                // thread, so a slow hook costs nobody else anything.
+                auto post = tools::hooks::run_post_tool(
+                    name.value, args, result ? result->text : result.error().detail,
+                    !result, id.value, conversation, t_ms);
+                auto with_hooks = [&](ToolExecOutput o) {
+                    o.hook_stop        = post.stop;
+                    o.hook_stop_reason = post.stop_reason;
+                    o.hook_message     = post.system_message;
+                    return out(std::move(o));
+                };
+                auto add_context = [&](std::string& text) {
+                    if (post.additional_context.empty()) return;
+                    if (!text.empty()) text += "\n\n";
+                    text += "[hook] " + post.additional_context;
+                };
                 if (result) {
-                    // The result goes out first: a post_tool hook can take
-                    // up to its 30 s timeout, and the card should not sit on
-                    // "running" for a tool that already finished.
-                    const std::string result_text = result->text;
-                    sink.send(Msg{out(ToolExecOutput{id, std::move(result->text),
+                    if (post.updated_output) {
+                        AGT_LOG(Tool, Info, "tool.post_hook_output", "name={} seq={} bytes={}->{}",
+                                name.value, exec_seq, result->text.size(),
+                                post.updated_output->size());
+                        result->text = std::move(*post.updated_output);
+                    }
+                    add_context(result->text);
+                    sink.send(Msg{with_hooks(ToolExecOutput{id, std::move(result->text),
                                             std::move(result->change),
                                             std::move(result->changes),
                                             std::move(result->images)})});
-                    // post_tool hooks: never rewrite the result. Still on
-                    // this call's own thread, so a slow hook costs nobody
-                    // else anything.
-                    tools::hooks::run_post_tool(name.value, args_dump, result_text);
                 } else {
-                    sink.send(Msg{out(ToolExecOutput{id,
-                        std::unexpected(std::move(result).error())})});
+                    auto err = std::move(result).error();
+                    add_context(err.detail);
+                    sink.send(Msg{with_hooks(ToolExecOutput{id, std::unexpected(std::move(err))})});
                 }
             } catch (const std::exception& e) {
                 // DynamicDispatch already catches tool exceptions, but guard
@@ -1761,6 +1762,35 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
         std::move(id), std::move(tool_name), std::move(args),
         std::move(cancel), exec_seq, approved_def_hash,
         std::move(active_skills), std::move(conversation), std::move(commit_trailers));
+}
+
+Cmd run_pre_tool_hooks(ToolCallId id, ToolName tool_name, nlohmann::json args,
+                       std::string conversation) {
+    // Own thread, like run_tool: a slow or wedged hook holds up only this call.
+    return Cmd::task_isolated(
+        [](const maya::unlocked&, maya::Sink<Msg> sink, std::stop_token,
+           ToolCallId id, ToolName name, nlohmann::json args, std::string conversation) {
+            PreToolHooksDone out{.id = id};
+            try {
+                auto d = tools::hooks::run_pre_tool(name.value, args, id.value, conversation);
+                out.permission         = static_cast<std::uint8_t>(d.permission);
+                out.reason             = std::move(d.reason);
+                out.updated_args       = std::move(d.updated_args);
+                out.additional_context = std::move(d.additional_context);
+                out.stop               = d.stop;
+                out.stop_reason        = std::move(d.stop_reason);
+                out.system_message     = std::move(d.system_message);
+                AGT_LOG(Tool, Info, "tool.pre_hooks", "name={} permission={} rewrote={} stop={}",
+                        name.value, static_cast<int>(out.permission),
+                        out.updated_args.has_value(), out.stop);
+            } catch (const std::exception& e) {
+                // A crash in the hook path must not strand the call; it
+                // runs as if no hook had spoken.
+                AGT_LOG(Tool, Warn, "tool.pre_hooks_error", "name={} what={}", name.value, e.what());
+            }
+            sink.send(Msg{std::move(out)});
+        },
+        std::move(id), std::move(tool_name), std::move(args), std::move(conversation));
 }
 
 namespace {
@@ -2193,6 +2223,38 @@ Cmd kick_pending_tools(Model& m) {
     std::vector<bool> promote(last.tool_calls.size(), false);
     for (auto i : plan.promote) promote[i] = true;
 
+    // ── PreToolUse hooks ── before the permission check, like Claude Code:
+    // a hook can rewrite the call (the prompt then shows what will really
+    // run), allow it, ask, or deny it. They run on a worker; the call waits
+    // here until PreToolHooksDone lands and kicks again.
+    for (std::size_t i = 0; i < last.tool_calls.size(); ++i) {
+        auto& tc = last.tool_calls[i];
+        if (!tc.is_pending()) continue;
+        if (tc.hook_stage == ToolUse::HookStage::Running) continue;
+        if (tc.hook_stage == ToolUse::HookStage::Done || !promote[i]) continue;
+        // The Library says which tools have hooks. Before it has loaded, ask
+        // the worker anyway: a deny hook must never be skipped.
+        if (m.ui.library.loaded
+            && !tools::hooks::pre_tool_matches(m.ui.library.hooks_pre_tool, tc.name.value)) {
+            tc.hook_stage = ToolUse::HookStage::Done;
+            continue;
+        }
+        tc.hook_stage = ToolUse::HookStage::Running;
+        cmds.push_back(run_pre_tool_hooks(tc.id, tc.name, tc.args, m.d.current.id.value));
+    }
+    // A call whose hook verdict isn't in yet may neither prompt nor run.
+    auto hook_pending = [](const ToolUse& tc) {
+        return tc.is_pending() && tc.hook_stage != ToolUse::HookStage::Done;
+    };
+    // The permission question with the hook's verdict folded in: ask always
+    // prompts, allow never does, otherwise the profile and grants decide.
+    auto needs_permission = [&](const ToolUse& tc) {
+        if (tc.hook_verdict == ToolUse::HookVerdict::Ask) return true;
+        if (tc.hook_verdict == ToolUse::HookVerdict::Allow) return false;
+        return !m.d.session_grants.contains(tc.name.value)
+            && tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile);
+    };
+
     // Permission preflight is deliberately a separate, non-dispatching phase.
     // If a later sibling needs approval, return before marking any earlier
     // sibling Running: returning a permission prompt discards this function's
@@ -2203,18 +2265,19 @@ Cmd kick_pending_tools(Model& m) {
             // Only a call selected for this wave may prompt. Conflicting calls
             // stay pending until the active wave completes; prompting them
             // early would reorder permission UX ahead of runnable work.
-            if (!promote[i] || !tc.is_pending()) continue;
-            if (m.d.session_grants.contains(tc.name.value)
-                || !tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile))
-                continue;
+            if (!promote[i] || !tc.is_pending() || hook_pending(tc)) continue;
+            if (!needs_permission(tc)) continue;
             // Fingerprint the definition the user is about to be SHOWN, so
             // the approval is tied to that definition and not just to the
             // name. Verified again at launch (execute_approved).
             const auto shown = tools::find(tc.name.value);
             m.d.pending_permission = PendingPermission{
                 tc.id, tc.name,
-                "Tool " + tc.name.value + " needs permission under "
-                    + std::string{ui::profile_label(m.d.profile)} + " profile",
+                tc.hook_verdict == ToolUse::HookVerdict::Ask
+                    ? (tc.hook_reason.empty() ? std::string{"a hook asks you to confirm this call"}
+                                              : "hook: " + tc.hook_reason)
+                    : "Tool " + tc.name.value + " needs permission under "
+                          + std::string{ui::profile_label(m.d.profile)} + " profile",
                 shown ? shown->definition_hash() : 0,
                 // task is Exec too, but a subagent isn't one command.
                 shown && shown->effects.has(tools::Effect::Exec)
@@ -2224,22 +2287,33 @@ Cmd kick_pending_tools(Model& m) {
                 m.s.phase = phase::AwaitingPermission{std::move(*ctx)};
             else
                 m.s.phase = phase::Idle{};   // late arrival: stay Idle
-            return Cmd::none();
+            // Hook workers started this tick still report back.
+            return cmds.empty() ? Cmd::none() : Cmd::batch(std::move(cmds));
         }
     }
 
     for (std::size_t i = 0; i < last.tool_calls.size(); ++i) {
         auto& tc = last.tool_calls[i];
+        if (hook_pending(tc)) {
+            any_pending = true;
+            // The stream is over and this call is working (its hooks are).
+            // Same handoff as a running tool, so the spinner runs and the
+            // hooks' result can kick again.
+            if (m.s.is_streaming()) {
+                if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx)
+                    m.s.phase = phase::ExecutingTool{std::move(*ctx)};
+                else
+                    m.s.phase = phase::Idle{};
+            }
+            continue;
+        }
         // Approved: user already granted permission; advance it exactly
         // like a Pending-but-no-permission-needed tool, minus the
         // permission check. Keeps the planner as the single source of
         // truth for scheduling.
         const bool ready = tc.is_pending() || tc.is_approved();
         if (ready) {
-            const bool needs_perm = tc.is_approved()
-                ? false
-                : (!m.d.session_grants.contains(tc.name.value)
-                   && tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile));
+            const bool needs_perm = tc.is_approved() ? false : needs_permission(tc);
             if (needs_perm) {
                 // A permission request is already displayed for this call (or
                 // another sibling). Keep it Pending and do not dispatch it.
@@ -2351,6 +2425,31 @@ Cmd kick_pending_tools(Model& m) {
         const bool has_results = std::ranges::any_of(last.tool_calls, [](const auto& tc){
             return tc.is_terminal();
         });
+        // PreToolUse additionalContext: the model reads it with the result,
+        // as in Claude Code. Appended once, as the results go out.
+        for (auto& tc : last.tool_calls) {
+            if (tc.hook_context.empty()) continue;
+            std::string* out = nullptr;
+            if (auto* d = std::get_if<ToolUse::Done>(&tc.status)) out = &d->output;
+            else if (auto* f = std::get_if<ToolUse::Failed>(&tc.status)) out = &f->output;
+            if (out) {
+                if (!out->empty()) *out += "\n\n";
+                *out += "[hook] " + tc.hook_context;
+            }
+            tc.hook_context.clear();
+        }
+        // A hook said continue:false: the results stay in the transcript,
+        // but no next turn starts. The reason is shown, not sent.
+        if (has_results && m.s.hook_stop) {
+            m.s.hook_stop = false;
+            std::string why = std::exchange(m.s.hook_stop_reason, {});
+            m.s.phase = phase::Idle{};
+            cmds.push_back(detail::save_current(m));
+            cmds.push_back(detail::set_status_toast(m, why.empty() ? std::string{"a hook stopped the run"}
+                                                           : "hook stopped the run: " + why,
+                                            std::chrono::seconds{6}));
+            return Cmd::batch(std::move(cmds));
+        }
         if (has_results) {
             // ── Doom-loop circuit breaker ────────────────────────────────
             // Before spending another model completion, check whether this

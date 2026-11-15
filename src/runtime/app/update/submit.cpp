@@ -628,6 +628,9 @@ Cmd submit_message(Model& m) {
     m.s.phase         = phase::Streaming{std::move(ctx)};
     m.s.status.clear();
     m.s.status_until  = {};
+    // A hook's continue:false ended the last run, not this one.
+    m.s.hook_stop = false;
+    m.s.hook_stop_reason.clear();
 
     auto trim = trim_frozen_if_oversized(m);
 

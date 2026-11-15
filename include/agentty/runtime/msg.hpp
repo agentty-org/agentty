@@ -444,7 +444,28 @@ struct ToolExecOutput {
     // ids restart at call_0), so a worker that outlives a cancel must not
     // land its output on a new call that reuses the id. 0 = untagged.
     std::uint64_t exec_seq = 0;
+    // A PostToolUse hook said continue:false: end the agent run after this
+    // result instead of starting the next turn.
+    bool          hook_stop = false;
+    std::string   hook_stop_reason;
+    // A hook's systemMessage, shown to the user as a toast.
+    std::string   hook_message;
 };
+
+// The PreToolUse hooks for one call have run (on a worker, before the
+// permission check). Only sent when hooks exist for the tool.
+struct PreToolHooksDone {
+    ToolCallId id;
+    // Deny / Ask / Allow / None, see tools::hooks::PreToolDecision.
+    std::uint8_t   permission = 0;
+    std::string    reason;
+    std::optional<nlohmann::json> updated_args;
+    std::string    additional_context;
+    bool           stop = false;
+    std::string    stop_reason;
+    std::string    system_message;
+};
+
 // Contains the FULL accumulated output, not a delta — the update handler can
 // assign unconditionally without maintaining append state. Coalesced at the
 // subprocess boundary (~100 ms) so a chatty command doesn't flood the event
@@ -1469,7 +1490,7 @@ using StreamMsg = std::variant<
     StreamBufferedWait, CancelStream, RetryStream, ProactiveContextReady>;
 
 using ToolMsg = std::variant<
-    ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
+    ToolExecOutput, ToolExecProgress, ToolTimeoutCheck, PreToolHooksDone,
     PermissionApprove, PermissionReject, PermissionApproveAlways>;
 
 // The tool-output viewer PANEL's messages — split from ToolMsg so the

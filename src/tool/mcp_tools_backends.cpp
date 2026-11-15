@@ -21,6 +21,7 @@
 #include "agentty/scope/scope.hpp"
 #include "agentty/config/inventory.hpp"   // kAgentsLayout — the one declaration
 #include "agentty/tool/memory_store.hpp"
+#include "agentty/tool/hooks.hpp"   // PreToolUse/PostToolUse in subagents and `agentty run`
 #include "agentty/tool/skills.hpp"
 #include "agentty/tool/subagent.hpp"
 #include "agentty/tool/registry.hpp"   // CallContext
@@ -1825,6 +1826,8 @@ public:
         // six in a row without a text answer is not a strategy.
         std::unordered_map<std::string, int> repeated_ok_calls;
         bool doomed = false;
+        // A hook said continue:false: end the run after this turn's tools.
+        bool hook_stopped = false;
         // Set once we've told the model it's out of budget and must write its
         // final report NOW. Prevents a thorough agent from exploring straight
         // into the turn cap and never emitting a report (the loop below then
@@ -1839,7 +1842,7 @@ public:
                                   ? stats->max_turns
                                   : subagent::max_turns_for(type.read_only);
 
-        while (turns < max_turns && !doomed) {
+        while (turns < max_turns && !doomed && !hook_stopped) {
             // Wall-clock stop, checked at the top of every turn. Placed here
             // rather than in the while() condition so `deadline_hit` is set
             // before the loop exits and the report below can say WHICH
@@ -2030,6 +2033,30 @@ public:
                         continue;
                     }
                     ran_a_tool = true;
+                    // PreToolUse hooks, like the interactive loop. Nobody can
+                    // answer a prompt here, so "ask" denies, as in Claude
+                    // Code's -p mode; the model reads why.
+                    std::string hook_context;
+                    {
+                        using P = tools::hooks::PreToolDecision::Permission;
+                        auto pre = tools::hooks::run_pre_tool(tc.name.value, tc.args, tc.id.value);
+                        if (pre.updated_args) tc.args = std::move(*pre.updated_args);
+                        hook_context = std::move(pre.additional_context);
+                        if (pre.permission == P::Deny || pre.permission == P::Ask) {
+                            if (stats) { ++stats->tool_calls; ++stats->tool_errors; }
+                            const std::string why = pre.permission == P::Deny
+                                ? "blocked by PreToolUse hook: " + pre.reason
+                                : "a PreToolUse hook asked for confirmation, and nobody can "
+                                  "answer in this run" + (pre.reason.empty() ? "" : ": " + pre.reason);
+                            tc.status = ToolUse::Failed{now, now, why};
+                            log += "\n    \xe2\x9c\x97 " + tc.name.value + ": blocked by hook";
+                            ctx.emit(log);
+                            emit_tool_event(tc.name.value, 0, false, "blocked by hook", tc.args.dump());
+                            if (pre.stop) hook_stopped = true;
+                            continue;
+                        }
+                        if (pre.stop) hook_stopped = true;
+                    }
                     const auto t_start = std::chrono::steady_clock::now();
                     // The subagent's own context: deeper, its own reader and
                     // deadline, the parent's card for live output (as before).
@@ -2083,6 +2110,22 @@ public:
                     if (stats) {
                         ++stats->tool_calls;
                         if (!res) ++stats->tool_errors;
+                    }
+                    // PostToolUse: may replace the output or add to it.
+                    {
+                        auto post = tools::hooks::run_post_tool(
+                            tc.name.value, tc.args, res ? res->text : res.error().detail,
+                            !res, tc.id.value, {}, t_ms);
+                        if (res && post.updated_output) res->text = std::move(*post.updated_output);
+                        if (!post.additional_context.empty()) {
+                            if (!hook_context.empty()) hook_context += "\n";
+                            hook_context += post.additional_context;
+                        }
+                        if (post.stop) hook_stopped = true;
+                    }
+                    if (!hook_context.empty()) {
+                        if (res) res->text += "\n\n[hook] " + hook_context;
+                        else res.error().detail += "\n\n[hook] " + hook_context;
                     }
                     if (res) {
                         // ECONOMY: a subagent is a focused, tool-heavy burst
@@ -2190,6 +2233,8 @@ public:
             std::string why;
             if (!last_error.empty())
                 why = "[subagent failed: " + last_error + "]";
+            else if (hook_stopped)
+                why = "[subagent stopped by a hook (continue:false)]";
             else if (doomed)
                 why = "[subagent stopped: the same tool call failed 3\xc3\x97 "
                       "in a row without converging]";

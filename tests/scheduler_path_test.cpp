@@ -318,6 +318,7 @@ TEST_CASE("scheduler path") {
     {
         Model m;
         m.d.profile = Profile::Ask;
+        m.ui.library.loaded = true;   // loaded, no hooks
         m.s.phase = Streaming{Active{}};
         Message asst;
         asst.role = Role::Assistant;
@@ -333,5 +334,71 @@ TEST_CASE("scheduler path") {
               calls[0].is_pending() && calls[1].is_pending());
         expect("permission preflight selects later guarded tool",
               m.d.pending_permission && m.d.pending_permission->id == permission_id);
+    }
+
+    // (q) PreToolUse hooks: a call a hook matches waits for the verdict
+    //     before any prompt or dispatch, and the verdict decides the prompt.
+    {
+        Model m;
+        m.d.profile = Profile::Ask;
+        m.ui.library.loaded = true;
+        m.ui.library.hooks_pre_tool = {"Bash"};
+        m.s.phase = Streaming{Active{}};
+        Message asst;
+        asst.role = Role::Assistant;
+        asst.tool_calls.push_back(pending("shell", {{"command", "git status"}}));
+        m.d.current.messages.push_back(std::move(asst));
+        auto c1 = kick_pending_tools(m);
+        (void)c1;
+        auto& tc = m.d.current.messages.back().tool_calls[0];
+        expect("hooked call waits for its hooks", tc.is_pending()
+              && tc.hook_stage == ToolUse::HookStage::Running && !m.d.pending_permission);
+        auto c2 = kick_pending_tools(m);
+        (void)c2;
+        expect("a second kick doesn't start the hooks again",
+              tc.hook_stage == ToolUse::HookStage::Running && !m.d.pending_permission);
+
+        // Allow: no prompt even under Ask.
+        tc.hook_stage = ToolUse::HookStage::Done;
+        tc.hook_verdict = ToolUse::HookVerdict::Allow;
+        auto c3 = kick_pending_tools(m);
+        (void)c3;
+        expect("hook allow skips the prompt", !m.d.pending_permission && !tc.is_pending());
+    }
+    {
+        // Ask: a prompt even under Write, carrying the hook's reason.
+        Model m;
+        m.d.profile = Profile::Write;
+        m.ui.library.loaded = true;
+        m.ui.library.hooks_pre_tool = {"Bash"};
+        m.s.phase = Streaming{Active{}};
+        Message asst;
+        asst.role = Role::Assistant;
+        asst.tool_calls.push_back(pending("shell", {{"command", "psql prod"}}));
+        asst.tool_calls[0].hook_stage = ToolUse::HookStage::Done;
+        asst.tool_calls[0].hook_verdict = ToolUse::HookVerdict::Ask;
+        asst.tool_calls[0].hook_reason = "prod database";
+        m.d.current.messages.push_back(std::move(asst));
+        auto c = kick_pending_tools(m);
+        (void)c;
+        expect("hook ask prompts even when the profile wouldn't",
+              m.d.pending_permission
+              && m.d.pending_permission->reason.find("prod database") != std::string::npos);
+    }
+    {
+        // A call no hook matches skips the stage entirely.
+        Model m;
+        m.d.profile = Profile::Write;
+        m.ui.library.loaded = true;
+        m.ui.library.hooks_pre_tool = {"Bash"};
+        m.s.phase = Streaming{Active{}};
+        Message asst;
+        asst.role = Role::Assistant;
+        asst.tool_calls.push_back(pending("read", {{"path", "a.cpp"}}));
+        m.d.current.messages.push_back(std::move(asst));
+        auto c = kick_pending_tools(m);
+        (void)c;
+        expect("an unhooked call runs straight away",
+              !m.d.current.messages.back().tool_calls[0].is_pending());
     }
 }
