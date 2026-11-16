@@ -4,6 +4,32 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Hooks speak Claude Code's protocol, so RTK works as is** (#128). A
+  `hooks.json` can use Claude Code's shape (`PreToolUse`, `PostToolUse`,
+  `PostToolUseFailure`). Hooks get the event as JSON on stdin and can deny,
+  ask, allow, rewrite a call before it runs, or replace its output before the
+  model reads it. `PreToolUse` runs before the permission prompt, so the
+  prompt and the card show what will really run. Hooks now also run in
+  `agentty run` and in subagents. The old `pre_tool` / `post_tool` format
+  still works. See [Hooks](https://agentty.org/docs/hooks).
+- **Delete, Home and End work in the prompt, the login box and the settings
+  add field** (#129). Thanks @sail3r.
+
+### Changed
+- **The ^U thinking reader ends like the transcript's block**: `Reasoned ·
+  216 tokens · 4.3s · 50 tok/s`, and a long block gets a scrollbar.
+- **Overlay scrollbars are a block thumb in the panel's colour**, with no
+  track line beside the border, and move in half-cell steps.
+- **Stats columns are sized to their content.** Text and donuts take what
+  they need, charts take the rest, so the gap beside Latency is gone.
+
+### Fixed
+- The ^U reader no longer cuts lines with `…` or draws empty rows after the
+  text.
+- A sandboxed hook can read its input. It used to get a payload file in a
+  `/tmp` the sandbox couldn't see.
+
 ## [0.9.56] - 2026-11-13
 
 ### Fixed

@@ -90,6 +90,7 @@ The composer is a readline-style editor.
 | Key | Action |
 |---|---|
 | [[Backspace]] | Delete the character (or whole chip) before the cursor |
+| [[Delete]] | Delete the character (or whole chip) after the cursor |
 | [[Ctrl+W]] | Delete the word before the cursor |
 | [[Alt+D]] | Delete the word after the cursor |
 | [[Ctrl+U]] | Delete to start of line (on an empty composer it opens the thinking reader, see Global) |

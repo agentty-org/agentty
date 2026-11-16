@@ -201,7 +201,10 @@ Grep for the tag, not for the message text.
 | `responses.tool_args_unroutable` | Tool arguments arrived but couldn't be attached to a call (Responses dialect) |
 | `copilot.models.*` / `copilot.auto_session.*` | Why Copilot fell back to the bundled catalog or lost its Auto session |
 | `tool.dispatch` | Every tool call before it runs: name, `seq`, args (args need `AGENTTY_LOG_BODIES`). A `dispatch` with no `tool.exec` at the same `seq` hung, blocked, or crashed |
-| `tool.pre_hook_blocked` | A `pre_tool` hook refused the call, and its reason |
+| `tool.pre_hooks` | The PreToolUse hooks for a call finished: the decision (`permission` 0 none, 1 allow, 2 ask, 3 deny), whether they rewrote the call, and whether one said stop |
+| `tool.pre_hooks_error` | The PreToolUse stage itself crashed; the call goes ahead as if no hook spoke |
+| `hook.error` | A hook exited with a code other than 0 or 2, or timed out: the event, command, exit code and stderr. The call is not blocked |
+| `tool.post_hook_output` | A PostToolUse hook replaced a tool's output, with the size before and after |
 | `tool.exec` | Every tool call: name, duration, outcome, and the arguments on failure |
 | `mcp.connect` | Did each plugin server connect, and how many tools did it offer? |
 | `auth.refresh` | Did the OAuth token refresh succeed? |

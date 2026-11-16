@@ -142,7 +142,7 @@ by meaning turns on by itself. `agentty diagnostics` shows what is in use.
 | `AGENTTY_ACP_AGENTS` | Path to the ACP agent config (same precedence chain as MCP). |
 | `AGENTTY_ACP_ALLOW_PROJECT` | Allow a project-local ACP agent config. Off by default, same reasoning as MCP. |
 | `AGENTTY_NO_HOOKS` | Disable all lifecycle hooks for this run. |
-| `AGENTTY_HOOK_EVENT` · `AGENTTY_HOOK_TOOL` · `AGENTTY_HOOK_PAYLOAD_FILE` | **Set by agentty for your hook**, not by you — the event name, tool name, and a file holding the JSON payload. See **[Hooks](/docs/hooks)**. |
+| `AGENTTY_HOOK_EVENT` · `AGENTTY_HOOK_TOOL` · `AGENTTY_HOOK_PAYLOAD_FILE` · `AGENTTY_PROJECT_DIR` · `CLAUDE_PROJECT_DIR` | **Set by agentty for your hook**, not by you: the event name, the tool name, a file holding the JSON payload (also sent on stdin), and the project folder. See **[Hooks](/docs/hooks)**. |
 
 ## Security & storage
 
