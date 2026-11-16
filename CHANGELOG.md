@@ -15,6 +15,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   still works. See [Hooks](https://agentty.org/docs/hooks).
 - **Delete, Home and End work in the prompt, the login box and the settings
   add field** (#129). Thanks @sail3r.
+- **32-bit programs run in the sandbox** on x86_64 Linux with multilib (#130).
+  Thanks @lukerb52. They get their own syscall filter, which allows exactly
+  what the 64-bit one does by name; claybin's new `x86_audit` test keeps the
+  two equal.
 
 ### Changed
 - **The ^U thinking reader ends like the transcript's block**: `Reasoned ·
@@ -25,6 +29,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   they need, charts take the rest, so the gap beside Latency is gone.
 
 ### Fixed
+- **Common tools no longer fail inside the sandbox.** sqlite said "disk I/O
+  error", git with `core.fsync` died on fsync, and `flock`, file watchers
+  (`tsc --watch`, vite), Rust panic handlers and node timers all hit
+  "Operation not permitted". The sandbox now allows those calls (fsync,
+  flock, inotify, sigaltstack, umask and others); each one only acts on what
+  the program can already reach. `nice` works on the program itself.
 - The ^U reader no longer cuts lines with `…` or draws empty rows after the
   text.
 - A sandboxed hook can read its input. It used to get a payload file in a
