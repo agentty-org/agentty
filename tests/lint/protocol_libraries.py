@@ -72,6 +72,10 @@ FILE_IO_LIBS = {"mcp-cpp", "acp-cpp", "jsonrpc-cpp"}
 # claybin's job is to fork/exec into a jail, handing the guest an environment:
 # R5's process rule (and passing environ to exec) is its purpose.
 EXEMPT = {("claybin", "R5 process"), ("claybin", "R5 env")}
+# One file, one rule: claybin's probe opens a UDP socket in a forked child
+# inside a fresh network namespace, to check the jail really has no route out.
+# It sends nothing. Everywhere else in claybin, sockets stay banned.
+EXEMPT_FILES = {("claybin/src/plan/probe.cpp", "R5 socket")}
 
 # A mutable static / namespace-scope variable (R3). Matched per statement on a
 # line starting with `static`; const/constexpr ones and functions are fine.
@@ -136,7 +140,8 @@ def purity(root):
                     continue
                 padded = " " + line
                 for name, rx in rules.items():
-                    if (lib, name) not in EXEMPT and rx.search(padded):
+                    if ((lib, name) not in EXEMPT and (rel, name) not in EXEMPT_FILES
+                            and rx.search(padded)):
                         hits.append(f"{rel}:{no}: {name}: {line.strip()}")
                 if (lib in FILE_IO_LIBS
                         and FILE_IO.search(padded.replace(" fs::", " std::filesystem::"))):

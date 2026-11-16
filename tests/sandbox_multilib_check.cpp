@@ -1,5 +1,11 @@
-// Native multilib coverage of the shipped set_config -> init -> shell path.
-// Run with --require to treat missing host capabilities as failures.
+// sandbox_multilib_check: do 32-bit programs run, and stay confined, in the
+// real sandbox on this host? Drives the shipped set_config -> init -> shell
+// path with gcc -m32 binaries. Not a ctest: it needs multilib gcc, an i386
+// loader and working namespaces (see sandbox_live_check for the reasoning).
+//
+//     cmake --build build --target sandbox_multilib_check
+//     ./build/sandbox_multilib_check            # skips what the host can't do
+//     ./build/sandbox_multilib_check --require  # ...or fails on it
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/tool/util/subprocess.hpp"
 #include "agentty/domain/sandbox_config.hpp"
@@ -64,7 +70,15 @@ int main(int argc, char** argv) {
 #if !defined(__linux__) || !defined(__x86_64__)
     return skip(require, "requires native Linux x86_64");
 #else
-    std::string pattern = (std::filesystem::current_path() / "agentty-multilib-XXXXXX").string();
+    // The scratch workspace can't live in /tmp: the sandbox mounts its own
+    // tmpfs there. ~/.cache is outside the repo and is a real directory.
+    std::filesystem::path base;
+    if (const char* x = std::getenv("XDG_CACHE_HOME"); x && *x) base = x;
+    else if (const char* h = std::getenv("HOME"); h && *h) base = std::filesystem::path{h} / ".cache";
+    else base = std::filesystem::current_path();
+    std::error_code mk;
+    std::filesystem::create_directories(base, mk);
+    std::string pattern = (base / "agentty-multilib-XXXXXX").string();
     const char* made = ::mkdtemp(pattern.data());
     if (!made) { std::perror("mkdtemp"); return 1; }
     const std::filesystem::path root(made);
@@ -103,9 +117,11 @@ int main(void) {
         save(root / "restrictions.c", R"C(
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <linux/sched.h>
 #include <unistd.h>
 static int denied(void) { return errno == EPERM || errno == EACCES || errno == EROFS; }
@@ -136,6 +152,17 @@ int main(int argc, char **argv) {
         munmap(p, 4096);
         return ok ? 0 : 28;
     }
+    if (!strcmp(argv[1], "kill")) {
+        // its own child: allowed. pid 1 of the sandbox: refused.
+        pid_t c = fork();
+        if (c < 0) return 30;
+        if (c == 0) { pause(); _exit(0); }
+        if (kill(c, SIGTERM) != 0) return 31;
+        int st = 0;
+        if (waitpid(c, &st, 0) != c || !WIFSIGNALED(st) || WTERMSIG(st) != SIGTERM) return 32;
+        errno = 0;
+        return kill(1, SIGTERM) == -1 && errno == EPERM ? 0 : 33;
+    }
     return 29;
 }
 )C");
@@ -162,7 +189,7 @@ int main(int argc, char **argv) {
         bool ok = expect("sandbox native baseline", sandbox("./baseline64"), 42);
         const auto restrictions = [&](const char* bits) {
             bool passed = true;
-            for (const char* check : {"write", "rwx", "mprotect"}) {
+            for (const char* check : {"write", "rwx", "mprotect", "kill"}) {
                 const std::string cmd = "./restrictions" + std::string(bits) + " " + check + " " + quote(outside);
                 passed = expect(cmd.c_str(), sandbox(cmd), 0) && passed;
             }

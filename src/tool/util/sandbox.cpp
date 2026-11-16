@@ -413,6 +413,20 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         std::error_code ec;
         if (fs::is_directory(r, ec)) p.system_read_roots.emplace_back(r);
     }
+    // A merged-/usr root (/lib -> usr/lib) is recreated as the same link, not
+    // bound: see Posture::system_links. Only a link whose target resolves
+    // inside /usr qualifies, so a link to anywhere else is still a plain bind.
+    std::erase_if(p.system_read_roots, [&](const std::string& root) {
+        if (root == "/usr") return false;
+        std::error_code ec;
+        if (!fs::is_symlink(fs::symlink_status(root, ec))) return false;
+        const auto target = fs::read_symlink(root, ec);
+        if (ec) return false;
+        const auto resolved = fs::canonical(root, ec);
+        if (ec || !resolved.string().starts_with("/usr/")) return false;
+        p.system_links.emplace_back(root, target.string());
+        return true;
+    });
 #endif
     for (const char* f : kEtcReadable) p.etc_readable.emplace_back(f);
     if (cfg.fs_scope == sandbox_cfg::FsScope::Toolchain) {
@@ -424,6 +438,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         // `/` alone: binding /usr etc. under a read-only `/` fails creating
         // their mount points, which killed every spawn.
         p.system_read_roots = {"/"};
+        p.system_links.clear();
         p.etc_readable.clear();
     }
 #endif

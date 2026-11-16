@@ -343,25 +343,25 @@ endif()
 target_compile_definitions(exec_exit_probe PRIVATE
     AGENTTY_MCP=0)
 
-# Real native Linux x86_64 multilib enforcement, not a plan/mock test.
-# Missing host multilib or sandbox capabilities are explicit CTest skips;
-# run sandbox_multilib_test --require to make those failures instead.
+# sandbox_multilib_check: do 32-bit programs run, and stay confined, in the
+# real sandbox on this host. Same reasoning as sandbox_live_check above: it
+# needs gcc -m32, an i386 loader and working namespaces, which are facts
+# about the machine, so it's a target you run by hand when touching the
+# i386 path:
+#     cmake --build build --target sandbox_multilib_check && ./build/sandbox_multilib_check
+# claybin's x86_audit covers the profiles themselves on every build.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$"
    AND NOT CMAKE_CROSSCOMPILING)
-    add_executable(sandbox_multilib_test
-        ${CMAKE_SOURCE_DIR}/tests/sandbox_multilib_test.cpp
+    add_executable(sandbox_multilib_check EXCLUDE_FROM_ALL
+        ${CMAKE_SOURCE_DIR}/tests/sandbox_multilib_check.cpp
         ${_AGENTTY_EXEC_SANDBOX_SOURCES})
-    target_include_directories(sandbox_multilib_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(sandbox_multilib_test PRIVATE
+    target_include_directories(sandbox_multilib_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(sandbox_multilib_check PRIVATE
         claybin nlohmann_json::nlohmann_json Threads::Threads maya::app)
     if(TARGET mcp::tools)
-        target_link_libraries(sandbox_multilib_test PRIVATE mcp::tools)
+        target_link_libraries(sandbox_multilib_check PRIVATE mcp::tools)
     endif()
-    target_compile_definitions(sandbox_multilib_test PRIVATE AGENTTY_MCP=0)
-    agentty_test(sandbox_multilib_test MODE raw TIMEOUT 180 LABELS sandbox multilib)
-    add_test(NAME sandbox_multilib_test COMMAND sandbox_multilib_test)
-    set_tests_properties(sandbox_multilib_test PROPERTIES
-        SKIP_RETURN_CODE 77 TIMEOUT 180 LABELS "sandbox;multilib")
+    target_compile_definitions(sandbox_multilib_check PRIVATE AGENTTY_MCP=0)
 endif()
 
 # sandbox_audit: what does agentty ACTUALLY enforce on THIS host?

@@ -378,7 +378,9 @@ string literals first, and have **no allowlist**:
   and file IO in jsonrpc-cpp, mcp-cpp and acp-cpp (fstreams,
   `std::filesystem` queries and changes, directory walks, `open`/`fsync`).
   claybin is exempt from R5's process and environ rules only, because
-  spawning a jailed child is what it is for. The file IO rule has no
+  spawning a jailed child is what it is for. Its probe may also open one
+  socket (`src/plan/probe.cpp`), in a throwaway child inside a fresh network
+  namespace, to check the jail has no route out. The file IO rule has no
   exceptions in those three; it doesn't apply to rag-cpp, a storage engine.
 - **`no_duplication`** — fails if mcp-cpp or acp-cpp redefines a name the
   core exports (`Engine`, `Codec`, `RpcError`, `RequestId`, `Newtype` ...)

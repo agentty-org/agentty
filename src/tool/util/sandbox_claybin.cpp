@@ -42,7 +42,6 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -72,6 +71,7 @@ extern "C" char** environ;
 #include <netinet/in.h>
 #include "claybin/broker/notify.hpp"
 #include "claybin/plan/spawn.hpp"
+#include <sys/syscall.h>   // SYS_kill: an i386 kill maps onto it
 #elif defined(__APPLE__)
 #include "claybin/macos/backend.hpp"
 #else
@@ -274,25 +274,6 @@ namespace {
 
     // ── the read set, from the SHARED lists ───────────────────────────────
     for (const auto& root : p.system_read_roots) {
-#if defined(__linux__)
-        // A bind follows the SOURCE symlink and creates a real directory at
-        // the destination. Flattening /lib -> usr/lib makes the loader's
-        // ../lib32/ld-linux.so.2 resolve to /lib32 rather than /usr/lib32.
-        // Recreate only the well-known merged-/usr aliases; /usr is already
-        // read-only. Never follow an alias into an unrelated host directory.
-        if (root == "/bin" || root == "/sbin" || root == "/lib" ||
-            root == "/lib64" || root == "/lib32" || root == "/libx32") {
-            std::error_code ec;
-            const auto target = std::filesystem::read_symlink(root, ec);
-            if (!ec) {
-                const auto resolved = std::filesystem::canonical(root, ec);
-                if (!ec && resolved.string().starts_with("/usr/")) {
-                    d = std::move(d).symlink(target.string(), root);
-                    continue;
-                }
-            }
-        }
-#endif
         // /usr and /bin must exist for a shell to run at all; the rest are
         // best-effort, matching --ro-bind-try.
         if (root == "/usr" || root == "/bin")
@@ -300,6 +281,9 @@ namespace {
         else
             d = std::move(d).bind_try(root, root);
     }
+    // merged-/usr aliases, as the host has them (Posture::system_links)
+    for (const auto& [link, target] : p.system_links)
+        d = std::move(d).symlink(target, link);
     for (const auto& f : p.etc_readable) d = std::move(d).bind_try(f, f);
     for (const auto& h : p.home_tool_dirs) d = std::move(d).bind_try(h, h);
     // Extra grants from the pane. read_paths are read-only; write_paths are
@@ -543,32 +527,25 @@ namespace {
     }
 #endif
 #if defined(__linux__) && defined(__x86_64__)
-    // Enabling the second ABI is explicit in Claybin; never reinterpret native
-    // syscall numbers as compatibility numbers. A kernel without IA32 emulation
-    // still rejects i386 exec with ENOEXEC, without changing native execution.
+    // 32-bit programs get claybin's i386 profile, which allows the same calls
+    // as the native one by name (claybin's x86_audit checks). It is a second
+    // filter, chosen by the call's audit arch, so native numbers are never
+    // read as i386 ones.
     auto compat = p.syscall_mode == 0 ? SyscallPolicy::everything()
         : (p.syscall_mode == 2 && p.net_mode == 1
             ? profiles_i386::compiler() : profiles_i386::compiler_with_network());
-    if (p.wx_protect) {
-        // Legacy mmap hides prot behind a pointer and cannot be inspected.
-        compat.deny(90, 38 /* ENOSYS */);
-        for (auto nr : {192u /* mmap2 */, 125u /* mprotect */, 380u /* pkey_mprotect */})
-            compat.deny_arg_all(nr, 2, 6, SysAction::errno_, 1);
-    } else {
-        for (auto nr : {192u, 125u, 380u}) compat.drop_arg_rules(nr, 2);
+    // the same W^X switch as the native profile above, in both directions
+    if (p.syscall_mode == 0 && p.wx_protect) {
+        compat.deny(90 /* old mmap: prot is behind a pointer */, 38 /* ENOSYS */);
+        for (auto nr : {192u /* mmap2 */, 125u /* mprotect */})
+            compat.deny_arg_all(nr, 2, kProtWriteExec, clay::SysAction::errno_, 1);
     }
-    if (p.syscall_mode != 0) {
-        static constexpr std::uint32_t families[] = {1, 2, 10};
-        compat.allow_arg32_only(359 /* socket */, 0, std::span<const std::uint32_t>{families},
-                               SysAction::errno_, 97);
-        compat.allow_arg32_only(360 /* socketpair */, 0, std::span<const std::uint32_t>{families},
-                               SysAction::errno_, 97);
-        // socketcall hides the socket family in guest memory; allowing it would
-        // bypass the family filter above. Modern i386 libc uses direct calls.
-        compat.deny(102 /* socketcall */, 38);
-    }
-    // Compatibility ptrace/signal calls remain denied, not sent to a broker
-    // whose syscall decoding currently understands only the native ABI.
+    if (p.syscall_mode != 0 && !p.wx_protect)
+        for (auto nr : {192u /* mmap2 */, 125u /* mprotect */}) compat.drop_arg_rules(nr, 2);
+    if (p.syscall_mode != 0) profiles_i386::add_socket_families(compat);
+    // kill goes to the same broker as the native one. The broker reads the
+    // call's audit arch and maps i386 kill (37) onto the native decision.
+    if (p.broker && p.syscall_mode != 0) compat.notify(37 /* kill */);
     d = std::move(d).syscall_profile_i386(std::move(compat));
 #endif
     d = std::move(d).syscall_profile(std::move(sp));
@@ -1232,8 +1209,23 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
             if (!req) return false;   // guest gone, or the fd closed
 
             broker::Event ev;
-            const auto verdict =
-                broker::decide(req->nr, req->args, req->pid, guest_pid, &ev);
+            // i386 numbers mean different calls. The only i386 notify rule is
+            // kill (37), so it is mapped to the native kill; anything else
+            // from that ABI is refused rather than misread.
+            constexpr std::uint32_t kAuditArchI386 = 0x40000003u;
+            auto nr = req->nr;
+            bool foreign = false;
+            if (req->arch == kAuditArchI386) {
+#if defined(SYS_kill)
+                if (nr == 37) nr = static_cast<::clay::SysNr>(SYS_kill);
+                else foreign = true;
+#else
+                foreign = true;
+#endif
+            }
+            const auto verdict = foreign
+                ? broker::Verdict::Deny
+                : broker::decide(nr, req->args, req->pid, guest_pid, &ev);
 
             // THE CHECK EVERY IMPLEMENTATION GETS WRONG, done immediately
             // before responding.

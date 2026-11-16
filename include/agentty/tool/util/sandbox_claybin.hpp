@@ -37,6 +37,11 @@ namespace agentty::tools::util::sandbox::claybin_backend {
 // about a backend that restated them and granted read on `/`.
 struct Posture {
     std::vector<std::string> system_read_roots;  // kSystemReadRoots
+    // Merged-/usr aliases: /lib -> usr/lib and friends, recreated as the same
+    // symlink instead of bound. A bind flattens /lib into a real directory,
+    // and the i386 loader's ../lib32/ld-linux.so.2 then resolves under /lib32
+    // instead of /usr/lib32. {link, target}; only targets inside /usr.
+    std::vector<std::pair<std::string, std::string>> system_links;
     std::vector<std::string> etc_readable;       // kEtcReadable
     std::vector<std::string> home_tool_dirs;     // $HOME + kHomeToolSubdirs
     // Extra read/write grants the user added in the pane, on top of the scope.
