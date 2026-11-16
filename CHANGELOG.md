@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.57] - 2026-11-16
+
 ### Added
 - **Hooks speak Claude Code's protocol, so RTK works as is** (#128). A
   `hooks.json` can use Claude Code's shape (`PreToolUse`, `PostToolUse`,
