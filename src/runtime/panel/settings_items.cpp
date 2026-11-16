@@ -125,6 +125,18 @@ std::vector<Item> general(const Model& m) {
         out.push_back(std::move(i));
     }
     {
+        // #131. Off by default: retrying forever hammers an endpoint whose
+        // error only looks temporary (wrong model, broken proxy).
+        Item i;
+        i.primary   = "Keep retrying on errors";
+        i.secondary = m.d.persisted.keep_retrying
+            ? "on \xc2\xb7 temporary errors and rate limits retry until Esc"
+            : "off \xc2\xb7 gives up after 6 tries (about 90 s)";
+        i.hint      = "Enter: toggle";
+        i.action    = Action::ToggleKeepRetrying;
+        out.push_back(std::move(i));
+    }
+    {
         // #98. What each mode does, in the row, so nobody has to look it up.
         const auto mode = agentty::tools::plan::loading_from(m.d.persisted.tool_loading);
         Item i;

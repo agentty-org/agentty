@@ -1342,6 +1342,8 @@ struct ToggleAutoTitle {};
 // Compact the context on its own when it nears the window.
 struct ToggleAutoCompact {};
 struct ToggleCommitAttribution {};
+// Keep retrying temporary errors until it works or Esc (#131).
+struct ToggleKeepRetrying {};
 // MCP tool loading: auto → load all → load on demand (#98).
 struct CycleToolLoading {};
 struct RestoreCheckpoint { CheckpointId id; };
@@ -1632,7 +1634,7 @@ using SandboxMsg = std::variant<
     SandboxEditList, SandboxListKey, SandboxListPaste, SandboxListClose>;
 
 using MetaMsg = std::variant<
-    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, CycleToolLoading,
+    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, ToggleKeepRetrying, CycleToolLoading,
     RestoreCheckpoint, CheckpointRestored,
     ToggleRetrievedExpanded,
     TerminalFocus,

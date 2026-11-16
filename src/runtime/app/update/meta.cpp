@@ -226,6 +226,15 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             return Cmd::batch(std::move(save), std::move(cmd));
         },
 
+        [&](ToggleKeepRetrying) -> Cmd {
+            m.d.persisted.keep_retrying = !m.d.persisted.keep_retrying;
+            auto save = save_record(m);
+            auto cmd = set_status_toast(m, m.d.persisted.keep_retrying
+                ? "keep retrying: on \xc2\xb7 temporary errors retry until Esc"
+                : "keep retrying: off \xc2\xb7 gives up after 6 tries");
+            return Cmd::batch(std::move(save), std::move(cmd));
+        },
+
         [&](CycleProfile) -> Cmd {
             m.d.profile = m.d.profile == Profile::Write   ? Profile::Ask
                       : m.d.profile == Profile::Ask     ? Profile::Minimal

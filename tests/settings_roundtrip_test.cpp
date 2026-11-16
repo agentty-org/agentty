@@ -115,6 +115,9 @@ TEST_CASE("settings round-trip: commit attribution survives a reload") {
     CHECK(save_and_reload(s).commit_attribution);
     s.commit_attribution = false;
     CHECK_FALSE(save_and_reload(s).commit_attribution);
+    REQUIRE_FALSE(s.keep_retrying);   // off unless asked for
+    s.keep_retrying = true;
+    CHECK(save_and_reload(s).keep_retrying);
 }
 
 TEST_CASE("settings round-trip: each scrollback level survives a reload") {

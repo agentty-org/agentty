@@ -770,6 +770,21 @@ backoff_with_jitter(ErrorClass kind, int attempt) noexcept {
     return std::chrono::milliseconds{scaled};
 }
 
+// The schedule for Settings › Keep retrying on errors (#131): the normal
+// ladder, then a steady wait (jittered) for as long as it takes: a minute,
+// or the ladder's last step if that is longer (90 s for a rate limit). Long
+// enough not to hammer a provider that is down, short enough that recovery
+// is noticed soon after it comes back.
+[[nodiscard]] inline std::chrono::milliseconds
+persistent_backoff(ErrorClass kind, int attempt) noexcept {
+    if (attempt < 6) return backoff_with_jitter(kind, attempt);
+    const auto base = std::max(std::chrono::milliseconds{60000}, backoff(kind, 5));
+    thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<double> dist(0.80, 1.20);
+    return std::chrono::milliseconds{
+        static_cast<std::int64_t>(static_cast<double>(base.count()) * dist(rng))};
+}
+
 // Hard cap on automatic retries. Past this, surface as terminal.
 // Raised from 4 to 6: streams can wedge for several minutes during
 // regional Anthropic incidents, and the exponential tail (25 s +

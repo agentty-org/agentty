@@ -322,6 +322,10 @@ struct Settings {
     // Add a "Co-authored-by: agentty (<model>)" trailer to commits the
     // agent makes, so `git log` tells them apart from yours (#59).
     bool                 commit_attribution = false;
+    // Keep retrying temporary and rate-limit errors until it works or Esc,
+    // instead of giving up after ~90 s (#131). Errors retrying can't fix
+    // (bad key, quota, not found) still stop at once. Off by default.
+    bool                 keep_retrying = false;
 };
 
 template <class S>

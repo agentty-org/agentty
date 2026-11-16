@@ -2794,9 +2794,15 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // (never reset by wire-health signals), so the short mid-stream
             // cap actually latches terminal on a flapping connection.
             const int mid_prior = err_ctx ? err_ctx->mid_stream_failures : 0;
-            const bool budget_left =
-                mid_stream ? (mid_prior      < retry_cap)
-                           : (prior_transient < retry_cap);
+            // Settings › Keep retrying on errors (#131): temporary and rate
+            // limit errors retry until the user presses Esc. Only those two
+            // classes; a bad key, a quota or a missing model still stops.
+            const bool keep_retrying = m.d.persisted.keep_retrying
+                && (klass == provider::ErrorClass::Transient
+                    || klass == provider::ErrorClass::RateLimit);
+            const bool budget_left = keep_retrying
+                || (mid_stream ? (mid_prior      < retry_cap)
+                               : (prior_transient < retry_cap));
 
             bool can_retry = (klass == provider::ErrorClass::Transient
                            || klass == provider::ErrorClass::RateLimit)
@@ -2813,7 +2819,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // ONLY by real model output; past the hard cap the failure is
             // terminal regardless of class.
             bool no_progress_latched = false;
-            if (can_retry && err_ctx
+            if (can_retry && err_ctx && !keep_retrying
                 && err_ctx->no_progress_failures
                        >= provider::kMaxNoProgressFailures) {
                 can_retry = false;
@@ -2854,7 +2860,9 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                         delay = std::chrono::seconds(s);
                     }
                 } else {
-                    delay = provider::backoff_with_jitter(klass, attempt);
+                    delay = keep_retrying
+                        ? provider::persistent_backoff(klass, attempt)
+                        : provider::backoff_with_jitter(klass, attempt);
                 }
                 auto secs = std::chrono::duration_cast<std::chrono::seconds>(
                     delay + std::chrono::milliseconds{999}).count();
@@ -2863,8 +2871,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 const int shown_attempt = mid_stream ? mid_prior : prior_transient;
                 m.s.status = std::string{provider::to_string(klass)}
                            + " — retrying in " + std::to_string(secs) + "s"
-                           + " (attempt " + std::to_string(shown_attempt + 1)
-                           + "/" + std::to_string(retry_cap) + ")…";
+                           + (keep_retrying
+                                  ? " (attempt " + std::to_string(shown_attempt + 1)
+                                        + ", until Esc)…"
+                                  : " (attempt " + std::to_string(shown_attempt + 1)
+                                        + "/" + std::to_string(retry_cap) + ")…");
                 m.s.status_until = m.now
                                  + delay + std::chrono::milliseconds{1500};
                 if (!reschedule_streaming(m.s.phase, [&](phase::Active& c) {

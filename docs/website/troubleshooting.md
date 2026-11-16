@@ -68,6 +68,12 @@ The wait comes from the `Retry-After` header, or from the error body. Google Gem
 
 To continue, wait for the reset, add billing or credit, or switch model (`^/`) or provider (`^P`). On Gemini's free tier, `limit: 0` means that model gets no free requests. See [Providers › Google Gemini](/docs/providers#google-gemini).
 
+### I get `HTTP 503`, “overloaded” or “service unavailable”
+
+That's the provider, not agentty. agentty retries temporary errors like this by itself: 6 tries with growing waits (0.5 s up to 45 s, about 90 s in total). The status bar shows each attempt, and [[Esc]] stops it.
+
+For a provider that is often down, turn on **Settings → General → Keep retrying on errors**. Temporary errors and rate limits then retry until it works or you press [[Esc]], every minute or so after the first few tries. Errors retrying can't fix (a bad key, a used-up quota, an unknown model) still stop at once.
+
 ### I see “this model can't read images — retried without them”
 
 The provider rejected an image: the model has no vision, the format isn't supported, there were too many images, or your organisation turned image input off. agentty removes the images and sends the turn again, so you still get an answer about the text. This covers pasted images and images from tools, such as `read` on a `.png`. Your transcript keeps the images. If you need the image read, switch to a vision model (`^/`).

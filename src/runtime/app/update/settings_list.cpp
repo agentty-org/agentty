@@ -302,6 +302,9 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
                 case se::Action::ToggleCommitAttribution: {
                     return reenter(m, Msg{ToggleCommitAttribution{}});
                 }
+                case se::Action::ToggleKeepRetrying: {
+                    return reenter(m, Msg{ToggleKeepRetrying{}});
+                }
                 case se::Action::CycleToolLoading: {
                     return reenter(m, Msg{CycleToolLoading{}});
                 }

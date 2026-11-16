@@ -49,6 +49,7 @@ enum class Action : std::uint8_t {
     ToggleAutoTitle,    // General: name new chats with the utility model
     ToggleAutoCompact,  // General: compact the context on its own near the window
     ToggleCommitAttribution,   // General: name the model in agent commits
+    ToggleKeepRetrying,        // General: retry temporary errors until Esc (#131)
     CycleToolLoading,   // General: MCP tool loading auto / all / on demand (#98)
     // (No RemovePlugin: removal is the two-step `d` → SettingsListRemove
     // flow, never an Enter action — a one-press destructive Enter and a
