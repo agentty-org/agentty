@@ -356,15 +356,6 @@ namespace {
             if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
         }
 
-        // Anchors next: a writable self-bind of each git dir (and, under the
-        // strict postures, each nested repo root) makes it a mount point, so
-        // `mv .git elsewhere` fails with EBUSY instead of carrying the
-        // read-only binds below off with it. Before those binds, or this one
-        // would cover them.
-        for (const auto& a : p.handoff_anchor)
-            if (a.starts_with(p.workspace) && a != p.workspace)
-                d = std::move(d).bind_try(a, a, /*ro=*/false);
-
         // Then the handoff binds, for exactly the same ordering reason: a
         // read-only bind of <workspace>/.vscode/tasks.json is covered by the
         // workspace bind above, so it has to come after. Same bug shape as
@@ -387,7 +378,7 @@ namespace {
         // Masks go last, after every bind. build_claybin_posture already
         // keeps masked paths out of handoff_ro; this makes the order itself
         // safe too, so no later bind can uncover a mask again.
-        if (!p.handoff_ro.empty() || !p.handoff_anchor.empty())
+        if (!p.handoff_ro.empty())
             for (const auto& m : p.masked)
                 if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
     }
@@ -727,7 +718,6 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
         if (box_env_keeps(kv.substr(0, kv.find('=')), p.env_scope, p.env_keep))
             env_store.emplace_back(kv);
     }
-    for (const auto& [k, v] : p.extra_env) env_store.push_back(k + "=" + v);
     std::vector<const char*> envp;
     envp.reserve(env_store.size() + 1);
     for (const auto& s : env_store) envp.push_back(s.c_str());
@@ -911,12 +901,6 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
             ::FreeEnvironmentStringsW(wbase);
         }
         for (const auto& [k, v] : env) env_store.push_back(k + "=" + v);
-        for (const auto& [k, v] : p.extra_env) {
-            bool overridden = false;
-            for (const auto& [rk, rv] : env)
-                if (_stricmp(rk.c_str(), k.c_str()) == 0) { overridden = true; break; }
-            if (!overridden) env_store.push_back(k + "=" + v);
-        }
         for (const auto& line : env_store) envp.push_back(line.c_str());
         envp.push_back(nullptr);
     }
@@ -1117,11 +1101,6 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
             if (!overridden) env_store.emplace_back(kv);
         }
         for (const auto& [k, v] : env) env_store.push_back(k + "=" + v);
-        for (const auto& [k, v] : p.extra_env) {
-            bool overridden = false;
-            for (const auto& [rk, rv] : env) if (rk == k) { overridden = true; break; }
-            if (!overridden) env_store.push_back(k + "=" + v);
-        }
         // The guest's route off its own loopback. Every spelling is set
         // because the toolchain is not consistent: curl reads
         // http_proxy/https_proxy and ALL_PROXY, git reads http_proxy,

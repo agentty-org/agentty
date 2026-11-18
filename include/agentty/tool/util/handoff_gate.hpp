@@ -157,13 +157,8 @@ struct TrustedSnapshot {
     // in one is a handoff, whatever its name.
     std::vector<std::string> pinned_dirs;
 
-    // Every git dir under the root (a `.git` dir holding a config), found by
-    // the shallow scan. The sandbox anchors each; review() compares the set
-    // before and after, so a git dir moved away or newly created is reported.
-    std::vector<std::string> git_dirs;
-
     [[nodiscard]] bool empty() const noexcept {
-        return entries.empty() && roots.empty() && pinned_dirs.empty() && git_dirs.empty();
+        return entries.empty() && roots.empty() && pinned_dirs.empty();
     }
 };
 

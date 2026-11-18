@@ -21,9 +21,6 @@ src/acp/server.cpp
 
 # Tool bodies and subagents, on tool workers.
 src/tool/mcp_tools_backends.cpp
-# The sandbox posture, built on the tool worker that spawns a command: under
-# Minimal it writes the git identity file the guest reads.
-src/tool/util/sandbox.cpp
 
 # The retriever's index, built on its own workers and tool threads.
 src/rag/adapter.cpp

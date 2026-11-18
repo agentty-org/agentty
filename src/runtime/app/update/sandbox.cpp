@@ -150,7 +150,7 @@ void reprice(pn::Sandbox& o) {
     // that is not running are a forecast and have to read as one.
     pn::annotate_sandbox_form(o.pane.form, o.pane.preview, cfg,
                               pn::engine_status(cfg, o.pane.facts));
-    pn::annotate_host_risks(o.pane.form, o.pane.facts);
+    pn::annotate_host_risks(o.pane.form, cfg, o.pane.facts);
     // And the answer to "will this actually work when I restart". Computed
     // HERE, with the preview that was just built from the same cfg, so the
     // verdict and the walls it is judging cannot disagree.
@@ -771,6 +771,15 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 cfg.allow_ports.erase(
                     std::unique(cfg.allow_ports.begin(), cfg.allow_ports.end()),
                     cfg.allow_ports.end());
+                // Switch Access only when the list actually changed, and never
+                // loosen `none` or open the network because a list was emptied.
+                const auto before = o->pane.working.allow_ports;
+                const bool changed = cfg.allow_ports != before;
+                const bool ports_ok = o->pane.facts.claybin_available
+                                      && o->pane.facts.per_port_net;
+                if (changed && !cfg.allow_ports.empty() && ports_ok
+                    && cfg.net_mode == sandbox_cfg::NetMode::Full)
+                    cfg.net_mode = sandbox_cfg::NetMode::Ports;
             } else if (row_id == pn::kSbReadPaths) {
                 cfg.read_paths = values;
             } else if (row_id == pn::kSbWritePaths) {

@@ -730,13 +730,13 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
-// A variable name: what POSIX shells accept, plus the parentheses Windows
-// uses (PROGRAMFILES(X86)). Anything else could never match a real variable.
+// A portable variable name: what POSIX shells accept, and a subset of what
+// Windows does. Anything else could never match a real variable.
 [[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
-    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || v.front() == '(') return false;
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9')) return false;
     for (char c : v)
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-              || (c >= '0' && c <= '9') || c == '_' || c == '(' || c == ')'))
+              || (c >= '0' && c <= '9') || c == '_'))
             return false;
     return true;
 }
@@ -1285,7 +1285,8 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     }
 }
 
-void annotate_host_risks(form::Form& f, const HostFacts& facts) {
+void annotate_host_risks(form::Form& f, [[maybe_unused]] const sandbox_cfg::Config& cfg,
+                         const HostFacts& facts) {
     auto row_of = [&](std::string_view id) -> form::Field* {
         for (auto& fld : f.fields)
             if (fld.id == id) return &fld;
@@ -1334,7 +1335,8 @@ void annotate_sandbox_form(form::Form&, const Preview&,
     // fact twice.
 }
 
-void annotate_host_risks(form::Form&, const HostFacts&) {}
+void annotate_host_risks(form::Form&, const sandbox_cfg::Config&,
+                         const HostFacts&) {}
 
 #endif
 

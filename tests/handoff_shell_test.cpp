@@ -25,7 +25,6 @@
 //   12. includes, quoting, PATH-named helpers, submodule worktrees, and a
 //       hooksPath at a large dir
 //   13. check_with refuses a write to a git-config target
-//   14. review reports a git dir moved away, and a new one with a live hook
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -395,10 +394,8 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
         write_file(g_root / ".git" / "config",
                    "[include]\n\tpath = ../conf/extra.gitconfig\n"
                    "[credential]\n\thelper = store\n");
-        // Config quotes keep the space; the shell quotes inside choose the
-        // program, which is how git hands the value to sh.
         write_file(g_root / "conf" / "extra.gitconfig",
-                   "[core]\n\tfsmonitor = \"'tools/my mon.sh' --flag\"\n");
+                   "[core]\n\tfsmonitor = \"tools/my mon.sh\" --flag\n");
         write_file(g_root / "tools" / "my mon.sh", "#!/bin/sh\n");
         write_file(g_root / "store", "decoy\n");
         auto snap = hg::snapshot_trusted(g_root.string());
@@ -448,36 +445,18 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
         CHECK_FALSE(refused(g_root / "src" / "main.cpp"));
         write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
         CHECK_FALSE(refused(g_root / ".husky" / "pre-commit"));
-    }
 
-    // ── 14. a git dir moved away, or a new one with a hook ────────────────
-    // The read-only binds follow a renamed parent, so the SET of git dirs is
-    // what review compares.
-    {
-        write_file(g_root / "sub" / ".git" / "config", "[core]\n\tbare = false\n");
-        auto before = hg::snapshot_trusted(g_root.string());
-        REQUIRE(before.git_dirs.size() >= 2);
-
-        hg::clear_handoff_feed();
-        fs::rename(g_root / "sub", g_root / "sub.old");
-        CHECK(hg::review_trusted(before, "mv sub sub.old") >= 1);
-        CHECK(events_for("sub/.git") >= 1);
-
-        // A new repo with only sample hooks is ordinary; one with a live hook is not.
-        before = hg::snapshot_trusted(g_root.string());
-        write_file(g_root / "fresh" / ".git" / "hooks" / "pre-commit.sample", "#\n");
-        hg::clear_handoff_feed();
-        CHECK(hg::review_trusted(before, "git init fresh") == 0);
-        before = hg::snapshot_trusted(g_root.string());
-        fs::remove_all(g_root / "fresh");
-        (void)hg::review_trusted(before, "rm -rf fresh");
-        before = hg::snapshot_trusted(g_root.string());
-        write_file(g_root / "planted" / ".git" / "hooks" / "post-checkout", "#!/bin/sh\n");
-        hg::clear_handoff_feed();
-        CHECK(hg::review_trusted(before, "git init planted") >= 1);
-        CHECK(events_for("planted/.git") >= 1);
-        fs::remove_all(g_root / "planted");
-        fs::remove_all(g_root / "sub.old");
+        // A linked worktree: its .git is a file, its config is the main
+        // repo's (commondir), and relative targets resolve in the worktree.
+        write_file(g_root / ".git" / "config", "[core]\n\thooksPath = .husky\n");
+        write_file(g_root / ".git" / "worktrees" / "wt" / "commondir", "../..\n");
+        write_file(g_root / "wt" / ".git",
+                   "gitdir: " + (g_root / ".git" / "worktrees" / "wt").string() + "\n");
+        CHECK(refused(g_root / "wt" / ".husky" / "pre-commit"));
+        CHECK_FALSE(refused(g_root / "wt" / "src" / "main.cpp"));
+        write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
+        fs::remove_all(g_root / "wt");
+        fs::remove_all(g_root / ".git" / "worktrees");
     }
 
     hg::clear_handoff_feed();

@@ -142,8 +142,10 @@ Verdict check_with(std::string_view path, std::string_view tool,
 
     // Not a trusted SHAPE, but maybe a target: core.hooksPath (.husky) and the
     // scripts git config names have ordinary names. Costs a walk up to the
-    // nearest repo and one small read, so it runs only after the cheap checks.
-    if (!trusted && is_git_config_target(fs::path{path})) {
+    // nearest repo and its config, so it runs only after the cheap checks and
+    // never under Allow, which records nothing.
+    if (!trusted && policy != sandbox_cfg::HandoffPolicy::Allow
+        && is_git_config_target(fs::path{path})) {
         trusted = true;
         kind = sandbox_cfg::TrustKind::GitConfig;
     }
@@ -490,8 +492,10 @@ struct ResolvedTargets {
 };
 
 // The targets one repo's config makes git run. `git_dir` is the dir holding
-// `config` (.git, or .git/modules/<name>).
-[[nodiscard]] ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_dir);
+// `config` (.git, or .git/modules/<name>); `worktree`, when known, is where
+// relative targets resolve.
+[[nodiscard]] ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_dir,
+                                                  std::optional<fs::path> worktree = {});
 
 [[nodiscard]] std::string_view trim(std::string_view s) {
     const auto b = s.find_first_not_of(" \t\r");
@@ -596,12 +600,12 @@ struct ResolvedTargets {
     return real;
 }
 
-ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_dir) {
-    // Relative targets resolve against the worktree git runs in: the git
-    // dir's parent for a main repo, core.worktree for a submodule. Without
-    // one, only absolute targets can be placed.
-    std::optional<fs::path> worktree;
-    if (git_dir.filename() == ".git") worktree = git_dir.parent_path();
+ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_dir,
+                                    std::optional<fs::path> worktree) {
+    // Relative targets resolve against the worktree git runs in: the caller's
+    // when it knows it, else the git dir's parent for a main repo, else
+    // core.worktree. Without one, only absolute targets can be placed.
+    if (!worktree && git_dir.filename() == ".git") worktree = git_dir.parent_path();
 
     ResolvedTargets out;
     GitConfigTargets t;
@@ -636,18 +640,27 @@ ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_
     return out;
 }
 
-// The git dir of the repo whose worktree holds `dir`, nearest first. A
-// `.git` FILE (a submodule or linked worktree) points at it with `gitdir:`.
-[[nodiscard]] std::optional<fs::path> nearest_git_dir(fs::path dir) {
-    for (; !dir.empty(); dir = dir.parent_path()) {
+// The git dir of the repo whose worktree holds `dir`, nearest first, and that
+// worktree. A `.git` FILE (a submodule or linked worktree) points at the git
+// dir with `gitdir:`; its worktree is the dir holding the file, which git
+// itself uses rather than any core.worktree.
+struct NearestRepo { fs::path git_dir; fs::path worktree; };
+
+[[nodiscard]] std::optional<NearestRepo> nearest_repo(fs::path dir) {
+    // Bounded: a write outside any repo would otherwise stat up to `/`.
+    // Deeper than any real source tree; the snapshot's own scan stops at 3.
+    constexpr int kMaxUp = 64;
+    for (int up = 0; !dir.empty() && up < kMaxUp; dir = dir.parent_path(), ++up) {
         std::error_code ec;
         const fs::path dot = dir / ".git";
-        if (fs::is_directory(dot, ec)) return dot;
+        if (fs::is_directory(dot, ec)) return NearestRepo{dot, dir};
         if (fs::is_regular_file(dot, ec)) {
             std::ifstream in(dot, std::ios::binary);
             std::string line;
             if (std::getline(in, line) && line.starts_with("gitdir:"))
-                return resolve_config_path(dir, std::string{trim(std::string_view{line}.substr(7))});
+                if (auto g = resolve_config_path(
+                        dir, std::string{trim(std::string_view{line}.substr(7))}))
+                    return NearestRepo{*g, dir};
             return std::nullopt;
         }
         if (dir == dir.root_path()) break;
@@ -655,16 +668,33 @@ ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_
     return std::nullopt;
 }
 
+// The configs git reads for a git dir: its own, and for a linked worktree
+// (.git/worktrees/<n>) the main repo's, which `commondir` names.
+[[nodiscard]] std::vector<fs::path> repo_configs(const fs::path& git_dir) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    fs::path common = git_dir;
+    if (std::ifstream in{git_dir / "commondir", std::ios::binary}; in) {
+        std::string line;
+        if (std::getline(in, line))
+            if (auto c = resolve_config_path(git_dir, std::string{trim(line)})) common = *c;
+    }
+    for (const fs::path& dir : {common, git_dir})
+        for (const char* name : {"config", "config.worktree"})
+            if (const fs::path f = dir / name;
+                fs::is_regular_file(f, ec) && std::ranges::find(out, f) == out.end())
+                out.push_back(f);
+    return out;
+}
+
 bool is_git_config_target(const fs::path& path) {
     std::error_code ec;
     const fs::path target = fs::weakly_canonical(path, ec);
     if (ec || target.empty()) return false;
-    const auto git_dir = nearest_git_dir(target.parent_path());
-    if (!git_dir) return false;
-    for (const char* name : {"config", "config.worktree"}) {
-        const fs::path cfg = *git_dir / name;
-        if (!fs::is_regular_file(cfg, ec)) continue;
-        const ResolvedTargets t = resolve_git_targets(cfg, *git_dir);
+    const auto repo = nearest_repo(target.parent_path());
+    if (!repo) return false;
+    for (const fs::path& cfg : repo_configs(repo->git_dir)) {
+        const ResolvedTargets t = resolve_git_targets(cfg, repo->git_dir, repo->worktree);
         if (std::ranges::find(t.files, target) != t.files.end()) return true;
         if (std::ranges::find(t.includes, target) != t.includes.end()) return true;
         // A hooks dir: every file in it, or only hook names when the dir is
@@ -680,31 +710,6 @@ bool is_git_config_target(const fs::path& path) {
             return true;
     }
     return false;
-}
-
-// Every `.git` dir within the shallow depth (3) of `root`, by the walk's
-// skip rules. Standalone, with no listing cache, because review() runs it
-// after a command that may have moved them.
-[[nodiscard]] std::vector<std::string> scan_git_dirs(const fs::path& root) {
-    std::vector<std::string> out;
-    std::vector<std::pair<fs::path, int>> stack{{root, 0}};
-    std::size_t seen = 0;
-    while (!stack.empty() && seen <= kMaxEntries) {
-        auto [dir, depth] = std::move(stack.back());
-        stack.pop_back();
-        std::error_code ec;
-        fs::directory_iterator it{dir, fs::directory_options::skip_permission_denied, ec};
-        for (; !ec && it != fs::directory_iterator{}; it.increment(ec)) {
-            ++seen;
-            std::error_code tec;
-            if (it->is_symlink(tec) || !it->is_directory(tec) || tec) continue;
-            const std::string name = it->path().filename().string();
-            if (name == ".git") { out.push_back(it->path().string()); continue; }
-            if (depth < 3 && !skip_name(name)) stack.push_back({it->path(), depth + 1});
-        }
-    }
-    std::ranges::sort(out);
-    return out;
 }
 
 }  // namespace
@@ -883,7 +888,6 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
     }
 
     last_truncated().store(truncated);
-    snap.git_dirs = scan_git_dirs(base);
 
     // Targets named by each repo's .git/config, pinned like the config itself.
     // A relative value resolves against the worktree, where git runs hooks and
@@ -973,60 +977,10 @@ bool last_snapshot_truncated() noexcept { return *last_truncated().load(); }
 
 bool last_snapshot_large_hook_dir() noexcept { return *last_large_hook_dir().load(); }
 
-namespace {
-
-// A hook git would run: any file in hooks/ that is not a shipped sample.
-[[nodiscard]] bool has_live_hook(const fs::path& git_dir) {
-    std::error_code ec;
-    for (fs::directory_iterator it{git_dir / "hooks", ec}; !ec && it != fs::directory_iterator{};
-         it.increment(ec)) {
-        std::error_code tec;
-        if (it->is_regular_file(tec) && !it->path().filename().string().ends_with(".sample"))
-            return true;
-    }
-    return false;
-}
-
-}  // namespace
-
 std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool) {
     if (before.empty()) return 0;
 
     std::size_t recorded = 0;
-
-    // The SET of git dirs. A bind follows a renamed parent, so a git dir
-    // moved away takes its protection with it, and a new one has none until
-    // the next spawn. Both are reported here; the anchors prevent the first
-    // where a mount namespace exists.
-    if (!before.roots.empty()) {
-        std::vector<std::string> was = before.git_dirs;
-        std::ranges::sort(was);
-        const auto now = scan_git_dirs(before.roots.front());
-        const auto report = [&](const std::string& p, const char* what) {
-            sandbox_cfg::TrustHandoff h;
-            h.kind = sandbox_cfg::TrustKind::GitConfig;
-            h.write.path = p;
-            h.write.command = std::string{tool};
-            h.write.at_ms = now_ms();
-            h.write.created = std::string_view{what} == "created";
-            remember(h);
-            ++recorded;
-            AGT_LOG(General, Warn, "handoff", "{} a git dir outside the gate: {}", what, p);
-        };
-        for (const auto& g : was)
-            if (!std::ranges::binary_search(now, g)) report(g, "moved or deleted");
-        for (const auto& g : now) {
-            if (std::ranges::binary_search(was, g)) continue;
-            std::error_code cec;
-            const fs::path cfg = fs::path{g} / "config";
-            const bool targets = fs::is_regular_file(cfg, cec)
-                && [&] {
-                       const auto t = resolve_git_targets(cfg, g);
-                       return !t.files.empty() || !t.dirs.empty();
-                   }();
-            if (has_live_hook(g) || targets) report(g, "created");
-        }
-    }
     for (const auto& e : before.entries) {
         std::error_code ec;
         const bool exists = fs::is_regular_file(e.path, ec);
