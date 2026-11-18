@@ -487,16 +487,18 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             event_hash_id = kb.build();
         }
 
-        // A subagent's own calls, as real nested cards. Each child becomes a
-        // throwaway ToolUse so it goes through EXACTLY the same name/detail/
-        // body builders as a top-level tool -- a nested Edit is an Edit card.
-        // Capped to the newest few so a 60-call run doesn't make a
-        // 400-row card; the rest collapse to "⋯ N earlier".
+        // A subagent's own calls, one row each (icon, tool, detail). Each
+        // child becomes a throwaway ToolUse so it goes through EXACTLY the
+        // same name/detail builders as a top-level tool. No bodies: a nested
+        // body made every call ~5-15 rows tall, so the live card grew and
+        // shrank as calls landed and the window slid -- the composer bounced.
+        // One row per call, and the SAME cap live and settled, means the card
+        // only ever grows by a row and never shrinks. Older calls collapse to
+        // "⋯ N earlier"; the full outputs are in the transcript / Ctrl+O.
         std::shared_ptr<const std::vector<maya::AgentTimelineEvent>> kids_sp;
         int kids_hidden = 0;
         if (tc.name.value == "task" && !tc.children.empty()) {
-            constexpr std::size_t kLiveKids = 4, kDoneKids = 6;
-            const std::size_t cap = tc.is_terminal() ? kDoneKids : kLiveKids;
+            constexpr std::size_t cap = 5;
             const std::size_t n = tc.children.size();
             const std::size_t from = n > cap ? n - cap : 0;
             kids_hidden = static_cast<int>(from);
@@ -514,22 +516,11 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
                 if (c.state == S::Done)        kt.status = ToolUse::Done{t0, fin, c.output};
                 else if (c.state == S::Failed) kt.status = ToolUse::Failed{t0, fin, c.output};
                 else { ToolUse::Running r; r.started_at = t0; kt.status = std::move(r); }
-                // Nested bodies are a glance: the collapsed-ish preview.
-                auto kb = tool_body_preview_config(kt);
-                kb.code_head = std::min(kb.code_head, 3);
-                kb.code_tail = std::min(kb.code_tail, 2);
-                kb.bash_tail = std::min(kb.bash_tail, 3);
-                kb.read_head = std::min(kb.read_head, 3);
-                kb.edit_head_per_side = std::min(kb.edit_head_per_side, 3);
-                kb.edit_tail_per_side = std::min(kb.edit_tail_per_side, 1);
-                kb.max_todos_shown = std::min(kb.max_todos_shown, 4);
-                kb.show_all = false;
                 kids->push_back({
                     .name = tool_display_name(kt.name.value),
-                    .detail = tool_timeline_detail(kt),
+                    .detail = tool_timeline_detail(kt),  // already carries a failure's reason
                     .category_color = tool_category_color(kt.name.value),
                     .status = tool_event_status(kt),
-                    .body = std::move(kb),
                 });
             }
             kids_sp = std::move(kids);
