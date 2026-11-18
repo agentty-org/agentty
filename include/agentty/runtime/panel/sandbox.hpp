@@ -88,6 +88,8 @@ inline constexpr std::string_view kSbTmpMb       = "tmp_mb";
 inline constexpr std::string_view kSbScopeIpc    = "scope_ipc";
 inline constexpr std::string_view kSbCloseFds    = "close_fds";
 inline constexpr std::string_view kSbFakeHost    = "fake_hostname";
+inline constexpr std::string_view kSbEnvScope    = "env_scope";
+inline constexpr std::string_view kSbEnvKeep     = "env_keep";
 inline constexpr std::string_view kSbMaskDepth   = "mask_scan_depth";
 // The row that defends the escape class nobody else defends. See
 // domain/sandbox_provenance.hpp for why it is its own control.
@@ -249,7 +251,8 @@ struct SandboxListPane {
     //   Host  a host name or *.wildcard, canonicalised by the SAME function
     //         the proxy uses (netproxy::normalize_host_entry), so what the
     //         editor accepts is exactly what is enforced
-    enum class ListKind : std::uint8_t { Path, Port, Host };
+    //   Name  an environment variable name, letters, digits and _ only
+    enum class ListKind : std::uint8_t { Path, Port, Host, Name };
     ListKind kind = ListKind::Path;
     [[nodiscard]] bool numeric() const noexcept { return kind == ListKind::Port; }
 

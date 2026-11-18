@@ -21,6 +21,7 @@
 // read on `/`, which handed ~/.ssh and ~/.aws to any approved bash call while
 // still reporting "sandbox: active". One list, two backends.
 #include "agentty/tool/util/sandbox_claybin.hpp"
+#include "agentty/domain/sandbox_config.hpp"   // env_allowed
 #include "agentty/tool/util/sandbox_broker.hpp"
 #include "agentty/util/logx.hpp"   // AGT_LOG — the broker audit trail
 
@@ -147,7 +148,8 @@ constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 //     needs no path at all.
 //   - provider keys agentty uses to talk to the model. a command the agent
 //     runs has no business with the key that pays for the agent.
-bool box_env_keeps(std::string_view key) noexcept {
+bool box_env_keeps(std::string_view key, int env_scope,
+                   std::span<const std::string> keep) noexcept {
     static constexpr std::string_view kDrop[] = {
         "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS",
         "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY",
@@ -164,7 +166,8 @@ bool box_env_keeps(std::string_view key) noexcept {
     // Every *_API_KEY agentty's provider registry reads (GROQ_API_KEY,
     // GEMINI_API_KEY, ...). Matched by suffix so a new provider is covered.
     if (key.size() > 8 && key.ends_with("_API_KEY")) return false;
-    return true;
+    namespace cfg = ::agentty::sandbox_cfg;
+    return cfg::env_allowed(static_cast<cfg::EnvScope>(env_scope), key, keep);
 }
 
 #if defined(__APPLE__)
@@ -712,7 +715,8 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     std::vector<std::string> env_store;
     for (char** e = ::environ; e && *e; ++e) {
         const std::string_view kv{*e};
-        if (box_env_keeps(kv.substr(0, kv.find('=')))) env_store.emplace_back(kv);
+        if (box_env_keeps(kv.substr(0, kv.find('=')), p.env_scope, p.env_keep))
+            env_store.emplace_back(kv);
     }
     std::vector<const char*> envp;
     envp.reserve(env_store.size() + 1);
@@ -876,7 +880,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
                     std::string upper = name;  // windows names are case-blind
                     for (char& c : upper)
                         if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
-                    if (!box_env_keeps(upper)) continue;
+                    if (!box_env_keeps(upper, p.env_scope, p.env_keep)) continue;
                 }
                 // overridden names are supplied by the caller below; keep the
                 // name side ASCII-faithful (env var names are ASCII in
@@ -1091,7 +1095,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         for (char** e = ::environ; e && *e; ++e) {
             const std::string_view kv{*e};
             const auto key = kv.substr(0, kv.find('='));
-            if (!box_env_keeps(key)) continue;
+            if (!box_env_keeps(key, p.env_scope, p.env_keep)) continue;
             bool overridden = false;
             for (const auto& [k, v] : env) if (k == key) { overridden = true; break; }
             if (!overridden) env_store.emplace_back(kv);

@@ -416,14 +416,21 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 title = "Masked";
                 help  = "made unreadable even inside the scope above \xc2\xb7 "
                         "credential files are masked whether listed or not";
+            } else if (e.row_id == pn::kSbEnvKeep) {
+                src = &cfg.env_keep;
+                title = "Also inherited";
+                help  = "variable names a command inherits unless the environment "
+                        "is host \xc2\xb7 the value is passed as you have it";
             } else {
                 return Cmd::none();   // not a list row
             }
 
             pn::SandboxList ed;
             using K = pn::SandboxListPane::ListKind;
+            const bool names = e.row_id == pn::kSbEnvKeep;
             ed.pane = pn::build_sandbox_list(e.row_id, std::move(title), std::move(help), *src,
-                                             ports ? K::Port : hosts ? K::Host : K::Path);
+                                             ports ? K::Port : hosts ? K::Host
+                                             : names ? K::Name : K::Path);
             // Remember the pane we came from so Esc returns to it rather than
             // closing the overlay stack -- the same WithFrom stash every other
             // nested pane uses.
@@ -778,6 +785,8 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 cfg.write_paths = values;
             } else if (row_id == pn::kSbDenyPaths) {
                 cfg.deny_paths = values;
+            } else if (row_id == pn::kSbEnvKeep) {
+                cfg.env_keep = values;
             } else if (row_id == pn::kSbHosts) {
                 cfg.allow_hosts = values;   // already canonical + deduped
             }

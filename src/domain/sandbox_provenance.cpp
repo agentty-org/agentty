@@ -409,11 +409,102 @@ std::string resolve_user_path(std::string_view path, std::string_view workspace,
     return s;
 }
 
+namespace {
+
+// Names every scope but Host passes. Names only, never values: PATH reaches
+// the command exactly as agentty has it, because a rebuilt PATH is a second
+// copy of the toolchain table that drifts from the user's real one.
+constexpr std::string_view kEnvEssential[] = {
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ",
+    "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY",
+    "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE",
+    "LC_MEASUREMENT", "LC_IDENTIFICATION",
+#if defined(__APPLE__)
+    // TMPDIR above points at the /var/folders dir the sandbox grants.
+    "__CF_USER_TEXT_ENCODING",
+#elif defined(_WIN32)
+    // PATHEXT resolves `git` to git.exe; without SYSTEMROOT, Winsock and
+    // crypto fail to initialise in the child. MSYS* drive Git Bash's PATH.
+    "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "TEMP", "TMP",
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+    "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "USERNAME",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+    "MSYSTEM", "MSYS", "MSYS2_PATH_TYPE",
+#endif
+};
+
+// Toolchain adds these names...
+constexpr std::string_view kEnvToolchain[] = {
+    "JAVA_HOME",
+    // Go's variables have no common prefix that excludes GOOGLE_*.
+    "GOPATH", "GOROOT", "GOBIN", "GOCACHE", "GOMODCACHE", "GOFLAGS",
+    "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GOTOOLCHAIN", "GOENV",
+#if defined(__APPLE__)
+    // xcrun reads these.
+    "DEVELOPER_DIR", "SDKROOT",
+    "HOMEBREW_PREFIX", "HOMEBREW_CELLAR", "HOMEBREW_REPOSITORY",
+#endif
+};
+
+// ...and the prefixes of the toolchains whose dirs kHomeToolSubdirs makes
+// readable. A toolchain's variables are only useful where its files are.
+constexpr std::string_view kEnvToolchainPrefixes[] = {
+    "CARGO_", "RUSTUP_", "NVM_", "PYENV_", "RBENV_", "ASDF_",
+    "BUN_", "DENO_", "DOTNET_", "SDKMAN_",
+};
+
+// Secret-shaped names that an allowed prefix would otherwise let through.
+constexpr std::string_view kEnvSecretMarks[] = {
+    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "CREDENTIAL", "AUTH",
+};
+
+[[nodiscard]] bool env_name_eq(std::string_view a, std::string_view b) noexcept {
+#if defined(_WIN32)
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; };
+        if (up(a[i]) != up(b[i])) return false;
+    }
+    return true;
+#else
+    return a == b;
+#endif
+}
+
+}  // namespace
+
+bool env_allowed(EnvScope scope, std::string_view key,
+                 std::span<const std::string> keep) noexcept {
+    if (scope == EnvScope::Host) return true;
+    for (const auto& k : keep)
+        if (env_name_eq(key, k)) return true;
+    for (auto n : kEnvEssential)
+        if (env_name_eq(key, n)) return true;
+    if (scope == EnvScope::Essential) return false;
+    for (auto n : kEnvToolchain)
+        if (env_name_eq(key, n)) return true;
+    bool prefixed = false;
+    for (auto pre : kEnvToolchainPrefixes)
+        if (key.size() > pre.size() && env_name_eq(key.substr(0, pre.size()), pre)) {
+            prefixed = true;
+            break;
+        }
+    if (!prefixed) return false;
+    for (auto mark : kEnvSecretMarks)
+        for (std::size_t i = 0; i + mark.size() <= key.size(); ++i)
+            if (env_name_eq(key.substr(i, mark.size()), mark)) return false;
+    return true;
+}
+
 Config apply_posture(const Config& base, Posture p) {
     Config c = base;
     c.configured = true;
 
-    // Deliberately NOT touched: backend, read_paths, write_paths, deny_paths.
+    // Deliberately NOT touched: backend, read_paths, write_paths, deny_paths,
+    // env_keep.
     // A posture is a statement about how tight the walls are; the engine and
     // the user's project-specific path list are not the posture's business.
     // See the header.
@@ -465,6 +556,9 @@ Config apply_posture(const Config& base, Posture p) {
             c.close_inherited_fds = true;   // never a compatibility problem
             c.fake_hostname = false;
             c.mask_scan_depth = 3;          // secrets stay masked REGARDLESS
+            // A token in the environment is the one way to push over https
+            // from the box; Permissive is where a user goes to get that back.
+            c.env_scope = EnvScope::Host;
             // Handoff stays at the caller's value rather than being loosened.
             // Permissive is about the walls around the process; the handoff
             // gate is about what the agent writes for the HOST to run, and
@@ -493,6 +587,7 @@ Config apply_posture(const Config& base, Posture p) {
             c.close_inherited_fds = true;
             c.fake_hostname = false;
             c.mask_scan_depth = 3;
+            c.env_scope = EnvScope::Toolchain;
             c.handoff = HandoffPolicy::Refuse;
             break;
 
@@ -519,6 +614,7 @@ Config apply_posture(const Config& base, Posture p) {
             c.close_inherited_fds = true;
             c.fake_hostname = true;        // keeps the host name out of logs
             c.mask_scan_depth = 5;         // deeper sweep; it is a cost row
+            c.env_scope = EnvScope::Essential;
             c.handoff = HandoffPolicy::Refuse;
             break;
 
@@ -546,6 +642,7 @@ Config apply_posture(const Config& base, Posture p) {
             c.close_inherited_fds = true;
             c.fake_hostname = true;
             c.mask_scan_depth = 5;
+            c.env_scope = EnvScope::Essential;
             c.handoff = HandoffPolicy::Refuse;
             break;
 

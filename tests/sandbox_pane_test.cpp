@@ -622,6 +622,69 @@ TEST_CASE("sandbox posture: permissive still masks secrets and refuses handoffs"
     CHECK(perm.handoff == sandbox_cfg::HandoffPolicy::Refuse);
 }
 
+TEST_CASE("sandbox posture: only permissive hands the host environment over") {
+    // A token exported in the user's shell is the one secret no file mask
+    // sees. Permissive is the opt-in for https push with it; nothing else is.
+    sandbox_cfg::Config base;
+    using P = sandbox_cfg::Posture;
+    using E = sandbox_cfg::EnvScope;
+    CHECK(sandbox_cfg::apply_posture(base, P::Permissive).env_scope == E::Host);
+    CHECK(sandbox_cfg::apply_posture(base, P::Balanced).env_scope   == E::Toolchain);
+    CHECK(sandbox_cfg::apply_posture(base, P::Hardened).env_scope   == E::Essential);
+    CHECK(sandbox_cfg::apply_posture(base, P::Airgapped).env_scope  == E::Essential);
+
+    // Flipping it is a different policy, so the label says so.
+    auto bal = sandbox_cfg::apply_posture(base, P::Balanced);
+    bal.env_scope = E::Host;
+    CHECK(sandbox_cfg::detect_posture(bal) == P::Custom);
+
+    // env_keep is the user's list, not a preset field: adding to it keeps the label.
+    bal.env_scope = E::Toolchain;
+    bal.env_keep = {"MKLROOT"};
+    CHECK(sandbox_cfg::detect_posture(bal) == P::Balanced);
+}
+
+TEST_CASE("sandbox env: each scope passes exactly its tier") {
+    using E = sandbox_cfg::EnvScope;
+    const std::vector<std::string> none;
+    const auto ok = [&](E s, const char* k) { return sandbox_cfg::env_allowed(s, k, none); };
+
+    // Essential: the fixed list, under every scope but Host's "everything".
+    for (auto k : {"PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "TMPDIR"}) {
+        INFO(k);
+        CHECK(ok(E::Essential, k));
+        CHECK(ok(E::Toolchain, k));
+        CHECK(ok(E::Host, k));
+    }
+    // Toolchain only: listed names and prefixes Essential does not guess at.
+    for (auto k : {"CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "JAVA_HOME"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Essential, k));
+        CHECK(ok(E::Toolchain, k));
+    }
+    // Secret inside an allowed prefix: dropped by Toolchain, passed by Host.
+    for (auto k : {"CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_X_TOKEN"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Toolchain, k));
+        CHECK(ok(E::Host, k));
+    }
+    // Names from a real session and look-alikes: no allowlist passes them.
+    // BUNKER carries its secret in the value, so only an allowlist drops it.
+    for (auto k : {"NOSTR_CLIENT_KEY", "BUNKER", "GH_TOKEN", "GITHUB_TOKEN",
+                   "GOOGLE_APPLICATION_CREDENTIALS", "NPM_TOKEN",
+                   "AWS_SECRET_ACCESS_KEY", "MKLROOT", "PATHX", "LC_", "LC_FOO"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Essential, k));
+        CHECK_FALSE(ok(E::Toolchain, k));
+    }
+    // A name the user lists is theirs to pass, token or not, under any scope.
+    const std::vector<std::string> keep{"MKLROOT", "GH_TOKEN"};
+    for (auto s : {E::Essential, E::Toolchain}) {
+        CHECK(sandbox_cfg::env_allowed(s, "MKLROOT", keep));
+        CHECK(sandbox_cfg::env_allowed(s, "GH_TOKEN", keep));
+    }
+}
+
 TEST_CASE("sandbox posture: balanced is exactly the unconfigured default") {
     // So a user who picks Balanced explicitly gets the same boundary as one who
     // never opened the pane. If these drift, the pane's own default row is

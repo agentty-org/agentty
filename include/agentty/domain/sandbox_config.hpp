@@ -27,7 +27,9 @@
 // along with everything else in the panel.
 
 #include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "agentty/domain/sandbox_provenance.hpp"
@@ -124,6 +126,40 @@ enum class SyscallMode : std::uint8_t {
     }
     return "compiler";
 }
+
+// How much of agentty's own environment a sandboxed command inherits.
+//
+// Variables the agent's tools need (TERM, PAGER, GIT_TERMINAL_PROMPT, the
+// proxy) are injected per call and reach the command under every scope.
+enum class EnvScope : std::uint8_t {
+    // Essential, plus named toolchain variables (GOPATH, JAVA_HOME) and the
+    // prefixes of the toolchains kHomeToolSubdirs makes readable (CARGO_*).
+    // A prefix admits names nobody listed, so names that look secret
+    // (CARGO_REGISTRY_TOKEN) are dropped inside one. The default.
+    Toolchain,
+    // A fixed list of names only: identity, locale, temp dirs, PATH, and the
+    // OS variables a process needs to start. No prefix, no guessing. A name
+    // not on the list is dropped whatever it is called (BUNKER, GH_TOKEN).
+    Essential,
+    // Everything except session sockets and provider keys. Tokens in the
+    // environment (GH_TOKEN, a registry token) reach the command.
+    Host,
+};
+
+[[nodiscard]] constexpr const char* to_string(EnvScope s) noexcept {
+    switch (s) {
+        case EnvScope::Toolchain: return "toolchain";
+        case EnvScope::Essential: return "essential";
+        case EnvScope::Host:      return "host";
+    }
+    return "toolchain";
+}
+
+// Does a variable named `key` reach the command under `scope`? Compared as
+// given on POSIX and case-blind on Windows, where `Path` is PATH. A name in
+// `keep` passes under every scope.
+[[nodiscard]] bool env_allowed(EnvScope scope, std::string_view key,
+                               std::span<const std::string> keep) noexcept;
 
 // Paths that are NEVER exposed, whatever the scope says.
 //
@@ -455,6 +491,11 @@ struct Config {
     // reproducibility and fingerprinting rather than containment -- which is
     // why it is a separate row and defaults to off.
     bool fake_hostname = false;   // claim "sandbox" instead of the real host
+
+    // What the command inherits from agentty's environment. env_keep names
+    // extra variables passed under Toolchain and Essential (MKLROOT, CSF_*).
+    EnvScope env_scope = EnvScope::Toolchain;
+    std::vector<std::string> env_keep;
 
     // Depth for the credential-name sweep (kAlwaysMaskedNames).
     //

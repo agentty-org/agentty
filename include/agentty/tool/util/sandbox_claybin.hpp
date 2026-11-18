@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <utility>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -29,8 +30,10 @@
 namespace agentty::tools::util::sandbox::claybin_backend {
 
 // Whether an env var from agentty's own environment reaches the sandboxed
-// child. Drops desktop/session sockets and provider API keys.
-[[nodiscard]] bool box_env_keeps(std::string_view key) noexcept;
+// child. Always drops desktop/session sockets and provider API keys; the rest
+// is sandbox_cfg::env_allowed for `env_scope` (a sandbox_cfg::EnvScope).
+[[nodiscard]] bool box_env_keeps(std::string_view key, int env_scope,
+                                 std::span<const std::string> keep) noexcept;
 
 // What to build. Populated from the SHARED read-set constants in sandbox.cpp
 // rather than restated here -- see the note at the top of sandbox_claybin.cpp
@@ -101,6 +104,11 @@ struct Posture {
     // Not containment -- the guest cannot escalate either way. This is about
     // what leaks into build output and test fixtures.
     bool fake_hostname{false};
+
+    // sandbox_cfg::EnvScope as an int (0 = Toolchain), and the user's extra
+    // names for it.
+    int env_scope{0};
+    std::vector<std::string> env_keep;
 
     // ── syscall brokering ────────────────────────────────────────
     // Decide ptrace and kill at runtime from their scalar arguments, instead

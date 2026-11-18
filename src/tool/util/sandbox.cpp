@@ -627,6 +627,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     p.wall_clock_secs = cfg.wall_clock_secs;
     p.cpu_secs = cfg.cpu_secs;
     p.fake_hostname = cfg.fake_hostname;
+    p.env_scope = static_cast<int>(cfg.env_scope);
+    p.env_keep = cfg.env_keep;
     // Brokering is on whenever the filter is, because the runner can always
     // poll the listener -- it already owns a poll loop for the output pipe.
     // Gated on the filter rather than being a separate row: brokering IS the

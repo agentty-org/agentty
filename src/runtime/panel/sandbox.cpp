@@ -537,6 +537,27 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
         "that records it"));
     if (!claybin_live) lock_row(form, kSbFakeHost, why_locked);
 
+    // What a command inherits from agentty's environment. A wall against the
+    // tokens and keys people export in their shell rc, which no file mask sees.
+    form.fields.push_back(choice(
+        kSbEnvScope, "Environment",
+        "what a command inherits from agentty's environment \xc2\xb7 the "
+        "variables the agent's tools need are set either way",
+        {"toolchain", "essential", "host"},
+        static_cast<int>(cfg.env_scope),
+        {"essential + toolchain variables (GOPATH, CARGO_*) \xc2\xb7 names that "
+         "look secret are dropped even there",
+         "PATH, HOME, locale and temp dirs only \xc2\xb7 a fixed list, nothing "
+         "guessed \xc2\xb7 add others below",
+         "everything but session sockets and provider keys \xc2\xb7 a token you "
+         "export (GH_TOKEN) reaches the command"}));
+    if (!claybin_live) lock_row(form, kSbEnvScope, why_locked);
+    form.fields.push_back(
+        list_row(kSbEnvKeep, "Also inherited",
+                 "variable names passed through unless the environment is host",
+                 cfg.env_keep.size(), "name"));
+    if (!claybin_live) lock_row(form, kSbEnvKeep, why_locked);
+
     // How deep to hunt for credential FILES by name (.env, id_rsa, *.pem).
     // Applies to both backends, because the sweep produces a path list and
     // both know how to mask a path.
@@ -635,6 +656,9 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
     cfg.mask_scan_depth = static_cast<std::uint32_t>(
         num_of(kSbMaskDepth, static_cast<std::int64_t>(base.mask_scan_depth)));
     cfg.fake_hostname = toggle_of(kSbFakeHost, base.fake_hostname);
+    cfg.env_scope = static_cast<sandbox_cfg::EnvScope>(
+        choice_of(kSbEnvScope, static_cast<int>(base.env_scope)));
+    cfg.env_keep = base.env_keep;   // a list row: the editor writes it
 
     cfg.scope_ipc = toggle_of(kSbScopeIpc, base.scope_ipc);
     cfg.close_inherited_fds = toggle_of(kSbCloseFds, base.close_inherited_fds);
@@ -725,6 +749,17 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
+// A portable variable name: what POSIX shells accept, and a subset of what
+// Windows does. Anything else could never match a real variable.
+[[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9')) return false;
+    for (char c : v)
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+              || (c >= '0' && c <= '9') || c == '_'))
+            return false;
+    return true;
+}
+
 void renumber_sandbox_list(SandboxListPane& p) {
     // The LAST row is the add affordance and keeps its "+"; everything above
     // it is a real entry and gets its position. Driven off field order rather
@@ -764,6 +799,9 @@ void renumber_sandbox_list(SandboxListPane& p) {
                     hint = "saved as " + ne.value;
                 else if (ne.value.starts_with("*."))
                     hint = "any subdomain \xc2\xb7 add " + ne.value.substr(2) + " too for the site itself";
+            } else if (p.kind == SandboxListPane::ListKind::Name) {
+                if (!is_env_name(v))
+                    bad = "not a variable name \xc2\xb7 dropped on close";
             }
         }
         if (f.error != bad) f.error = std::move(bad);
@@ -787,6 +825,8 @@ form::Field list_add_row(std::string_view id, SandboxListPane::ListKind kind) {
             // a prompt that teaches the two forms, since the apex rule is the
             // one people get wrong.
             return list_entry_text(id, "+", "type a host \xc2\xb7 github.com or *.github.com");
+        case SandboxListPane::ListKind::Name:
+            return list_entry_text(id, "+", "type a variable name \xc2\xb7 MKLROOT");
         case SandboxListPane::ListKind::Path:
         default:
             return list_entry_text(id, "+", "type a path");
@@ -864,6 +904,8 @@ std::vector<std::string> read_sandbox_list(const SandboxListPane& p) {
             // one entry below.
             auto ne = tools::util::sandbox::netproxy::normalize_host_entry(v);
             if (!ne.value.empty()) out.push_back(std::move(ne.value));
+        } else if (p.kind == SandboxListPane::ListKind::Name) {
+            if (is_env_name(v)) out.push_back(std::move(v));
         } else {
             out.push_back(std::move(v));
         }
