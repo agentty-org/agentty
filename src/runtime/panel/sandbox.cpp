@@ -623,13 +623,17 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
         choice_of(kSbSyscalls, static_cast<int>(base.syscall_mode)));
     cfg.wx_protect = toggle_of(kSbWxProtect, base.wx_protect);
 
-    cfg.memory_mb = static_cast<std::uint64_t>(num_of(kSbMemoryMb, 0));
-    cfg.max_procs = static_cast<std::uint32_t>(num_of(kSbMaxProcs, 0));
-    cfg.cpu_percent = static_cast<std::uint32_t>(num_of(kSbCpuPercent, 0));
-    cfg.tmp_mb = static_cast<std::uint64_t>(num_of(kSbTmpMb, 512));
-    cfg.max_open_files = static_cast<std::uint32_t>(num_of(kSbOpenFiles, 0));
-    cfg.cpu_secs = static_cast<std::uint32_t>(num_of(kSbCpuSecs, 0));
-    cfg.wall_clock_secs = static_cast<std::uint32_t>(num_of(kSbWallClock, 0));
+    const auto num = [&](std::string_view id, auto base_value) {
+        return static_cast<decltype(base_value)>(
+            num_of(id, static_cast<std::int64_t>(base_value)));
+    };
+    cfg.memory_mb = num(kSbMemoryMb, base.memory_mb);
+    cfg.max_procs = num(kSbMaxProcs, base.max_procs);
+    cfg.cpu_percent = num(kSbCpuPercent, base.cpu_percent);
+    cfg.tmp_mb = num(kSbTmpMb, base.tmp_mb);
+    cfg.max_open_files = num(kSbOpenFiles, base.max_open_files);
+    cfg.cpu_secs = num(kSbCpuSecs, base.cpu_secs);
+    cfg.wall_clock_secs = num(kSbWallClock, base.wall_clock_secs);
     cfg.mask_scan_depth = static_cast<std::uint32_t>(
         num_of(kSbMaskDepth, static_cast<std::int64_t>(base.mask_scan_depth)));
     cfg.fake_hostname = toggle_of(kSbFakeHost, base.fake_hostname);

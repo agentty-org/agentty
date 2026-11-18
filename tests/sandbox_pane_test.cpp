@@ -1678,6 +1678,36 @@ TEST_CASE("sandbox pane: W^X can be turned off with the filter on") {
     }
 }
 
+TEST_CASE("sandbox pane: a locked resource row keeps the config's value") {
+    // Locked rows are reports, so reading them back must not overwrite the
+    // config with a placeholder (0, or 512 for /tmp).
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    cfg.memory_mb = 4096;
+    cfg.max_procs = 77;
+    cfg.cpu_percent = 150;
+    cfg.tmp_mb = 2048;
+    cfg.max_open_files = 999;
+    cfg.cpu_secs = 60;
+    cfg.wall_clock_secs = 600;
+    const auto form = pn::build_sandbox_form(cfg, facts_for(cfg, /*claybin_available=*/false));
+    for (const auto id : {pn::kSbMemoryMb, pn::kSbMaxProcs, pn::kSbCpuPercent, pn::kSbTmpMb,
+                          pn::kSbOpenFiles, pn::kSbCpuSecs, pn::kSbWallClock}) {
+        const int i = row_of(form, id);
+        REQUIRE(i >= 0);
+        REQUIRE(form.fields[static_cast<std::size_t>(i)].locked);
+    }
+    const auto back = pn::read_sandbox_form(form, cfg);
+    CHECK(back.memory_mb == 4096);
+    CHECK(back.max_procs == 77);
+    CHECK(back.cpu_percent == 150);
+    CHECK(back.tmp_mb == 2048);
+    CHECK(back.max_open_files == 999);
+    CHECK(back.cpu_secs == 60);
+    CHECK(back.wall_clock_secs == 600);
+}
+
 TEST_CASE("sandbox pane: a toggle says what its CURRENT state does") {
     // A toggle renders as nothing but on/off, so a single help line can only
     // describe the row, never the choice. Without state-dependent help the
