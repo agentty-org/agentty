@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.58] - 2026-11-18
+
 ### Added
 - **Environment variables setting** (Settings → Sandbox): `toolchain`
   (default), `essential` or `host`, plus a **Custom variables** list. A token
