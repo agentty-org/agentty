@@ -859,6 +859,15 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         }
         std::string detail = type_tag;
         if (!what.empty()) detail += "  \xc2\xb7  " + what;
+        if (tc.is_running()) {
+            // The runner's status line ("◆ coder · turn 12/80 · 18 tools ·
+            // 2m 31s") leads every progress snapshot: lift its counters into
+            // the header so they're visible however the feed scrolls.
+            const std::string_view pt = tc.progress_text();
+            const std::string_view first = pt.substr(0, pt.find('\n'));
+            if (auto at = first.find("turn "); at != std::string_view::npos)
+                detail += "  \xc2\xb7  " + std::string{first.substr(at)};
+        }
         if (tc.is_terminal()) {
             const std::string_view out = card_output(tc);
             if (auto p = out.find("report ("); p != std::string::npos) {

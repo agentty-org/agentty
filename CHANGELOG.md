@@ -5,6 +5,21 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Subagents no longer die after doing the work.** A reply too long to
+  stream (a big `write`) used to end the whole run at the 8k output limit;
+  write-capable agents now get the model's output ceiling (up to 32k), and a
+  cut-off turn is retried smaller instead of failing the run.
+- **A subagent always ends with a report.** When it runs out of turns or time
+  mid-work, it gets one last turn with no tools to write up what it changed
+  or found, instead of returning an activity log.
+- **Coder subagents start editing.** They were spending 40-77 turns reading
+  and returning "no edits made"; the coder role now reads narrowly and edits
+  early, and every subagent is told its turn and time budget.
+- **The Agent card shows progress:** turn N of M, tool calls and elapsed time
+  in the header while it runs. A failed run's report carries the last dozen
+  steps, not the whole log.
+- **Live `shell` output streams again** (to the card and to ACP clients); it
+  showed only the newest chunk since the background-on-timeout change.
 - **`edit` never silently overwrites someone else's change.** If the file
   is written by another process between edit's read and its write (a
   formatter on save, your editor), the edit is refused and nothing is lost.

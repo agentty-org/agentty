@@ -949,11 +949,15 @@ ResolvedAgent resolve_agent_type(std::string_view t) {
          {"read", "grep", "glob", "list_dir", "find_definition", "repo_map",
           "shell", "diagnostics", "git_diff", "git_status"}, MR::Implementation},
         {"coder", false,
-         "Your role: CODER. Implement the change the task names end-to-end: "
-         "read the relevant code first, make the edits, and verify they build/"
-         "compile if a build command is obvious. Follow the surrounding "
-         "conventions exactly. Report what you changed (files + a one-line "
-         "summary each) and whether it built.",
+         "Your role: CODER. Implement the change the task names end-to-end. "
+         "Read only what you need to make the FIRST edit -- use grep and "
+         "`read` with a symbol or a line range, not whole files -- then edit, "
+         "then read more if the next step needs it. Start editing within your "
+         "first ~8 turns: a coder that spends its budget reading returns "
+         "nothing. Build or run the relevant test once the edits are in, fix "
+         "what fails, and stop. Follow the surrounding conventions exactly. "
+         "Report what you changed (files + a one-line summary each) and "
+         "whether it built.",
          {}, MR::Implementation},
         {"general", false,
          "Your role: GENERAL. Complete the delegated task end-to-end using "
@@ -1019,7 +1023,8 @@ ResolvedAgent resolve_agent_type(std::string_view t) {
     return false;
 }
 
-std::string subagent_system_prompt(Io io, const AgentType& type) {
+std::string subagent_system_prompt(Io io, const AgentType& type, int max_turns,
+                                   std::chrono::seconds wall) {
     // A local model gets the same compact prompt (with its "do the work,
     // never refuse a big task" rules) the main turn gives it. The lean hosted
     // prompt left `agentty run` and every subagent on a small local model
@@ -1054,6 +1059,13 @@ std::string subagent_system_prompt(Io io, const AgentType& type) {
         "path or line you didn't see. Do not pad or hedge. If the task is "
         "impossible or underspecified beyond a reasonable assumption, say so and "
         "explain exactly what's missing rather than guessing.";
+    // The budget, stated. A run that doesn't know it has 32 turns plans like
+    // it has 200 and is cut off mid-investigation.
+    base += "\n\nBUDGET: at most " + std::to_string(max_turns) + " turns and "
+          + std::to_string(wall.count() / 60) + " minutes. Batch independent "
+            "reads and searches into ONE turn (several tool calls in one "
+            "message run together). Prefer grep / find_definition / `read` "
+            "with a symbol or line range over reading whole files.";
     if (type.read_only)
         base += "\n\nYou are READ-ONLY: you have no tools that modify files, "
                 "run commands, or reach the network. Investigate and report only.";
@@ -1139,7 +1151,11 @@ provider::StreamResult run_one_completion(Thread& thread,
                               std::string& log,
                               const CallContext& ctx,
                               const subagent::RunRegistration* run_reg = nullptr,
-                              RunStats* stats = nullptr) {
+                              RunStats* stats = nullptr,
+                              bool* cutoff_window_full = nullptr,
+                              int max_turns = subagent::kMaxTurns,
+                              std::chrono::seconds wall = std::chrono::minutes(15),
+                              bool no_tools = false) {
     // Provider-agnostic request — the generic shape every transport accepts.
     // fresh_auth_header refreshes the ANTHROPIC OAuth token from disk; on any
     // other backend it would CLOBBER the provider's key with Anthropic
@@ -1286,7 +1302,7 @@ provider::StreamResult run_one_completion(Thread& thread,
     // the model's own known window instead of a hole.
     if (req.context_window <= 0)
         req.context_window = agentty::catalog_context_window_for(req.model);
-    req.system_prompt = subagent_system_prompt(IoAccess::grant(), type);   // subagent runs on a tool worker
+    req.system_prompt = subagent_system_prompt(IoAccess::grant(), type, max_turns, wall);   // subagent runs on a tool worker
     // Smart-channel telemetry, the delegation half of the trace. Without this
     // a debug log showed ONLY the Strategic turn: subagents dispatch on a
     // worker thread through the same transport, so their requests appeared
@@ -1336,12 +1352,17 @@ provider::StreamResult run_one_completion(Thread& thread,
                         ? auth::fresh_auth_header(IoAccess::grant(), ctx.capability(), cfg.auth)
                         : cfg.auth);
     }
-    // A subagent's job is to investigate and return a CONCISE standalone
-    // report — not to emit a 32k-token essay. The parent's default is 16k;
-    // 8k is ample for a report yet caps the per-turn output cost of a
-    // fan-out of parallel subagents (each turn otherwise billed at the full
-    // ceiling). The wrap-up nudge already forces a tight final report.
-    req.max_tokens    = 8192;
+    // Output ceiling per TURN. Not the 8k this used to be: a coder's turn is
+    // often one `write` or a big `edit` whose whole body streams as tool-call
+    // JSON, and 8k cut that off mid-argument -- the most common way a coder
+    // subagent died ("reply cut off at the 8192-token output limit" after 49
+    // turns of work, nothing written). A write role gets the same per-model
+    // ceiling the main loop uses (capped at 32k); a read-only role writes
+    // prose reports and keeps 16k. It's a CEILING: only turns that need the
+    // room are billed for it.
+    req.max_tokens    = type.read_only
+        ? 16384
+        : std::clamp(agentty::max_output_tokens_for(req.model), 8192, 32768);
     // A small served window (vLLM 4096) 400s a request whose max_tokens
     // alone fills it; same cap as the main loop.
     if (req.context_window > 0)
@@ -1423,6 +1444,10 @@ provider::StreamResult run_one_completion(Thread& thread,
         tr.mode   = tools::tool_loading::current();
         (void)tools::tool_loading::plan_into(tr, req.tools);
     }
+    // The forced final report: no tools on the wire, so the model can only
+    // answer in prose. (A tool list it can still call is how a "write your
+    // report now" nudge turned into one more `read` and no report.)
+    if (no_tools) req.tools.clear();
 
     Message asst;
     asst.role = Role::Assistant;
@@ -1430,7 +1455,9 @@ provider::StreamResult run_one_completion(Thread& thread,
     StopReason stop = StopReason::Unspecified;
     // Usage can arrive more than once per request (start + delta), each one
     // cumulative, so keep the biggest and add it once at the end.
-    long long req_in = 0, req_out = 0;
+    long long req_in = 0, req_out = 0, req_cached = 0;
+    const std::string req_model = req.model;
+    const auto req_started = std::chrono::steady_clock::now();
     if (stats) stats->model = req.model;
     std::unordered_map<std::string, std::string> tool_json;
     // A StreamError that arrives MID-STREAM, after a 200 and some content.
@@ -1578,6 +1605,7 @@ provider::StreamResult run_one_completion(Thread& thread,
                         + e.cache_read_input_tokens + e.cache_creation_input_tokens;
                     req_in  = std::max(req_in, in);
                     req_out = std::max(req_out, static_cast<long long>(e.output_tokens));
+                    req_cached = std::max(req_cached, static_cast<long long>(e.cache_read_input_tokens));
                 } else if constexpr (std::same_as<T, StreamError>) {
                     // StreamResult is authoritative for TRANSPORT failures
                     // (non-2xx, dropped connection) — but it cannot see an
@@ -1641,6 +1669,11 @@ provider::StreamResult run_one_completion(Thread& thread,
     stop_cbs.clear();
     pump(/*force=*/true);   // flush the throttled tail
     text_events.flush();
+    if (stats && stats->events && ctx.depth == 0)
+        emit_event({{"ev", "usage"}, {"turn", stats->turns + 1}, {"model", req_model},
+                    {"in", req_in}, {"cached", req_cached}, {"out", req_out},
+                    {"ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - req_started).count()}});
     if (stats) {
         stats->input_tokens  += req_in;
         stats->output_tokens += req_out;
@@ -1681,6 +1714,7 @@ provider::StreamResult run_one_completion(Thread& thread,
                 : "reply cut off at the " + std::to_string(req.max_tokens)
                       + "-token output limit");
         result.stop = StopReason::MaxTokens;
+        if (cutoff_window_full) *cutoff_window_full = window_full;
     }
 
     thread.messages.push_back(std::move(asst));
@@ -1754,7 +1788,7 @@ public:
         }
 
         int turns = 0;
-        std::string log = "\xe2\x97\x86 " + std::string{type.name} + " agent";
+        std::string log;   // the activity feed; the card header is `live`'s status line
         std::string last_error;
         // Give this subagent its OWN read-dedup context for the whole run.
         //
@@ -1784,6 +1818,8 @@ public:
         // successful completion resets it.
         constexpr int kMaxStreamRetries = 3;
         int stream_failures = 0;
+        int cutoffs = 0;   // consecutive output-limit cut-offs (recovered, max 2)
+        bool cutoff_window_full = false;   // the last cut-off was the context window
         // Wall-clock ceiling for the WHOLE run, independent of turns.
         //
         // kMaxTurns bounds how many completions a subagent may take; it
@@ -1888,6 +1924,35 @@ public:
                                   ? stats->max_turns
                                   : subagent::max_turns_for(type.read_only);
 
+        // What the card shows on top while the run works: role, turn of
+        // budget, tool calls so far, elapsed. The feed below it is only ever
+        // shown as its last few lines, so without a header pinned to every
+        // update the user saw eight lines of `✓ read ...` and no idea whether
+        // the run was at turn 3 or turn 70, or how long it had been going.
+        // `live` is the enclosing context with its progress sink wrapped; it
+        // stays on this frame and thread, so it may carry the capability.
+        const auto run_started = std::chrono::steady_clock::now();
+        CallContext live = ctx;
+        live.cap.set(ctx.cap.get());
+        live.progress = [&, parent = ctx.progress](std::string_view feed) {
+            if (!parent) return;
+            int calls = 0;
+            const std::size_t first_new = stats ? stats->history.size() : 0;
+            for (std::size_t i = first_new; i < thread.messages.size(); ++i)
+                calls += static_cast<int>(thread.messages[i].tool_calls.size());
+            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - run_started).count();
+            std::string head = "\xe2\x97\x86 " + std::string{type.name}
+                + " \xc2\xb7 turn " + std::to_string(std::max(turns, 1)) + "/"
+                + std::to_string(max_turns) + " \xc2\xb7 " + std::to_string(calls)
+                + (calls == 1 ? " tool" : " tools") + " \xc2\xb7 "
+                + (secs >= 60 ? std::to_string(secs / 60) + "m " : std::string{})
+                + std::to_string(secs % 60) + "s";
+            head += '\n';
+            head += feed;
+            parent(head);
+        };
+
         while (turns < max_turns && !doomed && !hook_stopped) {
             // Wall-clock stop, checked at the top of every turn. Placed here
             // rather than in the while() condition so `deadline_hit` is set
@@ -1952,7 +2017,9 @@ public:
             }
 
             provider::StreamResult stream_result =
-                run_one_completion(thread, cfg, type, log, ctx, &run_reg, stats);
+                run_one_completion(thread, cfg, type, log, live, &run_reg, stats, &cutoff_window_full,
+                                   max_turns,
+                                   std::chrono::duration_cast<std::chrono::seconds>(max_wall_clock));
 
             if (!stream_result.ok()) {
                 const std::string err = stream_result.error.value_or("stream failed");
@@ -1973,6 +2040,35 @@ public:
                 if (!thread.messages.empty()
                     && thread.messages.back().role == Role::Assistant)
                     thread.messages.pop_back();
+                // CUT OFF at the output limit: the turn is lost, the RUN is
+                // not. This used to end the whole subagent -- 49 turns of
+                // reading thrown away because one `write` was too long to
+                // stream. Tell the model what happened and let it redo the
+                // step smaller. Twice in a row means it can't, so stop then.
+                // (A full CONTEXT window is different: nothing smaller fits,
+                // so that still ends the run.)
+                if (stream_result.stop == StopReason::MaxTokens
+                    && !cutoff_window_full
+                    && !ctx.cancelled() && ++cutoffs <= 2) {
+                    log += "\n  \xe2\x86\xbb reply hit the output limit \xe2\x80\x94 asking for a smaller step";
+                    live.emit(log);
+                    Message note;
+                    note.role = Role::User;
+                    note.text =
+                        "Your previous reply was cut off at the output limit and "
+                        "was discarded, including any tool call in it. Redo that "
+                        "step in smaller pieces: split a large `write` into a "
+                        "short `write` plus `edit`s, send fewer edits per call, "
+                        "and keep prose short.";
+                    thread.messages.push_back(std::move(note));
+                    last_error.clear();
+                    continue;
+                }
+                if (stream_result.stop == StopReason::MaxTokens && cutoffs > 2) {
+                    log += "\n  \xe2\x9a\xa0 cut off at the output limit 3\xc3\x97 \xe2\x80\x94 stopping";
+                    live.emit(log);
+                    break;   // the tools-off final report below still runs
+                }
                 if (!retryable || error_class == provider::ErrorClass::Cancelled
                     || ctx.cancelled()) {
                     is_error = true;
@@ -1986,7 +2082,7 @@ public:
                     log += "\n  ⚠ stream failed "
                          + std::to_string(stream_failures) + "× — giving up: "
                          + err;
-                    ctx.emit(log);
+                    live.emit(log);
                     break;
                 }
                 // A RETRY-AFTER MEASURED IN HOURS IS A QUOTA, NOT A BURST
@@ -2006,7 +2102,7 @@ public:
                     && stream_result.retry_after->count()
                            > provider::kRetryAfterTerminalSeconds) {
                     log += "\n  \xe2\x9a\xa0 " + err;
-                    ctx.emit(log);
+                    live.emit(log);
                     break;
                 }
                 // Honor server guidance, but cap it so a hostile/mistaken
@@ -2020,7 +2116,7 @@ public:
                 log += "\n  ↻ retry " + std::to_string(stream_failures)
                      + "/" + std::to_string(kMaxStreamRetries)
                      + " in " + std::to_string(wait.count()) + "ms (" + err + ")";
-                ctx.emit(log);
+                live.emit(log);
                 if (ctx.wait(wait, run_reg.token())) {
                     is_error = true;
                     if (stats) {
@@ -2034,6 +2130,7 @@ public:
                 continue;
             }
             stream_failures = 0;
+            cutoffs = 0;
             last_error.clear();
 
             Message& asst = thread.messages.back();
@@ -2056,7 +2153,7 @@ public:
                             "tool args failed to parse \xe2\x80\x94 re-emit the call "
                             "with complete, valid JSON arguments"};
                         log += "\n    \xe2\x9c\x97 " + tc.name.value + ": bad args";
-                        ctx.emit(log);
+                        live.emit(log);
                         // A parse failure still counts as a tool ROUND-TRIP:
                         // the model sees the error tool_result and can
                         // re-emit. Without this the loop broke out on the
@@ -2072,7 +2169,7 @@ public:
                         tc.status = ToolUse::Failed{now, now,
                             "tool '" + tc.name.value + "' is not available in this run"};
                         log += "\n    \xe2\x9c\x97 " + tc.name.value + ": not allowed";
-                        ctx.emit(log);
+                        live.emit(log);
                         emit_tool_event(tc.name.value, 0, false, "not allowed in this run",
                                         tc.args.dump());
                         ran_a_tool = true;
@@ -2096,7 +2193,7 @@ public:
                                   "answer in this run" + (pre.reason.empty() ? "" : ": " + pre.reason);
                             tc.status = ToolUse::Failed{now, now, why};
                             log += "\n    \xe2\x9c\x97 " + tc.name.value + ": blocked by hook";
-                            ctx.emit(log);
+                            live.emit(log);
                             emit_tool_event(tc.name.value, 0, false, "blocked by hook", tc.args.dump());
                             if (pre.stop) hook_stopped = true;
                             continue;
@@ -2212,7 +2309,7 @@ public:
                             log += "\n  \xe2\x9a\xa0 same call failed 3\xc3\x97 \xe2\x80\x94 stopping";
                         }
                     }
-                    ctx.emit(log);
+                    live.emit(log);
                 }
             }
 
@@ -2229,6 +2326,55 @@ public:
         // 24-turn run returning its opening sentence instead of an answer.
         std::string report;
         bool salvaged_stale = false;
+        // NO FINAL PROSE because a budget ran out mid-work (turn cap, clock,
+        // a cut-off we couldn't recover)? One last completion with NO tools
+        // on the wire turns everything the run learned into a report. Without
+        // it the parent got an activity log and "may be an early, incomplete
+        // note" -- 49 turns of reading, nothing to show for it. Skipped when
+        // the run was cancelled or blocked by a hook, when the provider itself
+        // is failing (last_error set by a stream error), and for a run that
+        // already ended on prose.
+        const bool ended_without_prose = thread.messages.empty()
+            || thread.messages.back().role != Role::Assistant
+            || thread.messages.back().text.empty();
+        // A cut-off that ended the run (the third in a row) left last_error
+        // set to it; any OTHER last_error is the provider failing, where one
+        // more request would fail the same way.
+        const bool ended_on_cutoff = cutoffs > 2;
+        if (ended_without_prose && !hook_stopped && !ctx.cancelled() && !run_reg.cancelled()
+            && (last_error.empty() || ended_on_cutoff)
+            && (turns >= max_turns || deadline_hit || ended_on_cutoff || doomed)) {
+            // Settle any tool call the last turn left without a result, so
+            // the request is well-formed.
+            if (!thread.messages.empty() && thread.messages.back().role == Role::Assistant)
+                for (auto& tc : thread.messages.back().tool_calls)
+                    if (!tc.is_terminal()) {
+                        const auto now = std::chrono::steady_clock::now();
+                        tc.status = ToolUse::Failed{now, now, "not run: the subagent's budget ran out"};
+                    }
+            Message ask;
+            ask.role = Role::User;
+            ask.text =
+                "Your budget is used up and tools are no longer available. Write "
+                "your FINAL report now, as plain text, from what you already "
+                "know: what you changed (files) or found (file:line), what you "
+                "verified, and exactly what is left undone and why.";
+            thread.messages.push_back(std::move(ask));
+            log += "\n  \xe2\x9c\x8e writing the final report";
+            live.emit(log);
+            bool cwf = false;
+            const auto fin = run_one_completion(
+                thread, cfg, type, log, live, &run_reg, stats, &cwf, max_turns,
+                std::chrono::duration_cast<std::chrono::seconds>(max_wall_clock),
+                /*no_tools=*/true);
+            if (!fin.ok() && !thread.messages.empty()
+                && thread.messages.back().role == Role::Assistant)
+                thread.messages.pop_back();
+            // A real report arrived: the run ends on prose, and a cut-off that
+            // stopped the tool loop is no longer what the caller needs to
+            // hear first. (Turn/clock exhaustion is still flagged below.)
+            if (fin.ok() && ended_on_cutoff) last_error.clear();
+        }
         if (ctx.on_subagent_done) {
             try { ctx.on_subagent_done(thread); } catch (...) {}
         }
@@ -2296,15 +2442,32 @@ public:
                       "report \xe2\x80\x94 the summary below is incomplete]";
             else
                 why = "[subagent finished without a final text report]";
+            // The activity feed goes to the PARENT model, which pays context
+            // for every line: the last dozen steps say where the run was; the
+            // whole log (a ⚙ and a ✓ line per call, 100+ lines for a long run)
+            // only crowded out the parent's own work.
+            std::string tail_log;
+            {
+                constexpr int kKeepLines = 12;
+                std::size_t at = log.size();
+                int n = 0;
+                while (at > 0 && n <= kKeepLines) {
+                    at = log.rfind('\n', at - 1);
+                    if (at == std::string::npos) { at = 0; break; }
+                    ++n;
+                }
+                tail_log = (at > 0 ? std::string{"  \xe2\x8b\xaf\n"} : std::string{})
+                         + log.substr(at == 0 ? 0 : at + 1);
+            }
             if (salvaged_stale) {
                 // We have partial prose from an earlier turn: surface the
                 // banner, then the salvaged text, then the activity log.
                 report = why + "\n\nLast text the subagent produced (may be an "
                              "early, incomplete note):\n" + report
-                       + (log.empty() ? std::string{}
-                                      : "\n\nActivity:\n" + log);
+                       + (tail_log.empty() ? std::string{}
+                                           : "\n\nLast steps:\n" + tail_log);
             } else {
-                report = log.empty() ? why : (why + "\n\nActivity:\n" + log);
+                report = tail_log.empty() ? why : (why + "\n\nLast steps:\n" + tail_log);
             }
             // A bare error (no salvageable report) propagates as an error so
             // the shell tags the tool_result is_error.

@@ -29,10 +29,17 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     if (tc.is_running()) {
         if (!tc.progress_text().empty()) {
             out.kind = Kind::BashOutput;
+            // The first line is the runner's status header, which the card
+            // header already shows; the body is the activity feed under it.
+            std::string_view feed = tc.progress_text();
+            if (feed.starts_with("\xe2\x97\x86 ")) {
+                const auto nl = feed.find('\n');
+                feed = nl == std::string_view::npos ? std::string_view{} : feed.substr(nl + 1);
+            }
             // BashOutput is tail-oriented (newest activity at the
             // bottom) — keep the last few feed lines so the running
             // card shows the CURRENT step, not the stale header.
-            out.text = tail_window(tc.progress_text(), kTaskLiveRows);
+            out.text = tail_window(feed, kTaskLiveRows);
             out.text_color = text_primary;   // plain output reads as normal text
             out.is_streaming = true;
         }

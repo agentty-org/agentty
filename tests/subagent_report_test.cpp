@@ -231,6 +231,117 @@ int main() {
     }
 
     // ── B. Writes prose at the end: clean final report. ─────────────────
+    // (Q-T below: the failure modes seen in real runs.)
+
+    // ── Q. A turn cut off at the output limit is RECOVERED, not fatal. ───
+    // The most common coder death in the field: 49 turns of work, then one
+    // reply too long to stream ("reply cut off at the 8192-token output
+    // limit") ended the run with nothing written. Now the cut turn is dropped,
+    // the model is told why, and it carries on.
+    {
+        auto saw_note = std::make_shared<std::atomic<bool>>(false);
+        install_scripted_stream([saw_note](int turn, const provider::Request& req,
+                                           const provider::EventSink& sink) {
+            for (const auto& m : req.messages)
+                if (m.role == Role::User && has(m.text, "cut off at the output limit"))
+                    *saw_note = true;
+            if (turn == 0) {
+                emit_text(sink, "partial reply that runs out of room...");
+                emit_finish(sink, StopReason::MaxTokens);
+                return;
+            }
+            emit_text(sink, "FINAL: done in smaller steps.");
+            emit_finish(sink, StopReason::EndTurn);
+        });
+        auto out = run_task("rewrite a big file");
+        check(!out.is_error, "Q: one cut-off turn does not fail the run");
+        check(has(out.text, "FINAL: done in smaller steps."), "Q: the run continued to a real report");
+        check(saw_note->load(), "Q: the model was told its reply was cut off");
+    }
+
+    // ── R. Cut off three times in a row: stop, but still REPORT. ──────────
+    {
+        install_scripted_stream([](int, const provider::Request& req,
+                                   const provider::EventSink& sink) {
+            if (req.tools.empty()) {   // the forced, tools-off final turn
+                emit_text(sink, "REPORT: could not fit the write; found X at a.cpp:3.");
+                emit_finish(sink, StopReason::EndTurn);
+                return;
+            }
+            emit_text(sink, "too long...");
+            emit_finish(sink, StopReason::MaxTokens);
+        });
+        auto out = run_task("write a huge file");
+        check(has(out.text, "REPORT: could not fit the write"),
+              "R: a run that keeps getting cut off still ends with a report");
+        check(!has(out.text, "Last steps:") || has(out.text, "REPORT:"),
+              "R: the report leads, not an activity dump");
+    }
+
+    // ── S. Out of turns while still calling tools: forced final report. ──
+    // Field case: "I ran out of turn budget before making any edits" was the
+    // GOOD outcome; the bad one was no prose at all and an activity log.
+    {
+        auto final_had_tools = std::make_shared<std::atomic<int>>(-1);
+        install_scripted_stream([final_had_tools](int turn, const provider::Request& req,
+                                                  const provider::EventSink& sink) {
+            if (req.tools.empty()) {
+                *final_had_tools = 0;
+                emit_text(sink, "SUMMARY: mapped modules a, b; edits not started.");
+                emit_finish(sink, StopReason::EndTurn);
+                return;
+            }
+            emit_tool_call(sink, "s" + std::to_string(turn), "grep",
+                           json{{"pattern", "zzz_no_match_expected_s" + std::to_string(turn)}});
+            emit_finish(sink, StopReason::ToolUse);
+        });
+        auto out = run_task("explore forever");
+        check(final_had_tools->load() == 0, "S: the final completion is sent with NO tools");
+        check(has(out.text, "SUMMARY: mapped modules a, b"),
+              "S: the run ends with the model's own summary, not a log");
+        check(out.is_error, "S: an exhausted budget is still flagged, not ✓ done");
+    }
+
+    // ── T. The subagent is TOLD its budget and to batch. ──────────────────
+    {
+        auto sys = std::make_shared<std::string>();
+        install_scripted_stream([sys](int, const provider::Request& req,
+                                      const provider::EventSink& sink) {
+            *sys = req.system_prompt;
+            emit_text(sink, "ok");
+            emit_finish(sink, StopReason::EndTurn);
+        });
+        (void)run_task("anything");
+        check(has(*sys, "BUDGET: at most") && has(*sys, "turns"), "T: the turn budget is in the prompt");
+        check(has(*sys, "Batch independent"), "T: the prompt asks for batched reads");
+    }
+
+    // ── U. The live card carries a status line: turn/max, tools, elapsed. ──
+    {
+        install_scripted_stream([](int turn, const provider::Request&,
+                                   const provider::EventSink& sink) {
+            if (turn < 2) {
+                emit_tool_call(sink, "u" + std::to_string(turn), "grep",
+                               json{{"pattern", "zzz_no_match_expected_u" + std::to_string(turn)}});
+                emit_finish(sink, StopReason::ToolUse);
+                return;
+            }
+            emit_text(sink, "done");
+            emit_finish(sink, StopReason::EndTurn);
+        });
+        auto snaps = std::make_shared<std::vector<std::string>>();
+        tools::CallContext ctx;
+        ctx.progress = [snaps](std::string_view s) { snaps->emplace_back(s); };
+        (void)run_task("two greps then done", ctx);
+        bool status = false;
+        for (const auto& s : *snaps)
+            status = status || (s.rfind("\xe2\x97\x86 general \xc2\xb7 turn ", 0) == 0
+                                && has(s.substr(0, s.find('\n')), "tools"));
+        check(!snaps->empty() && status,
+              "U: every progress snapshot leads with '◆ <type> · turn N/M · K tools · t'");
+    }
+
+    // ── B. Writes prose at the end: clean final report. ─────────────────
     // Explore for a couple of turns, then on turn 3 stop calling tools and
     // write the real answer. The runner must return exactly that prose.
     {
@@ -546,7 +657,9 @@ int main() {
         install_scripted_stream([first_key, key_stable, cap_ok, key_nonempty](
                                     int turn, const provider::Request& req,
                                     const provider::EventSink& sink) {
-            if (req.max_tokens > 8192) cap_ok->store(false);
+            // general is a write role: 8k..32k, never the 8k that cut writes
+            // off mid-argument, never an unbounded flagship ceiling.
+            if (req.max_tokens < 8192 || req.max_tokens > 32768) cap_ok->store(false);
             if (turn == 0) {
                 *first_key = req.session_key;
                 key_nonempty->store(!req.session_key.empty());
@@ -568,7 +681,7 @@ int main() {
         check(key_stable->load(),
               "L: session_key is identical across the subagent's turns");
         check(cap_ok->load(),
-              "L: subagent max_tokens is capped (<=8192), not the old 32k");
+              "L: a write role's max_tokens is bounded to [8k, 32k]");
         check(!out.is_error && has(out.text, "REPORT_OK"),
               "L: the economical config still produces a clean report");
     }
