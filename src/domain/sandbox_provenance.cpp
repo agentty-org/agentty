@@ -161,10 +161,13 @@ namespace {
 // `.git/config`, which can carry a credential helper. That is covered by the
 // trust-handoff rules above (TrustKind::GitConfig) rather than by masking, so
 // skipping it here loses nothing.
+//
+// `vendor` is not here: Go and PHP check vendored code into the repo, and a
+// .env or key committed with it is exactly what the masks exist for.
 constexpr std::string_view kNeverWalk[] = {
     ".git", "node_modules", "target", "build", "dist", ".venv", "venv",
     "__pycache__", ".mypy_cache", ".pytest_cache", ".cache", ".next",
-    ".gradle", ".tox", "vendor", "Pods", ".terraform",
+    ".gradle", ".tox", "Pods", ".terraform",
 };
 
 [[nodiscard]] bool never_walk(std::string_view name) {
