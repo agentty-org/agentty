@@ -971,21 +971,6 @@ tools::ToolDef make_get_prompt_tool(PoolHandle pool) {
     return def;
 }
 
-std::optional<std::string> resolve_tool_route(
-    const ::mcp::cap::Registry& registry, std::string_view requested) {
-    std::optional<std::string> match;
-    for (const auto& tool : registry.tools()) {
-        const std::string canonical = canonical_mcp_name(tool.name);
-        const bool bare_match = tool.name.size() > requested.size() + 2
-            && tool.name.ends_with("__" + std::string{requested});
-        if (tool.name == requested || canonical == requested || bare_match) {
-            if (match && *match != tool.name) return std::nullopt;
-            match = tool.name;
-        }
-    }
-    return match;
-}
-
 // ── "is this tool actually enabled?" ──────────────────────────────────
 //
 // Two sources: the per-server policy baked at connect (tools.include /

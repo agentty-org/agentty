@@ -83,6 +83,8 @@ std::string diff(const sb::Config& a, const sb::Config& b) {
     f("scope_ipc", a.scope_ipc == b.scope_ipc);
     f("close_inherited_fds", a.close_inherited_fds == b.close_inherited_fds);
     f("fake_hostname", a.fake_hostname == b.fake_hostname);
+    f("env_scope", a.env_scope == b.env_scope);
+    f("env_keep", a.env_keep == b.env_keep);
     f("mask_scan_depth", a.mask_scan_depth == b.mask_scan_depth);
     f("handoff", a.handoff == b.handoff);
     f("configured", a.configured == b.configured);

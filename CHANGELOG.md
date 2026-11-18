@@ -4,6 +4,43 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **git works in the sandbox again.** Commit, add, switch, rebase, stash and
+  gc failed under every preset, because git's own state files (`HEAD`,
+  `index`, `packed-refs`) were bound read-only. Only `.git/config`,
+  `.git/hooks` and `.git/info/attributes` are protected now, and files that
+  merely share a name (`src/hooks/`, `deploy/config`) are ordinary.
+- **https works under `hardened`.** Port-restricted network no longer points
+  tools at a proxy that is not running.
+- **Saving the Sandbox pane keeps resource limits it could not show.** On a
+  host where claybin cannot start, the locked memory, process, CPU and `/tmp`
+  rows were saved as 0 (or 512 MB), not as configured.
+- **Secret files under `vendor/` are masked.** The secret scan skipped
+  `vendor/`, where Go and PHP projects keep checked-in code.
+
+### Added
+- **Environment variables setting** (Settings → Sandbox): `toolchain`
+  (default), `essential` or `host`, plus a **Custom variables** list. A token
+  you export in your shell no longer reaches the agent's commands unless you
+  pick `host` or list it.
+- **What `.git/config` makes git run is protected too:** the `core.hooksPath`
+  folder (`.husky`, `.githooks`) and the scripts named by `core.fsmonitor`,
+  filters, `textconv`, `sshCommand` and `credential.helper`, for the shell and
+  for the file tools alike. Moving or replacing a `.git` is blocked where the
+  sandbox can, and reported where it can't.
+- **A global-only git identity works under `hardened` and `airgapped`.** Only
+  `user.name` and `user.email` are handed over; a repo's own identity still
+  wins.
+
+### Changed
+- **Upgrading changes what commands inherit.** A saved setup that matches a
+  preset keeps that preset's environment scope (`permissive` keeps `host`). A
+  `custom` setup gets the new default, `toolchain`, so exported tokens stop
+  reaching commands; set Environment variables to `host` to keep the old
+  behaviour.
+- **Allowed ports and Allowed hosts show only where Access uses them**, and
+  your lists are kept while hidden.
+
 ## [0.9.57] - 2026-11-16
 
 ### Added

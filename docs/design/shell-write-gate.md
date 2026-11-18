@@ -172,8 +172,10 @@ second pass that re-scans the trusted-shaped directories the walk recorded.
 **411 of 1824 paths were signal.** `.git` is a Component shape rule, so every
 blob under `.git/objects/` read as host-trusted: 1605 inert files watched to
 catch writes to three. Git executes hooks and honours config; it does not run
-its own object database. Pruned to `.git/hooks`, `.git/info` and files directly
-in `.git` — and pruned at the walk, not after, since descending only to discard
+its own object database. Pruned to `.git/hooks`, `.git/info/attributes` and
+`config` / `config.worktree` directly in `.git` (the other files there are
+state git replaces by rename, which a read-only bind breaks), and pruned at
+the walk, not after, since descending only to discard
 is the cost without the benefit. Confirmed `.git/hooks/pre-commit` is still
 caught afterwards, so this removed noise and not signal.
 

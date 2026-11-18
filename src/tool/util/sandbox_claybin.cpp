@@ -21,6 +21,7 @@
 // read on `/`, which handed ~/.ssh and ~/.aws to any approved bash call while
 // still reporting "sandbox: active". One list, two backends.
 #include "agentty/tool/util/sandbox_claybin.hpp"
+#include "agentty/domain/sandbox_config.hpp"   // env_allowed
 #include "agentty/tool/util/sandbox_broker.hpp"
 #include "agentty/util/logx.hpp"   // AGT_LOG — the broker audit trail
 
@@ -147,7 +148,8 @@ constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 //     needs no path at all.
 //   - provider keys agentty uses to talk to the model. a command the agent
 //     runs has no business with the key that pays for the agent.
-bool box_env_keeps(std::string_view key) noexcept {
+bool box_env_keeps(std::string_view key, int env_scope,
+                   std::span<const std::string> keep) noexcept {
     static constexpr std::string_view kDrop[] = {
         "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS",
         "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY",
@@ -164,7 +166,8 @@ bool box_env_keeps(std::string_view key) noexcept {
     // Every *_API_KEY agentty's provider registry reads (GROQ_API_KEY,
     // GEMINI_API_KEY, ...). Matched by suffix so a new provider is covered.
     if (key.size() > 8 && key.ends_with("_API_KEY")) return false;
-    return true;
+    namespace cfg = ::agentty::sandbox_cfg;
+    return cfg::env_allowed(static_cast<cfg::EnvScope>(env_scope), key, keep);
 }
 
 #if defined(__APPLE__)
@@ -338,8 +341,8 @@ namespace {
         // Re-apply any mask that lives INSIDE the workspace, because the bind
         // above just remounted over it.
         //
-        // This is an ordering bug I shipped and then measured: masks are
-        // applied at line ~94, the workspace bind lands here, and a bind of
+        // This is an ordering bug I shipped and then measured: the masks are
+        // applied above, the workspace bind lands here, and a bind of
         // the workspace root covers every mount underneath it. So
         // `<workspace>/.env` was masked and then un-masked one line later,
         // and a planted .env came back readable IN FULL under both backends.
@@ -352,6 +355,15 @@ namespace {
         for (const auto& m : p.masked) {
             if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
         }
+
+        // Anchors next: a writable self-bind of each git dir (and, under the
+        // strict postures, each nested repo root) makes it a mount point, so
+        // `mv .git elsewhere` fails with EBUSY instead of carrying the
+        // read-only binds below off with it. Before those binds, or this one
+        // would cover them.
+        for (const auto& a : p.handoff_anchor)
+            if (a.starts_with(p.workspace) && a != p.workspace)
+                d = std::move(d).bind_try(a, a, /*ro=*/false);
 
         // Then the handoff binds, for exactly the same ordering reason: a
         // read-only bind of <workspace>/.vscode/tasks.json is covered by the
@@ -375,7 +387,7 @@ namespace {
         // Masks go last, after every bind. build_claybin_posture already
         // keeps masked paths out of handoff_ro; this makes the order itself
         // safe too, so no later bind can uncover a mask again.
-        if (!p.handoff_ro.empty())
+        if (!p.handoff_ro.empty() || !p.handoff_anchor.empty())
             for (const auto& m : p.masked)
                 if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
     }
@@ -712,8 +724,10 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     std::vector<std::string> env_store;
     for (char** e = ::environ; e && *e; ++e) {
         const std::string_view kv{*e};
-        if (box_env_keeps(kv.substr(0, kv.find('=')))) env_store.emplace_back(kv);
+        if (box_env_keeps(kv.substr(0, kv.find('=')), p.env_scope, p.env_keep))
+            env_store.emplace_back(kv);
     }
+    for (const auto& [k, v] : p.extra_env) env_store.push_back(k + "=" + v);
     std::vector<const char*> envp;
     envp.reserve(env_store.size() + 1);
     for (const auto& s : env_store) envp.push_back(s.c_str());
@@ -876,7 +890,7 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
                     std::string upper = name;  // windows names are case-blind
                     for (char& c : upper)
                         if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
-                    if (!box_env_keeps(upper)) continue;
+                    if (!box_env_keeps(upper, p.env_scope, p.env_keep)) continue;
                 }
                 // overridden names are supplied by the caller below; keep the
                 // name side ASCII-faithful (env var names are ASCII in
@@ -897,6 +911,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
             ::FreeEnvironmentStringsW(wbase);
         }
         for (const auto& [k, v] : env) env_store.push_back(k + "=" + v);
+        for (const auto& [k, v] : p.extra_env) {
+            bool overridden = false;
+            for (const auto& [rk, rv] : env)
+                if (_stricmp(rk.c_str(), k.c_str()) == 0) { overridden = true; break; }
+            if (!overridden) env_store.push_back(k + "=" + v);
+        }
         for (const auto& line : env_store) envp.push_back(line.c_str());
         envp.push_back(nullptr);
     }
@@ -1091,12 +1111,17 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         for (char** e = ::environ; e && *e; ++e) {
             const std::string_view kv{*e};
             const auto key = kv.substr(0, kv.find('='));
-            if (!box_env_keeps(key)) continue;
+            if (!box_env_keeps(key, p.env_scope, p.env_keep)) continue;
             bool overridden = false;
             for (const auto& [k, v] : env) if (k == key) { overridden = true; break; }
             if (!overridden) env_store.emplace_back(kv);
         }
         for (const auto& [k, v] : env) env_store.push_back(k + "=" + v);
+        for (const auto& [k, v] : p.extra_env) {
+            bool overridden = false;
+            for (const auto& [rk, rv] : env) if (rk == k) { overridden = true; break; }
+            if (!overridden) env_store.push_back(k + "=" + v);
+        }
         // The guest's route off its own loopback. Every spelling is set
         // because the toolchain is not consistent: curl reads
         // http_proxy/https_proxy and ALL_PROXY, git reads http_proxy,
@@ -1107,7 +1132,10 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         // No NO_PROXY for localhost: inside the box localhost IS the proxy,
         // and an exemption there would break the connection rather than open
         // a hole, because nothing else is listening in that namespace.
-        if (p.net_mode != 1 /* not None */) {
+        //
+        // Full only: under Ports the guest shares the host's network and no
+        // proxy exists, so these would point every tool at a dead port.
+        if (p.net_mode == 0 /* Full */) {
             const std::string addr = "http://127.0.0.1:" + std::to_string(kProxyPort);
             for (const char* k : {"http_proxy", "https_proxy", "HTTP_PROXY",
                                   "HTTPS_PROXY", "ALL_PROXY", "all_proxy"}) {

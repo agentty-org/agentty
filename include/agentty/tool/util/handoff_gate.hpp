@@ -152,8 +152,18 @@ struct TrustedSnapshot {
     // case, not the lesser one.
     std::vector<std::string> roots;
 
+    // Workspace directories a git config names as its hook dir
+    // (core.hooksPath, e.g. .husky). Pinned read-only whole, and any new file
+    // in one is a handoff, whatever its name.
+    std::vector<std::string> pinned_dirs;
+
+    // Every `.git` dir the shallow scan found under the root. The sandbox
+    // anchors each; review() reports a new one git would act on. One moved
+    // away is reported through its config, which is an entry.
+    std::vector<std::string> git_dirs;
+
     [[nodiscard]] bool empty() const noexcept {
-        return entries.empty() && roots.empty();
+        return entries.empty() && roots.empty() && pinned_dirs.empty() && git_dirs.empty();
     }
 };
 
@@ -163,6 +173,10 @@ struct TrustedSnapshot {
 
 // Did the most recent snapshot hit its entry cap? Read by the Sandbox pane.
 [[nodiscard]] bool last_snapshot_truncated() noexcept;
+
+// Did the most recent snapshot find a core.hooksPath dir too large to pin
+// whole? Read by the Sandbox pane.
+[[nodiscard]] bool last_snapshot_large_hook_dir() noexcept;
 
 // Compare after the call and record a handoff for every path that changed,
 // appeared or vanished. Returns the number recorded.

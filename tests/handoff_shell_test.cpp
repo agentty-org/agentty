@@ -19,6 +19,13 @@
 //   4. ordinary files produce NOTHING — a gate that cries wolf gets ignored
 //   5. the snapshot is a no-op under HandoffPolicy::Allow
 //   6. review() on an empty snapshot is a no-op
+//   10. git state files and look-alike names (src/hooks, deploy/config) are
+//       not trusted; .git/config is
+//   11. core.hooksPath dirs and command targets in .git/config are trusted
+//   12. includes, quoting, PATH-named helpers, submodule worktrees, and a
+//       hooksPath at a large dir
+//   13. check_with refuses a write to a git-config target
+//   14. review reports a git dir moved away (via its config), and a new one with a live hook
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -283,6 +290,206 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
         auto before = hg::snapshot_trusted(g_root.string());
         write_file(g_root / ".git" / "hooks" / "pre-push", "#!/bin/sh\n");
         CHECK(hg::review_trusted(before, "echo > pre-push") >= 1);
+    }
+
+    // ── 10. git state is not trusted, git config is ──────────────────────
+    // The snapshot feeds the sandbox's read-only binds. git replaces HEAD,
+    // index and friends by renaming a lock file over them, which fails on a
+    // bind, so pinning them broke commit, add, checkout and rebase.
+    {
+        for (auto f : {"HEAD", "index", "packed-refs", "COMMIT_EDITMSG", "ORIG_HEAD", "config"})
+            write_file(g_root / ".git" / f, "x\n");
+        write_file(g_root / ".git" / "modules" / "lib" / "HEAD", "x\n");
+        write_file(g_root / ".git" / "modules" / "lib" / "config", "x\n");
+        write_file(g_root / "src" / "hooks" / "useThing.ts", "export {}\n");
+        write_file(g_root / "deploy" / "config", "k=v\n");
+        write_file(g_root / "fixtures" / "HEAD", "x\n");
+        // info/: only attributes selects what git runs.
+        write_file(g_root / ".git" / "info" / "attributes", "*.bin filter=x\n");
+        write_file(g_root / ".git" / "info" / "exclude", "build/\n");
+        write_file(g_root / ".git" / "info" / "sparse-checkout", "/src/\n");
+
+        auto snap = hg::snapshot_trusted(g_root.string());
+        bool attrs = false;
+        for (const auto& e : snap.entries) {
+            const std::string p = fs::path(e.path).generic_string();
+            CHECK_FALSE(p.ends_with("info/exclude"));
+            CHECK_FALSE(p.ends_with("info/sparse-checkout"));
+            if (p.ends_with(".git/info/attributes")) attrs = true;
+        }
+        CHECK_MESSAGE(attrs, ".git/info/attributes must stay protected");
+        bool cfg = false, sub_cfg = false;
+        for (const auto& e : snap.entries) {
+            const std::string p = fs::path(e.path).generic_string();
+            INFO(p);
+            CHECK_FALSE(p.ends_with("/HEAD"));
+            CHECK_FALSE(p.ends_with(".git/index"));
+            CHECK_FALSE(p.ends_with(".git/packed-refs"));
+            CHECK_FALSE(p.ends_with(".git/COMMIT_EDITMSG"));
+            CHECK_FALSE(p.ends_with(".git/ORIG_HEAD"));
+            CHECK(p.find("src/hooks") == std::string::npos);
+            CHECK_FALSE(p.ends_with("deploy/config"));
+            if (p.ends_with("/.git/config")) cfg = true;
+            if (p.ends_with("modules/lib/config")) sub_cfg = true;
+        }
+        CHECK_MESSAGE(cfg, ".git/config must stay protected");
+        CHECK_MESSAGE(sub_cfg, "a submodule's config must stay protected");
+
+        // A commit rewrites state files; that is not a handoff.
+        hg::clear_handoff_feed();
+        auto before = hg::snapshot_trusted(g_root.string());
+        write_file(g_root / ".git" / "MERGE_HEAD", "x\n");
+        write_file(g_root / ".git" / "index", "y\n");
+        touch_newer(g_root / ".git" / "index");
+        CHECK(hg::review_trusted(before, "git commit") == 0);
+    }
+
+    // ── 11. what .git/config points at is trusted too ─────────────────────
+    // A pinned config protects the pointer; core.hooksPath (husky) and the
+    // command keys name worktree files git runs, which must be pinned too.
+    {
+        write_file(g_root / ".git" / "config",
+                   "[core]\n\thooksPath = .husky\n\tfsmonitor = \"tools/fsmon.sh\"\n"
+                   "[filter \"lfs\"]\n\tclean = ./tools/clean.sh %f\n"
+                   "[credential]\n\thelper = !/usr/bin/true\n"
+                   "[remote \"origin\"]\n\turl = ../elsewhere\n");
+        write_file(g_root / ".husky" / "pre-commit", "#!/bin/sh\n");
+        write_file(g_root / "tools" / "fsmon.sh", "#!/bin/sh\n");
+        write_file(g_root / "tools" / "clean.sh", "#!/bin/sh\n");
+        write_file(g_root / "tools" / "other.sh", "#!/bin/sh\n");
+
+        auto snap = hg::snapshot_trusted(g_root.string());
+        const auto has = [&](std::string_view tail) {
+            for (const auto& e : snap.entries)
+                if (fs::path(e.path).generic_string().ends_with(tail)) return true;
+            return false;
+        };
+        CHECK(has(".husky/pre-commit"));
+        CHECK(has("tools/fsmon.sh"));
+        CHECK(has("tools/clean.sh"));
+        CHECK_FALSE(has("tools/other.sh"));
+        REQUIRE(snap.pinned_dirs.size() == 1);
+        CHECK(fs::path(snap.pinned_dirs.front()).filename() == ".husky");
+
+        // A brand-new file in the hook dir is a hook, whatever it is called.
+        hg::clear_handoff_feed();
+        write_file(g_root / ".husky" / "post-checkout", "#!/bin/sh\n");
+        CHECK(hg::review_trusted(snap, "echo > .husky/post-checkout") >= 1);
+        CHECK(events_for("post-checkout") >= 1);
+
+        // A target outside the workspace is not ours to pin.
+        write_file(g_root / ".git" / "config", "[core]\n\thooksPath = /usr\n");
+        CHECK(hg::snapshot_trusted(g_root.string()).pinned_dirs.empty());
+    }
+
+    // ── 12. the config syntax git really accepts ──────────────────────────
+    {
+        const auto has = [](const hg::TrustedSnapshot& s, std::string_view tail) {
+            for (const auto& e : s.entries)
+                if (fs::path(e.path).generic_string().ends_with(tail)) return true;
+            return false;
+        };
+        // An include in the worktree; a quoted path with a space; a
+        // credential helper named by PATH (store), with a decoy file of that
+        // name that must not be pinned.
+        write_file(g_root / ".git" / "config",
+                   "[include]\n\tpath = ../conf/extra.gitconfig\n"
+                   "[credential]\n\thelper = store\n");
+        // Config quotes keep the space; the shell quotes inside choose the
+        // program, which is how git hands the value to sh.
+        write_file(g_root / "conf" / "extra.gitconfig",
+                   "[core]\n\tfsmonitor = \"'tools/my mon.sh' --flag\"\n");
+        write_file(g_root / "tools" / "my mon.sh", "#!/bin/sh\n");
+        write_file(g_root / "store", "decoy\n");
+        auto snap = hg::snapshot_trusted(g_root.string());
+        CHECK(has(snap, "conf/extra.gitconfig"));
+        CHECK(has(snap, "tools/my mon.sh"));
+        CHECK_FALSE(has(snap, "/store"));
+
+        // A submodule's targets resolve against its core.worktree.
+        write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
+        write_file(g_root / ".git" / "modules" / "lib" / "config",
+                   "[core]\n\tworktree = ../../../lib\n\thooksPath = .hooks\n");
+        write_file(g_root / "lib" / ".hooks" / "pre-commit", "#!/bin/sh\n");
+        snap = hg::snapshot_trusted(g_root.string());
+        CHECK(has(snap, "lib/.hooks/pre-commit"));
+
+        // A hooksPath at a large dir is not pinned whole; its hook names are.
+        write_file(g_root / ".git" / "modules" / "lib" / "config", "[core]\n\tbare = false\n");
+        write_file(g_root / ".git" / "config", "[core]\n\thooksPath = big\n");
+        for (int i = 0; i < 300; ++i)
+            write_file(g_root / "big" / ("f" + std::to_string(i) + ".ts"), "x\n");
+        write_file(g_root / "big" / "pre-push", "#!/bin/sh\n");
+        snap = hg::snapshot_trusted(g_root.string());
+        CHECK(snap.pinned_dirs.empty());
+        CHECK(has(snap, "big/pre-push"));
+        CHECK_FALSE(has(snap, "big/f0.ts"));
+        CHECK(hg::last_snapshot_large_hook_dir());
+        write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
+        (void)hg::snapshot_trusted(g_root.string());
+        CHECK_FALSE(hg::last_snapshot_large_hook_dir());
+    }
+
+    // ── 13. the file tools see git-config targets too ─────────────────────
+    // write/edit run in agentty's process, outside the sandbox's binds, so
+    // their gate must resolve the repo's config itself.
+    {
+        write_file(g_root / ".git" / "config",
+                   "[core]\n\thooksPath = .husky\n\tfsmonitor = tools/fsmon.sh\n");
+        write_file(g_root / ".husky" / "pre-commit", "#!/bin/sh\n");
+        write_file(g_root / "tools" / "fsmon.sh", "#!/bin/sh\n");
+        const auto refused = [](const fs::path& p) {
+            return !hg::check_with(p.string(), "write", sc::HandoffPolicy::Refuse).allowed;
+        };
+        CHECK(refused(g_root / ".husky" / "pre-commit"));
+        CHECK(refused(g_root / ".husky" / "post-merge"));   // not there yet
+        CHECK(refused(g_root / "tools" / "fsmon.sh"));
+        CHECK_FALSE(refused(g_root / "tools" / "other.sh"));
+        CHECK_FALSE(refused(g_root / "src" / "main.cpp"));
+        write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
+        CHECK_FALSE(refused(g_root / ".husky" / "pre-commit"));
+
+        // A linked worktree: its .git is a file, its config is the main
+        // repo's (commondir), and relative targets resolve in the worktree.
+        write_file(g_root / ".git" / "config", "[core]\n\thooksPath = .husky\n");
+        write_file(g_root / ".git" / "worktrees" / "wt" / "commondir", "../..\n");
+        write_file(g_root / "wt" / ".git",
+                   "gitdir: " + (g_root / ".git" / "worktrees" / "wt").string() + "\n");
+        CHECK(refused(g_root / "wt" / ".husky" / "pre-commit"));
+        CHECK_FALSE(refused(g_root / "wt" / "src" / "main.cpp"));
+        write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
+        fs::remove_all(g_root / "wt");
+        fs::remove_all(g_root / ".git" / "worktrees");
+    }
+
+    // ── 14. a git dir moved away, or a new one with a hook ────────────────
+    // The read-only binds follow a renamed parent; the moved config is a
+    // vanished entry, and a new git dir is found by the shallow scan.
+    {
+        write_file(g_root / "sub" / ".git" / "config", "[core]\n\tbare = false\n");
+        auto before = hg::snapshot_trusted(g_root.string());
+        REQUIRE(before.git_dirs.size() >= 2);
+
+        hg::clear_handoff_feed();
+        fs::rename(g_root / "sub", g_root / "sub.old");
+        CHECK(hg::review_trusted(before, "mv sub sub.old") >= 1);
+        CHECK(events_for("sub/.git") >= 1);
+
+        // A new repo with only sample hooks is ordinary; one with a live hook is not.
+        before = hg::snapshot_trusted(g_root.string());
+        write_file(g_root / "fresh" / ".git" / "hooks" / "pre-commit.sample", "#\n");
+        hg::clear_handoff_feed();
+        CHECK(hg::review_trusted(before, "git init fresh") == 0);
+        before = hg::snapshot_trusted(g_root.string());
+        fs::remove_all(g_root / "fresh");
+        (void)hg::review_trusted(before, "rm -rf fresh");
+        before = hg::snapshot_trusted(g_root.string());
+        write_file(g_root / "planted" / ".git" / "hooks" / "post-checkout", "#!/bin/sh\n");
+        hg::clear_handoff_feed();
+        CHECK(hg::review_trusted(before, "git init planted") >= 1);
+        CHECK(events_for("planted/.git") >= 1);
+        fs::remove_all(g_root / "planted");
+        fs::remove_all(g_root / "sub.old");
     }
 
     hg::clear_handoff_feed();

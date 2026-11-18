@@ -36,7 +36,8 @@ bool is_active() noexcept { return false; }
 claybin_backend::SpawnResult spawn_in_sandbox(const std::vector<std::string>&, std::string_view,
                                               int, const std::vector<std::string>&,
                                               const handoff::TrustedSnapshot*,
-                                              const std::vector<std::pair<std::string, std::string>>&) {
+                                              const std::vector<std::pair<std::string, std::string>>&,
+                                              int, int) {
     return {};
 }
 #if defined(__APPLE__)

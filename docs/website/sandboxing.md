@@ -17,6 +17,7 @@ The default preset is `balanced`. Under it, a command:
 - **can read and write your project folder**, plus a private `/tmp`.
 - **can read your toolchains and system files**: `/usr`, `/bin`, `/lib`, `~/.cargo/bin`, `~/.rustup`, `~/.nvm`, `~/.pyenv` and similar, plus your git config.
 - **sees credentials as empty files**: `~/.ssh`, `~/.aws`, `.env` in your repo, and many more (full list [below](#what-the-command-can-reach)). The file opens but reads as empty. This is on purpose: a tool that gets "permission denied" often crashes, while one that reads an empty config usually carries on.
+- **inherits only the environment variables it needs**: `PATH`, `HOME`, locale, temp dirs and toolchain variables. A token you export in your shell (`GH_TOKEN`, a registry token) doesn't reach the command. See [environment variables](#environment-variables).
 - **reaches the internet through agentty's proxy**. The proxy refuses `localhost`, your local network, and cloud metadata addresses.
 - **can't write outside your project**. Those writes are refused.
 - **can't write files your editor or shell will later run** (git hooks, `.vscode/tasks.json`, `.envrc`). See [the escape a sandbox can't see](#the-escape-a-sandbox-cant-see).
@@ -64,7 +65,7 @@ On **Windows** the pane previews through claybin's Windows compiler, so the foot
 The pane has many settings. Most people only need the first one: **posture**. A posture is a preset that fills in every other setting.
 
 | Posture | Pick it when | Files | Network | What you give up |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `permissive` | a build breaks and you suspect the sandbox | toolchain dirs readable | full, via proxy | syscall filter and resource caps (except the process cap); masks and file walls stay |
 | `balanced` | **the default**, everyday work | toolchain dirs readable | full, via proxy | the network is open, so a leaked secret could be sent out |
 | `hardened` | running an agent you haven't reviewed | minimal | TCP ports 443, 80, 22, 53 only | an unusual build might need something it can't do |
@@ -109,7 +110,7 @@ A mask always wins. Nothing else the sandbox mounts can make a masked path reada
 **Settings → Sandbox → Network → Allowed hosts** limits commands to *only* the hosts on the list.
 
 | You write | It allows | It doesn't allow |
-|---|---|---|
+| --- | --- | --- |
 | `github.com` | `github.com` | `api.github.com` |
 | `*.github.com` | `api.github.com`, `codeload.github.com` | `github.com` itself, `githubusercontent.com` |
 
@@ -146,13 +147,32 @@ The walk goes three levels deep by default (configurable). It skips `.git`, `nod
 A monorepo's `services/api/.env` is masked too, not just the one at the repo root.
 :::
 
+## Environment variables
+
+A secret in your shell's environment is one no file mask can see, so commands get a filtered copy of agentty's environment. **Settings → Sandbox → Environment variables** picks how much:
+
+| Scope | Passes | Used by |
+| --- | --- | --- |
+| `essential` | a fixed list: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TZ`, `LC_*`, `TMPDIR`, the `XDG_*_HOME` dirs, and the variables your OS needs to start a process (`PATHEXT`, `SYSTEMROOT` and friends on Windows) | `hardened`, `airgapped` |
+| `toolchain` | `essential`, plus `JAVA_HOME`, Go's variables, Xcode and Homebrew on macOS, and anything starting `CARGO_`, `RUSTUP_`, `NVM_`, `PYENV_`, `RBENV_`, `ASDF_`, `BUN_`, `DENO_`, `DOTNET_` or `SDKMAN_`. A name in those families that looks secret (`CARGO_REGISTRY_TOKEN`) is still dropped | **the default**, `balanced` |
+| `host` | everything except desktop and session sockets, and the model provider keys | `permissive` |
+
+- **Values pass as you have them.** `PATH` is never rewritten. Its folders the sandbox can't read simply miss.
+- **Custom variables** lists additional names to pass under `toolchain` and `essential`, such as `MKLROOT` or `ANDROID_HOME`. Adding to it keeps your preset's label.
+- **Changing the scope** makes the preset read `custom`. Pick `host` in Balanced if you want the agent to push over https with a token from your environment, and keep the rest of Balanced's walls.
+- The variables agentty itself sets for its tools (`TERM`, `PAGER`, `GIT_TERMINAL_PROMPT`, the proxy) reach the command under every scope.
+
+:::note
+Matching a name against a list can't catch everything. `toolchain` admits names nobody listed, by prefix. `essential` admits nothing you didn't name, which is why the strict presets use it.
+:::
+
 ## Adding paths
 
 Need a folder outside your project to be readable? In **Settings → Sandbox**, the **Also readable** row opens a list editor with path completion. Type a few characters and [[Tab]] accepts. It completes folders and files.
 
 - clear a line (or press [[Ctrl+X]]) to remove an entry
 - **Masked** hides something *inside* a folder you granted ("this whole folder, except that one file")
-- **Allowed ports** switches Network to per-port mode when you add the first one
+- **Allowed ports** appears when Network is `ports`, **Allowed hosts** when it is `full` or `ports`; under `none` neither is shown. Your lists are kept while a row is hidden.
 - **Allowed hosts** limits the network to named sites (see [above](#only-the-sites-you-name)); you can paste URLs
 
 ## Why changes need a restart
@@ -174,7 +194,7 @@ agentty refuses those writes by default and tells the model to write the content
 The files it guards:
 
 - **Editor and agent config:** `.vscode`, `.idea`, `.cursor`, `.claude`, `.agentty`, `.codex`, `.gemini`, `hooks.json`
-- **git:** `.git/config`, `.git/hooks`, `.git/info`
+- **git:** `.git/config`, `.git/hooks`, `.git/info/attributes`, and what `.git/config` points at inside your project: the `core.hooksPath` folder (`.husky`, `.githooks`), and the scripts named by `core.fsmonitor`, `core.sshCommand`, `filter.*`, `diff.*.textconv` and `credential.helper`
 - **Shell start-up:** `.bashrc`, `.zshrc`, `.profile`, `.bash_profile`, `.zprofile`, `.zshenv`, `.xprofile`, `.xinitrc`, `.envrc`, `.config/fish`, `.config/environment.d`, virtualenv `activate`
 - **Login session:** `.config/autostart`, `.config/systemd`, and window-manager config (Hyprland, Sway, i3, Plasma)
 - **Executables found on `PATH`:** `.local/bin`, `node_modules/.bin`, virtualenv interpreters
@@ -182,11 +202,13 @@ The files it guards:
 
 Where it can, the sandbox also mounts the existing ones read-only, so the write fails with `EROFS`. Where it can't (a host without user namespaces), the write is still detected and reported.
 
+git's own state (`HEAD`, `index`, `packed-refs`, the commit message) stays writable, so `commit`, `add`, `checkout`, `rebase` and `stash` work under every preset. What doesn't work is changing the config itself: `git config` and `git remote add` fail, on purpose.
+
 ## What it doesn't stop
 
 - **Sending data over a network you allowed.** If a command can read your files and the network is on, it can upload them: to any public site, or with **Allowed hosts** set, to the sites on your list (and anywhere they forward it). Blocking the network breaks `git push` and `npm install`, which is why `airgapped` and Allowed hosts are opt-in. For one headless run, `agentty run --no-network` removes the network without changing your saved setting.
 - **Tools that ignore the proxy settings.** They get *no* network, not an unfiltered one.
-- **UDP in ports mode.** With Network set to `ports`, the allowed-ports list limits TCP only. UDP and ICMP aren't filtered, so DNS-based exfiltration still works there. Under `full` the ports list is ignored, and the pane says so.
+- **UDP in ports mode.** With Network set to `ports`, the allowed-ports list limits TCP only. UDP and ICMP aren't filtered, so DNS-based exfiltration still works there. Under `full` there is no ports list; every port is open.
 - **Map, write, then make executable.** W^X refuses a mapping that is writable and executable at once. Writing a page and then making it executable still works, because JITs need it.
 - **Secrets deeper than the scan depth,** or inside a skipped folder like `node_modules`.
 - **Credential files with unusual names.** A secret in `config.local.yaml` doesn't look like a secret.
@@ -215,7 +237,7 @@ Both apply to that run only. Your saved sandbox setting is untouched.
 ## Modes
 
 | Mode | Behaviour |
-|---|---|
+| --- | --- |
 | `auto` (default) | Use a sandbox if one is available; otherwise run without and say so. |
 | `on` | Require one. Refuse to start if the machine can't provide it. |
 | `off` | No sandbox, including the write gate above. "Off" means off. |
@@ -265,7 +287,7 @@ Each platform compiles the same policy into what it has. On Linux: namespaces, L
 ## Which backend, and why
 
 | Platform | Engine | What it puts up | Fallback |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Linux | **claybin** | namespaces, Landlock, seccomp, cgroup2 | none (one Linux engine) |
 | macOS | **claybin** | seatbelt from your compiled policy, plus rlimits | `sandbox-exec`, one fixed profile |
 | Windows | **claybin** | AppContainer, restricted token, job object, mitigation policies | **none, by design** |
@@ -275,7 +297,7 @@ Each platform compiles the same policy into what it has. On Linux: namespaces, L
 **macOS.** Both engines use seatbelt. claybin calls `sandbox_init` with a profile compiled from *your* policy; `sandbox-exec` runs one fixed profile.
 
 | Capability | claybin | sandbox-exec |
-|---|---|---|
+| --- | --- | --- |
 | file read/write/exec walls | yes | yes, but fixed |
 | network through the filtering proxy | **yes** | **no** (open) |
 | your **Settings → Sandbox** choices apply | **yes** | **no** |

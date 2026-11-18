@@ -373,48 +373,33 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
                            std::to_string(landlock_abi)
                      : std::string{"this host cannot filter network by port"});
 
-    form.fields.push_back(
-        list_row(kSbPorts, std::string{i18n::t("sandbox.ports")},
-                 std::string{i18n::t("sandbox.help.ports")},
-                 cfg.allow_ports.size(), "port"));
-    // Deliberately NOT locked when Access is not `ports`.
-    //
-    // It used to be, on the reasoning that a port list means nothing under
-    // `full` or `none`. True, and it made the row unreachable: lock_row makes
-    // activate() return Nothing, so Enter did not open the editor and there
-    // was no way to fill in ports at all. The user had to know to set Access
-    // first, from a row that told them to do it but would not let them act.
-    //
-    // So the row stays live and the EDITOR fixes the mode on commit: adding
-    // ports when Access is not `ports` switches it, because adding a port is
-    // an unambiguous statement of intent. The help line says so rather than
-    // leaving it to be discovered.
-    if (cfg.net_mode == sandbox_cfg::NetMode::Full)
-        form.fields.back().help =
-            "adding a port here switches Access to `ports` \xc2\xb7 "
-            "443 https \xc2\xb7 80 http \xc2\xb7 22 git-ssh";
-    else if (cfg.net_mode == sandbox_cfg::NetMode::None)
-        form.fields.back().help = "only used when Access is `ports`";
+    // Only where they mean something: ports under `ports`, hosts under
+    // `full` and `ports`. Changing Access rebuilds the form, so a row
+    // reappears the moment its mode is picked; the lists live in the config,
+    // so hiding a row loses nothing.
+    if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
+        form.fields.push_back(
+            list_row(kSbPorts, std::string{i18n::t("sandbox.ports")},
+                     std::string{i18n::t("sandbox.help.ports")},
+                     cfg.allow_ports.size(), "port"));
 
     // Allowed hosts: the name allowlist for Access = full, enforced by the
-    // sandbox proxy. Live in every mode for the same reason Ports is: a row
-    // you cannot open is a row nobody can fill in. The help line names what
-    // the list does IN THE CURRENT MODE, since that is what the user sees.
-    form.fields.push_back(
-        list_row(kSbHosts, std::string{i18n::t("sandbox.hosts")},
-                 std::string{i18n::t("sandbox.help.hosts")},
-                 cfg.allow_hosts.size(), "host"));
-    if (cfg.allow_hosts.empty())
-        form.fields.back().value = [] {
-            form::field::Pick p;
-            p.placeholder = "any public host \xc2\xb7 Enter to restrict";
-            return p;
-        }();
-    if (cfg.net_mode == sandbox_cfg::NetMode::None)
-        form.fields.back().help = "unused while Access is none \xc2\xb7 nothing is reachable";
-    else if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
-        form.fields.back().help = "unused while Access is ports \xc2\xb7 set Access to full "
-                                  "to filter by name";
+    // sandbox proxy. Shown under ports too, so a list carried over is visible.
+    if (cfg.net_mode != sandbox_cfg::NetMode::None) {
+        form.fields.push_back(
+            list_row(kSbHosts, std::string{i18n::t("sandbox.hosts")},
+                     std::string{i18n::t("sandbox.help.hosts")},
+                     cfg.allow_hosts.size(), "host"));
+        if (cfg.allow_hosts.empty())
+            form.fields.back().value = [] {
+                form::field::Pick p;
+                p.placeholder = "any public host \xc2\xb7 Enter to restrict";
+                return p;
+            }();
+        if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
+            form.fields.back().help = "unused while Access is ports \xc2\xb7 set Access to full "
+                                      "to filter by name";
+    }
 
     // ── Syscalls ─────────────────────────────────────────────────────────
     form.fields.push_back(header("Syscalls"));
@@ -434,19 +419,17 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
         toggle(kSbWxProtect, "W^X",
                "no page may be writable and executable at the same time",
                cfg.wx_protect,
-               "on: a single writable+executable mapping is refused \xc2\xb7 "
-               "writing a page and then making it executable still works \xc2\xb7 "
-               "breaks JITs that ask for RWX (some node flags, any JVM)",
+               cfg.syscall_mode == sandbox_cfg::SyscallMode::Strict
+                   ? "on: no writable+executable mapping, and no making a written "
+                     "page executable later \xc2\xb7 breaks every JIT (node, any JVM)"
+                   : "on: a single writable+executable mapping is refused \xc2\xb7 "
+                     "writing a page and then making it executable still works \xc2\xb7 "
+                     "breaks JITs that ask for RWX (some node flags, any JVM)",
                "off: JITs work \xc2\xb7 a memory bug can map writable+executable "
                "memory directly"));
+    // Live under every filter: turning it off lifts the profile's own RWX rule
+    // too (and Strict's MDWE), so a JVM can run without dropping the filter.
     if (!claybin_live) lock_row(form, kSbWxProtect, why_locked);
-    // Every syscall profile denies RWX, so the toggle only matters with the
-    // filter off.
-    else if (cfg.syscall_mode != sandbox_cfg::SyscallMode::Off) {
-        lock_row(form, kSbWxProtect, "always on while the syscall filter is on");
-        if (auto* t = std::get_if<form::field::Toggle>(&form.fields.back().value))
-            t->on = true;
-    }
 
     // ── Resources ─────────────────────────────────────────────────────
     // All four are cgroup2 (with rlimit as a backstop for memory/procs), and
@@ -537,6 +520,23 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
         "that records it"));
     if (!claybin_live) lock_row(form, kSbFakeHost, why_locked);
 
+    // Which of the user's environment variables a command sees. A wall against
+    // the tokens people export in their shell rc, which no file mask sees.
+    form.fields.push_back(choice(
+        kSbEnvScope, "Environment variables",
+        "which of your variables a command can see",
+        {"toolchain", "essential", "host"},
+        static_cast<int>(cfg.env_scope),
+        {"basics + toolchains (CARGO_*, GOPATH) \xc2\xb7 tokens dropped",
+         "basics only \xc2\xb7 PATH, HOME, locale, temp",
+         "all of them \xc2\xb7 exported tokens included"}));
+    if (!claybin_live) lock_row(form, kSbEnvScope, why_locked);
+    form.fields.push_back(
+        list_row(kSbEnvKeep, "Custom variables",
+                 "additional variable names \xc2\xb7 MKLROOT, ANDROID_HOME",
+                 cfg.env_keep.size(), "name"));
+    if (!claybin_live) lock_row(form, kSbEnvKeep, why_locked);
+
     // How deep to hunt for credential FILES by name (.env, id_rsa, *.pem).
     // Applies to both backends, because the sweep produces a path list and
     // both know how to mask a path.
@@ -580,14 +580,12 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
             if (const auto* c = std::get_if<form::field::Choice>(&fld->value)) return c->index;
         return fallback;
     };
-    // A LOCKED row is a report, not an input. Several rows display what the
+    // A LOCKED row is a report, not an input. Some rows display what the
     // ENGINE will do rather than what the config says (Scope IPC reads "on"
-    // under seatbelt whatever the config holds; W^X reads "on" whenever the
-    // syscall filter is on). Reading those displays back wrote the engine's
-    // fact INTO the config: picking Permissive (scope_ipc=false) came back
-    // scope_ipc=true, Balanced (wx_protect=false) came back true, and both
-    // presets read as Custom. A locked row therefore keeps base's value --
-    // the user could not have changed it, so nothing changed.
+    // under seatbelt whatever the config holds). Reading such a display back
+    // wrote the engine's fact INTO the config: picking Permissive
+    // (scope_ipc=false) came back scope_ipc=true and read as Custom. A locked
+    // row therefore keeps base's value -- the user could not have changed it.
     auto toggle_of = [&](std::string_view id, bool fallback) {
         if (const auto* fld = f.find(id); fld && !fld->locked)
             if (const auto* t = std::get_if<form::field::Toggle>(&fld->value)) return t->on;
@@ -625,16 +623,23 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
         choice_of(kSbSyscalls, static_cast<int>(base.syscall_mode)));
     cfg.wx_protect = toggle_of(kSbWxProtect, base.wx_protect);
 
-    cfg.memory_mb = static_cast<std::uint64_t>(num_of(kSbMemoryMb, 0));
-    cfg.max_procs = static_cast<std::uint32_t>(num_of(kSbMaxProcs, 0));
-    cfg.cpu_percent = static_cast<std::uint32_t>(num_of(kSbCpuPercent, 0));
-    cfg.tmp_mb = static_cast<std::uint64_t>(num_of(kSbTmpMb, 512));
-    cfg.max_open_files = static_cast<std::uint32_t>(num_of(kSbOpenFiles, 0));
-    cfg.cpu_secs = static_cast<std::uint32_t>(num_of(kSbCpuSecs, 0));
-    cfg.wall_clock_secs = static_cast<std::uint32_t>(num_of(kSbWallClock, 0));
+    const auto num = [&](std::string_view id, auto base_value) {
+        return static_cast<decltype(base_value)>(
+            num_of(id, static_cast<std::int64_t>(base_value)));
+    };
+    cfg.memory_mb = num(kSbMemoryMb, base.memory_mb);
+    cfg.max_procs = num(kSbMaxProcs, base.max_procs);
+    cfg.cpu_percent = num(kSbCpuPercent, base.cpu_percent);
+    cfg.tmp_mb = num(kSbTmpMb, base.tmp_mb);
+    cfg.max_open_files = num(kSbOpenFiles, base.max_open_files);
+    cfg.cpu_secs = num(kSbCpuSecs, base.cpu_secs);
+    cfg.wall_clock_secs = num(kSbWallClock, base.wall_clock_secs);
     cfg.mask_scan_depth = static_cast<std::uint32_t>(
         num_of(kSbMaskDepth, static_cast<std::int64_t>(base.mask_scan_depth)));
     cfg.fake_hostname = toggle_of(kSbFakeHost, base.fake_hostname);
+    cfg.env_scope = static_cast<sandbox_cfg::EnvScope>(
+        choice_of(kSbEnvScope, static_cast<int>(base.env_scope)));
+    cfg.env_keep = base.env_keep;   // a list row: the editor writes it
 
     cfg.scope_ipc = toggle_of(kSbScopeIpc, base.scope_ipc);
     cfg.close_inherited_fds = toggle_of(kSbCloseFds, base.close_inherited_fds);
@@ -725,6 +730,17 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
+// A variable name: what POSIX shells accept, plus the parentheses Windows
+// uses (PROGRAMFILES(X86)). Anything else could never match a real variable.
+[[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || v.front() == '(') return false;
+    for (char c : v)
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+              || (c >= '0' && c <= '9') || c == '_' || c == '(' || c == ')'))
+            return false;
+    return true;
+}
+
 void renumber_sandbox_list(SandboxListPane& p) {
     // The LAST row is the add affordance and keeps its "+"; everything above
     // it is a real entry and gets its position. Driven off field order rather
@@ -764,6 +780,9 @@ void renumber_sandbox_list(SandboxListPane& p) {
                     hint = "saved as " + ne.value;
                 else if (ne.value.starts_with("*."))
                     hint = "any subdomain \xc2\xb7 add " + ne.value.substr(2) + " too for the site itself";
+            } else if (p.kind == SandboxListPane::ListKind::Name) {
+                if (!is_env_name(v))
+                    bad = "not a variable name \xc2\xb7 dropped on close";
             }
         }
         if (f.error != bad) f.error = std::move(bad);
@@ -787,6 +806,8 @@ form::Field list_add_row(std::string_view id, SandboxListPane::ListKind kind) {
             // a prompt that teaches the two forms, since the apex rule is the
             // one people get wrong.
             return list_entry_text(id, "+", "type a host \xc2\xb7 github.com or *.github.com");
+        case SandboxListPane::ListKind::Name:
+            return list_entry_text(id, "+", "type a variable name \xc2\xb7 MKLROOT");
         case SandboxListPane::ListKind::Path:
         default:
             return list_entry_text(id, "+", "type a path");
@@ -864,6 +885,8 @@ std::vector<std::string> read_sandbox_list(const SandboxListPane& p) {
             // one entry below.
             auto ne = tools::util::sandbox::netproxy::normalize_host_entry(v);
             if (!ne.value.empty()) out.push_back(std::move(ne.value));
+        } else if (p.kind == SandboxListPane::ListKind::Name) {
+            if (is_env_name(v)) out.push_back(std::move(v));
         } else {
             out.push_back(std::move(v));
         }
@@ -1262,8 +1285,7 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     }
 }
 
-void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts) {
+void annotate_host_risks(form::Form& f, const HostFacts& facts) {
     auto row_of = [&](std::string_view id) -> form::Field* {
         for (auto& fld : f.fields)
             if (fld.id == id) return &fld;
@@ -1274,12 +1296,6 @@ void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
         if (auto* fld = row_of(id); fld && fld->error.empty())
             fld->error = std::move(msg);
     };
-
-    // A port list under Full does nothing. The audit found [22,53,80,443]
-    // set with Access at full and read it as an allowlist; it isn't one.
-    if (cfg.net_mode == sandbox_cfg::NetMode::Full && !cfg.allow_ports.empty())
-        warn(kSbPorts, "ignored while Access is full \xc2\xb7 every port is open "
-                       "\xc2\xb7 set Access to ports to use this list");
 
     // Workspace = $HOME: the write wall is the workspace, so every dotfile is
     // writable, including login files and ~/.local/bin.
@@ -1293,6 +1309,10 @@ void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
         warn(kSbHandoff, "last check hit its 20000-entry cap \xc2\xb7 a write "
                          "deeper in the tree is not reported \xc2\xb7 use a smaller "
                          "workspace");
+    // A core.hooksPath dir too large to pin whole: only the hook names are.
+    if (facts.large_hook_dir)
+        warn(kSbHandoff, "core.hooksPath points at a large folder \xc2\xb7 only its "
+                         "hook-named files are protected");
 }
 
 #else
@@ -1314,8 +1334,7 @@ void annotate_sandbox_form(form::Form&, const Preview&,
     // fact twice.
 }
 
-void annotate_host_risks(form::Form&, const sandbox_cfg::Config&,
-                         const HostFacts&) {}
+void annotate_host_risks(form::Form&, const HostFacts&) {}
 
 #endif
 

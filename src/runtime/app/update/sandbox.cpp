@@ -127,6 +127,7 @@ namespace sb = agentty::tools::util::sandbox;
     f.running = sandbox_cfg::LinuxBackend::Claybin;
     f.workspace_is_home = sb::workspace_is_home();
     f.handoff_truncated = tools::util::handoff::last_snapshot_truncated();
+    f.large_hook_dir = tools::util::handoff::last_snapshot_large_hook_dir();
     return f;
 }
 
@@ -149,7 +150,7 @@ void reprice(pn::Sandbox& o) {
     // that is not running are a forecast and have to read as one.
     pn::annotate_sandbox_form(o.pane.form, o.pane.preview, cfg,
                               pn::engine_status(cfg, o.pane.facts));
-    pn::annotate_host_risks(o.pane.form, cfg, o.pane.facts);
+    pn::annotate_host_risks(o.pane.form, o.pane.facts);
     // And the answer to "will this actually work when I restart". Computed
     // HERE, with the preview that was just built from the same cfg, so the
     // verdict and the walls it is judging cannot disagree.
@@ -416,14 +417,21 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 title = "Masked";
                 help  = "made unreadable even inside the scope above \xc2\xb7 "
                         "credential files are masked whether listed or not";
+            } else if (e.row_id == pn::kSbEnvKeep) {
+                src = &cfg.env_keep;
+                title = "Custom variables";
+                help  = "additional variable names a command sees unless the "
+                        "environment is host \xc2\xb7 the value is passed as you have it";
             } else {
                 return Cmd::none();   // not a list row
             }
 
             pn::SandboxList ed;
             using K = pn::SandboxListPane::ListKind;
+            const bool names = e.row_id == pn::kSbEnvKeep;
             ed.pane = pn::build_sandbox_list(e.row_id, std::move(title), std::move(help), *src,
-                                             ports ? K::Port : hosts ? K::Host : K::Path);
+                                             ports ? K::Port : hosts ? K::Host
+                                             : names ? K::Name : K::Path);
             // Remember the pane we came from so Esc returns to it rather than
             // closing the overlay stack -- the same WithFrom stash every other
             // nested pane uses.
@@ -763,21 +771,14 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                 cfg.allow_ports.erase(
                     std::unique(cfg.allow_ports.begin(), cfg.allow_ports.end()),
                     cfg.allow_ports.end());
-                // Switch Access only when the list actually changed, and never
-                // loosen `none` or open the network because a list was emptied.
-                const auto before = o->pane.working.allow_ports;
-                const bool changed = cfg.allow_ports != before;
-                const bool ports_ok = o->pane.facts.claybin_available
-                                      && o->pane.facts.per_port_net;
-                if (changed && !cfg.allow_ports.empty() && ports_ok
-                    && cfg.net_mode == sandbox_cfg::NetMode::Full)
-                    cfg.net_mode = sandbox_cfg::NetMode::Ports;
             } else if (row_id == pn::kSbReadPaths) {
                 cfg.read_paths = values;
             } else if (row_id == pn::kSbWritePaths) {
                 cfg.write_paths = values;
             } else if (row_id == pn::kSbDenyPaths) {
                 cfg.deny_paths = values;
+            } else if (row_id == pn::kSbEnvKeep) {
+                cfg.env_keep = values;
             } else if (row_id == pn::kSbHosts) {
                 cfg.allow_hosts = values;   // already canonical + deduped
             }

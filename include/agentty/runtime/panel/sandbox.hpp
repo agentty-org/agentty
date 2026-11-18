@@ -88,6 +88,8 @@ inline constexpr std::string_view kSbTmpMb       = "tmp_mb";
 inline constexpr std::string_view kSbScopeIpc    = "scope_ipc";
 inline constexpr std::string_view kSbCloseFds    = "close_fds";
 inline constexpr std::string_view kSbFakeHost    = "fake_hostname";
+inline constexpr std::string_view kSbEnvScope    = "env_scope";
+inline constexpr std::string_view kSbEnvKeep     = "env_keep";
 inline constexpr std::string_view kSbMaskDepth   = "mask_scan_depth";
 // The row that defends the escape class nobody else defends. See
 // domain/sandbox_provenance.hpp for why it is its own control.
@@ -212,6 +214,10 @@ struct HostFacts {
     // The last trust-handoff snapshot hit its entry cap, so a write below
     // the cut would not be reported. Logged before; now shown on the row.
     bool handoff_truncated = false;
+
+    // The last snapshot found a core.hooksPath dir too large to pin whole, so
+    // only its hook-named files are protected.
+    bool large_hook_dir = false;
 };
 
 // ── The path list editor ────────────────────────────────────────
@@ -249,7 +255,8 @@ struct SandboxListPane {
     //   Host  a host name or *.wildcard, canonicalised by the SAME function
     //         the proxy uses (netproxy::normalize_host_entry), so what the
     //         editor accepts is exactly what is enforced
-    enum class ListKind : std::uint8_t { Path, Port, Host };
+    //   Name  an environment variable name, letters, digits and _ only
+    enum class ListKind : std::uint8_t { Path, Port, Host, Name };
     ListKind kind = ListKind::Path;
     [[nodiscard]] bool numeric() const noexcept { return kind == ListKind::Port; }
 
@@ -493,11 +500,9 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
                            const sandbox_cfg::Config& cfg, EngineStatus status);
 
 // Warnings that depend on the HOST rather than the config: the workspace is
-// $HOME (every dotfile writable), or the last handoff snapshot hit its cap.
-// Also config warnings the audit found misleading: allow_ports does nothing
-// under Full, and Ports covers TCP only. Run after annotate_sandbox_form.
-void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts);
+// $HOME (every dotfile writable), the last handoff snapshot hit its cap, or a
+// core.hooksPath points at a large folder. Run after annotate_sandbox_form.
+void annotate_host_risks(form::Form& f, const HostFacts& facts);
 
 }  // namespace agentty::ui::panel
 

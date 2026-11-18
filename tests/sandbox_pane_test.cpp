@@ -622,6 +622,70 @@ TEST_CASE("sandbox posture: permissive still masks secrets and refuses handoffs"
     CHECK(perm.handoff == sandbox_cfg::HandoffPolicy::Refuse);
 }
 
+TEST_CASE("sandbox posture: only permissive hands the host environment over") {
+    // A token exported in the user's shell is the one secret no file mask
+    // sees. Permissive is the opt-in for https push with it; nothing else is.
+    sandbox_cfg::Config base;
+    using P = sandbox_cfg::Posture;
+    using E = sandbox_cfg::EnvScope;
+    CHECK(sandbox_cfg::apply_posture(base, P::Permissive).env_scope == E::Host);
+    CHECK(sandbox_cfg::apply_posture(base, P::Balanced).env_scope   == E::Toolchain);
+    CHECK(sandbox_cfg::apply_posture(base, P::Hardened).env_scope   == E::Essential);
+    CHECK(sandbox_cfg::apply_posture(base, P::Airgapped).env_scope  == E::Essential);
+
+    // Flipping it is a different policy, so the label says so.
+    auto bal = sandbox_cfg::apply_posture(base, P::Balanced);
+    bal.env_scope = E::Host;
+    CHECK(sandbox_cfg::detect_posture(bal) == P::Custom);
+
+    // env_keep is the user's list, not a preset field: adding to it keeps the label.
+    bal.env_scope = E::Toolchain;
+    bal.env_keep = {"MKLROOT"};
+    CHECK(sandbox_cfg::detect_posture(bal) == P::Balanced);
+}
+
+TEST_CASE("sandbox env: each scope passes exactly its tier") {
+    using E = sandbox_cfg::EnvScope;
+    const std::vector<std::string> none;
+    const auto ok = [&](E s, const char* k) { return sandbox_cfg::env_allowed(s, k, none); };
+
+    // Essential: the fixed list, under every scope but Host's "everything".
+    for (auto k : {"PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "TMPDIR",
+                   "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL"}) {
+        INFO(k);
+        CHECK(ok(E::Essential, k));
+        CHECK(ok(E::Toolchain, k));
+        CHECK(ok(E::Host, k));
+    }
+    // Toolchain only: listed names and prefixes Essential does not guess at.
+    for (auto k : {"CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "JAVA_HOME"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Essential, k));
+        CHECK(ok(E::Toolchain, k));
+    }
+    // Secret inside an allowed prefix: dropped by Toolchain, passed by Host.
+    for (auto k : {"CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_X_TOKEN"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Toolchain, k));
+        CHECK(ok(E::Host, k));
+    }
+    // Names from a real session and look-alikes: no allowlist passes them.
+    // BUNKER carries its secret in the value, so only an allowlist drops it.
+    for (auto k : {"NOSTR_CLIENT_KEY", "BUNKER", "GH_TOKEN", "GITHUB_TOKEN",
+                   "GOOGLE_APPLICATION_CREDENTIALS", "NPM_TOKEN",
+                   "AWS_SECRET_ACCESS_KEY", "MKLROOT", "PATHX", "LC_", "LC_FOO"}) {
+        INFO(k);
+        CHECK_FALSE(ok(E::Essential, k));
+        CHECK_FALSE(ok(E::Toolchain, k));
+    }
+    // A name the user lists is theirs to pass, token or not, under any scope.
+    const std::vector<std::string> keep{"MKLROOT", "GH_TOKEN"};
+    for (auto s : {E::Essential, E::Toolchain}) {
+        CHECK(sandbox_cfg::env_allowed(s, "MKLROOT", keep));
+        CHECK(sandbox_cfg::env_allowed(s, "GH_TOKEN", keep));
+    }
+}
+
 TEST_CASE("sandbox posture: balanced is exactly the unconfigured default") {
     // So a user who picks Balanced explicitly gets the same boundary as one who
     // never opened the pane. If these drift, the pane's own default row is
@@ -1031,6 +1095,14 @@ TEST_CASE("sandbox list: a port list validates on readback") {
     CHECK(pn::read_sandbox_list(ed) == after);
 }
 
+TEST_CASE("sandbox list: a name list keeps variable names, drops the rest") {
+    auto ed = pn::build_sandbox_list(pn::kSbEnvKeep, "Custom variables", "h",
+                                     {"MKLROOT", "PROGRAMFILES(X86)", "1BAD", "A B", "(X)"},
+                                     pn::SandboxListPane::ListKind::Name);
+    const std::vector<std::string> want{"MKLROOT", "PROGRAMFILES(X86)"};
+    CHECK(pn::read_sandbox_list(ed) == want);
+}
+
 TEST_CASE("sandbox list: a non-port is dropped, not guessed at") {
     // Enforced on readback now that the widget cannot enforce it. Dropping
     // beats clamping: silently turning "8O80" (letter O) into 8080 would be
@@ -1421,32 +1493,39 @@ TEST_CASE("sandbox list: ^X cannot delete the add row") {
     CHECK(pn::read_sandbox_list(ed->pane) == want);
 }
 
-TEST_CASE("sandbox pane: the ports row opens even when Access is not `ports`") {
-    // It used to be LOCKED unless the mode was already `ports`, which made it
-    // unreachable: lock_row makes activate() return Nothing, so Enter did not
-    // open the editor and there was no way to fill in ports at all. The row
-    // told you to set Access first and would not let you act.
+TEST_CASE("sandbox pane: network list rows show only where Access uses them") {
+    // A row for a list the current mode ignores read as a setting that does
+    // something. Ports exist only under `ports`; hosts under `full` and
+    // `ports`; under `none` neither. The lists themselves are kept.
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
-    cfg.net_mode = sandbox_cfg::NetMode::Full;   // NOT ports
-    install(cfg);
+    cfg.allow_ports = {443};
+    cfg.allow_hosts = {"github.com"};
+    const auto rows = [&](sandbox_cfg::NetMode mode) {
+        cfg.net_mode = mode;
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        return std::pair{row_of(form, pn::kSbPorts) >= 0, row_of(form, pn::kSbHosts) >= 0};
+    };
+    CHECK(rows(sandbox_cfg::NetMode::Full) == std::pair{false, true});
+    CHECK(rows(sandbox_cfg::NetMode::None) == std::pair{false, false});
+    if (facts_for(cfg).per_port_net)
+        CHECK(rows(sandbox_cfg::NetMode::Ports) == std::pair{true, true});
 
+    // Hidden is not dropped: reading the form back keeps both lists.
+    cfg.net_mode = sandbox_cfg::NetMode::None;
     auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
-    const int p = row_of(form, pn::kSbPorts);
-    REQUIRE(p >= 0);
-    CHECK_FALSE(form.fields[static_cast<std::size_t>(p)].locked);
+    const auto back = pn::read_sandbox_form(form, cfg);
+    CHECK(back.allow_ports == cfg.allow_ports);
+    CHECK(back.allow_hosts == cfg.allow_hosts);
 }
 
-TEST_CASE("sandbox pane: adding a port switches Access to `ports`") {
-    // Adding a port is an unambiguous statement of intent, so it sets the mode
-    // rather than sitting inert under `full`. Otherwise the user fills in a
-    // port list that does nothing and nothing says why.
+TEST_CASE("sandbox pane: ports edited under `ports` are saved") {
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
-    cfg.net_mode = sandbox_cfg::NetMode::Full;
-    cfg.allow_ports.clear();
+    cfg.net_mode = sandbox_cfg::NetMode::Ports;
+    cfg.allow_ports = {443};
     install(cfg);
 
     Model m = opened();
@@ -1465,7 +1544,7 @@ TEST_CASE("sandbox pane: adding a port switches Access to `ports`") {
     const auto* o = m2.ui.panel.get<pn::Sandbox>();
     REQUIRE(o != nullptr);
     CHECK(o->pane.working.net_mode == sandbox_cfg::NetMode::Ports);
-    const std::vector<std::uint16_t> want{8080};
+    const std::vector<std::uint16_t> want{443, 8080};
     CHECK(o->pane.working.allow_ports == want);
 }
 
@@ -1579,6 +1658,54 @@ TEST_CASE("sandbox pane: the form teaches itself") {
     // And the sweep actually ran -- a loop that skipped everything would
     // report zero failures, which is the failure mode this file is about.
     CHECK(rows >= 15);
+}
+
+TEST_CASE("sandbox pane: W^X can be turned off with the filter on") {
+    // Off lifts the profile's RWX rule (and Strict's MDWE), so a JVM runs
+    // without dropping the whole filter. A locked row hid a real setting.
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    for (auto mode : {sandbox_cfg::SyscallMode::Compiler, sandbox_cfg::SyscallMode::Strict}) {
+        cfg.syscall_mode = mode;
+        cfg.wx_protect = false;
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        const int i = row_of(form, pn::kSbWxProtect);
+        REQUIRE(i >= 0);
+        if (facts_for(cfg).claybin_available)
+            CHECK_FALSE(form.fields[static_cast<std::size_t>(i)].locked);
+        CHECK_FALSE(pn::read_sandbox_form(form, cfg).wx_protect);
+    }
+}
+
+TEST_CASE("sandbox pane: a locked resource row keeps the config's value") {
+    // Locked rows are reports, so reading them back must not overwrite the
+    // config with a placeholder (0, or 512 for /tmp).
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    cfg.memory_mb = 4096;
+    cfg.max_procs = 77;
+    cfg.cpu_percent = 150;
+    cfg.tmp_mb = 2048;
+    cfg.max_open_files = 999;
+    cfg.cpu_secs = 60;
+    cfg.wall_clock_secs = 600;
+    const auto form = pn::build_sandbox_form(cfg, facts_for(cfg, /*claybin_available=*/false));
+    for (const auto id : {pn::kSbMemoryMb, pn::kSbMaxProcs, pn::kSbCpuPercent, pn::kSbTmpMb,
+                          pn::kSbOpenFiles, pn::kSbCpuSecs, pn::kSbWallClock}) {
+        const int i = row_of(form, id);
+        REQUIRE(i >= 0);
+        REQUIRE(form.fields[static_cast<std::size_t>(i)].locked);
+    }
+    const auto back = pn::read_sandbox_form(form, cfg);
+    CHECK(back.memory_mb == 4096);
+    CHECK(back.max_procs == 77);
+    CHECK(back.cpu_percent == 150);
+    CHECK(back.tmp_mb == 2048);
+    CHECK(back.max_open_files == 999);
+    CHECK(back.cpu_secs == 60);
+    CHECK(back.wall_clock_secs == 600);
 }
 
 TEST_CASE("sandbox pane: a toggle says what its CURRENT state does") {
@@ -2588,7 +2715,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     facts.workspace_is_home = true;
     facts.handoff_truncated = true;
     auto form = pn::build_sandbox_form(cfg, facts);
-    pn::annotate_host_risks(form, cfg, facts);
+    pn::annotate_host_risks(form, facts);
 
     auto err_of = [&](std::string_view id) {
         const int i = row_of(form, id);
@@ -2596,7 +2723,6 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
         return form.fields[static_cast<std::size_t>(i)].error;
     };
 #if AGENTTY_TEST_SANDBOX_BACKEND
-    CHECK(err_of(pn::kSbPorts).find("ignored") != std::string::npos);
     CHECK(err_of(pn::kSbFsScope).find("home") != std::string::npos);
     CHECK(err_of(pn::kSbHandoff).find("cap") != std::string::npos);
 #else
@@ -2607,8 +2733,8 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     cfg.net_mode = sandbox_cfg::NetMode::Ports;
     auto calm = facts_for(cfg);
     auto quiet = pn::build_sandbox_form(cfg, calm);
-    pn::annotate_host_risks(quiet, cfg, calm);
-    for (auto id : {pn::kSbPorts, pn::kSbFsScope, pn::kSbHandoff}) {
+    pn::annotate_host_risks(quiet, calm);
+    for (auto id : {pn::kSbFsScope, pn::kSbHandoff}) {
         const int i = row_of(quiet, id);
         REQUIRE(i >= 0);
         CHECK(quiet.fields[static_cast<std::size_t>(i)].error.empty());
@@ -2680,6 +2806,8 @@ TEST_CASE("sandbox render: the pane paints the ACTIVE language") {
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    // Allowed ports is only shown under `ports`, and its fallback is checked below.
+    cfg.net_mode = sandbox_cfg::NetMode::Ports;
     install(cfg);
 
     const auto paint = [&] {

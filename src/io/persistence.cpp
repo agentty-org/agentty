@@ -3165,6 +3165,7 @@ store::Settings load_settings_from_disk() {
             c.net_mode     = en("net_mode", c.net_mode, 3);
             c.syscall_mode = en("syscall_mode", c.syscall_mode, 3);
             c.handoff      = en("handoff", c.handoff, 3);
+            c.env_scope    = en("env_scope", c.env_scope, 3);
             c.wx_protect   = get("wx_protect", c.wx_protect);
             c.max_open_files  = get("max_open_files", c.max_open_files);
             c.wall_clock_secs = get("wall_clock_secs", c.wall_clock_secs);
@@ -3194,6 +3195,7 @@ store::Settings load_settings_from_disk() {
             strs("write_paths", c.write_paths);
             strs("deny_paths", c.deny_paths);
             strs("allow_hosts", c.allow_hosts);
+            strs("env_keep", c.env_keep);
             if (b.contains("allow_ports") && b["allow_ports"].is_array()) {
                 c.allow_ports.clear();
                 for (const auto& v : b["allow_ports"])
@@ -3202,6 +3204,20 @@ store::Settings load_settings_from_disk() {
                         if (p > 0 && p <= 65535)
                             c.allow_ports.push_back(static_cast<std::uint16_t>(p));
                     }
+            }
+            // A file from before env_scope existed: take the value of the
+            // preset it matches, so an upgrade neither relabels a preset as
+            // Custom nor silently changes what its commands inherit.
+            if (!b.contains("env_scope")) {
+                using P = sandbox_cfg::Posture;
+                for (P p : {P::Permissive, P::Balanced, P::Hardened, P::Airgapped}) {
+                    auto as = c;
+                    as.env_scope = sandbox_cfg::apply_posture(c, p).env_scope;
+                    if (sandbox_cfg::detect_posture(as) == p) {
+                        c.env_scope = as.env_scope;
+                        break;
+                    }
+                }
             }
         }
         if (j.contains("rag") && j["rag"].is_object()) {
@@ -3561,6 +3577,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
             {"net_mode",     static_cast<int>(c.net_mode)},
             {"syscall_mode", static_cast<int>(c.syscall_mode)},
             {"handoff",      static_cast<int>(c.handoff)},
+            {"env_scope",    static_cast<int>(c.env_scope)},
             {"wx_protect",   c.wx_protect},
             {"max_open_files",  c.max_open_files},
             {"wall_clock_secs", c.wall_clock_secs},
@@ -3581,6 +3598,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         if (!c.write_paths.empty()) sb["write_paths"] = c.write_paths;
         if (!c.deny_paths.empty())  sb["deny_paths"]  = c.deny_paths;
         if (!c.allow_hosts.empty()) sb["allow_hosts"] = c.allow_hosts;
+        if (!c.env_keep.empty())    sb["env_keep"]    = c.env_keep;
         // Always written: an absent key loads the default ports, so an empty
         // list the user chose would come back as 443/80/22/53.
         sb["allow_ports"] = c.allow_ports;
