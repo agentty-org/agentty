@@ -1092,6 +1092,50 @@ std::string summarize_call(const ToolUse& tc) {
     return s;
 }
 
+// The live feed shows ONE line per tool call. It appears as "○ <call>" when
+// the model emits the call and is resolved in place to "✓ <call>  1.2s" or
+// "✗ <call>  — why" when it finishes. It used to print a ⚙ line and then
+// a second ✓ line for the same call, so half the card's eight rows were
+// echoes. Resolves the OLDEST still-pending line for this call (two identical
+// calls in one turn resolve in order); appends a fresh line if none is pending.
+constexpr std::string_view kPendingGlyph = "\xe2\x97\x8b ";   // "○ "
+void settle_feed_line(std::string& log, const ToolUse& tc, std::string_view glyph,
+                      std::string_view tail) {
+    const std::string summary = summarize_call(tc);
+    const std::string pending = "\n  " + std::string{kPendingGlyph} + summary;
+    std::size_t at = 0;
+    while ((at = log.find(pending, at)) != std::string::npos) {
+        const std::size_t end = at + pending.size();
+        if (end == log.size() || log[end] == '\n') break;   // whole line, not a prefix
+        at = end;
+    }
+    std::string line = "\n  " + std::string{glyph} + " " + summary;
+    if (!tail.empty()) { line += "  "; line += tail; }
+    if (at == std::string::npos) log += line;
+    else log.replace(at, pending.size(), line);
+}
+
+// "1.4s" for anything worth noticing; quick calls get no badge (noise).
+std::string feed_duration(long long ms) {
+    if (ms < 500) return {};
+    if (ms < 10'000) {
+        char b[16];
+        std::snprintf(b, sizeof b, "%.1fs", static_cast<double>(ms) / 1000.0);
+        return b;
+    }
+    if (ms < 60'000) return std::to_string(ms / 1000) + "s";
+    return std::to_string(ms / 60'000) + "m " + std::to_string((ms / 1000) % 60) + "s";
+}
+
+// The first line of an error, trimmed for a feed row.
+std::string feed_reason(std::string_view err) {
+    if (err.starts_with('[')) if (auto c = err.find("] "); c != std::string_view::npos && c < 32)
+        err.remove_prefix(c + 2);
+    std::string s{err.substr(0, err.find('\n'))};
+    if (s.size() > 70) { s.resize(67); s += "..."; }
+    return "\xe2\x80\x94 " + s;
+}
+
 // What one run did, for `agentty run`. The task tool passes none.
 struct RunStats {
     std::string model;          // wire id of the last request
@@ -1594,7 +1638,8 @@ provider::StreamResult run_one_completion(Thread& thread,
                     }
                     tool_json.erase(e.id.value);
                     if (tc) {
-                        log += "\n  ⚙ ";
+                        log += "\n  ";
+                        log += kPendingGlyph;
                         log += summarize_call(*tc);
                         pump(/*force=*/true);
                     }
@@ -2152,7 +2197,7 @@ public:
                         tc.status = ToolUse::Failed{now, now,
                             "tool args failed to parse \xe2\x80\x94 re-emit the call "
                             "with complete, valid JSON arguments"};
-                        log += "\n    \xe2\x9c\x97 " + tc.name.value + ": bad args";
+                        settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 bad arguments");
                         live.emit(log);
                         // A parse failure still counts as a tool ROUND-TRIP:
                         // the model sees the error tool_result and can
@@ -2168,7 +2213,7 @@ public:
                         if (stats) { ++stats->tool_calls; ++stats->tool_errors; }
                         tc.status = ToolUse::Failed{now, now,
                             "tool '" + tc.name.value + "' is not available in this run"};
-                        log += "\n    \xe2\x9c\x97 " + tc.name.value + ": not allowed";
+                        settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 not allowed in this run");
                         live.emit(log);
                         emit_tool_event(tc.name.value, 0, false, "not allowed in this run",
                                         tc.args.dump());
@@ -2192,7 +2237,7 @@ public:
                                 : "a PreToolUse hook asked for confirmation, and nobody can "
                                   "answer in this run" + (pre.reason.empty() ? "" : ": " + pre.reason);
                             tc.status = ToolUse::Failed{now, now, why};
-                            log += "\n    \xe2\x9c\x97 " + tc.name.value + ": blocked by hook";
+                            settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 blocked by hook");
                             live.emit(log);
                             emit_tool_event(tc.name.value, 0, false, "blocked by hook", tc.args.dump());
                             if (pre.stop) hook_stopped = true;
@@ -2288,7 +2333,7 @@ public:
                         std::string capped = provider::wire::cap_tool_result(
                             res->text, kSubagentToolBudget);
                         tc.status = ToolUse::Done{now, now, std::move(capped)};
-                        log += "\n    \xe2\x9c\x93 " + summarize_call(tc);
+                        settle_feed_line(log, tc, "\xe2\x9c\x93", feed_duration(t_ms));
                         // Identical SUCCEEDING call 6× → also stuck.
                         std::string ok_key = tc.name.value + '\0'
                             + (tc.args.is_null() ? std::string{} : tc.args.dump());
@@ -2299,8 +2344,7 @@ public:
                         }
                     } else {
                         tc.status = ToolUse::Failed{now, now, res.error().render()};
-                        log += "\n    \xe2\x9c\x97 " + summarize_call(tc) + "  \xe2\x80\x94 "
-                             + res.error().render();
+                        settle_feed_line(log, tc, "\xe2\x9c\x97", feed_reason(res.error().render()));
                         // Identical failing call 3× → the loop is stuck.
                         std::string key = tc.name.value + '\0'
                             + (tc.args.is_null() ? std::string{} : tc.args.dump());

@@ -15,9 +15,14 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 - **Coder subagents start editing.** They were spending 40-77 turns reading
   and returning "no edits made"; the coder role now reads narrowly and edits
   early, and every subagent is told its turn and time budget.
-- **The Agent card shows progress:** turn N of M, tool calls and elapsed time
-  in the header while it runs. A failed run's report carries the last dozen
-  steps, not the whole log.
+- **The Agent card got a redesign.** While it runs: a budget bar and
+  `turn 7/80 · 9 tools · 1m 12s` pinned above the feed, one line per tool
+  call that turns from `○` to `✓ 14.2s` or `✗ — why` in place, and the
+  agent's current sentence last. When it settles: the report with markdown
+  cleaned up (no stray `**`, `##` or table pipes), a partial result (out of
+  turns or time) in amber with its findings instead of a red "failed", and
+  a provider failure explained in a sentence with what to do. A failed run's
+  report carries the last dozen steps, not the whole log.
 - **Live `shell` output streams again** (to the card and to ACP clients); it
   showed only the newest chunk since the background-on-timeout change.
 - **`edit` never silently overwrites someone else's change.** If the file

@@ -261,7 +261,103 @@ void emit_element(const std::string& tag, const maya::Element& root, int cols) {
     emit_canvas(canvas, pool, cols);
 }
 
-// The screen chrome around the conversation: status bar and composer, in
+// --agents: the subagent (`task`) card in the states a user actually sees,
+// with progress text in the exact shape the runner emits. The corpus has
+// only settled task calls, and feeding a settled report in as "progress"
+// shows nothing like a real in-flight run.
+void render_agents(int cols) {
+    const auto now = now_tp();
+    using std::chrono::seconds;
+    auto task = [&](std::string id, std::string type, std::string desc) {
+        ToolUse t;
+        t.id = ToolCallId{std::move(id)};
+        t.name = ToolName{"task"};
+        t.args = json{{"agent_type", type}, {"display_description", desc},
+                      {"prompt", desc + " (full prompt elided)"}};
+        return t;
+    };
+    auto running = [&](ToolUse t, int ago_s, std::string progress) {
+        ToolUse::Running r;
+        r.started_at = now - seconds{ago_s};
+        r.progress_text = std::move(progress);
+        r.last_progress_at = now;
+        t.status = std::move(r);
+        return t;
+    };
+    auto scene = [&](const std::string& tag, const std::string& user,
+                     std::vector<ToolUse> calls) {
+        Model m;
+        Message u; u.role = Role::User; u.text = user;
+        m.d.current.messages.push_back(std::move(u));
+        Message a; a.role = Role::Assistant;
+        for (auto& c : calls) a.tool_calls.push_back(std::move(c));
+        m.d.current.messages.push_back(std::move(a));
+        emit_element(tag, maya::Conversation{ui::conversation_config(m)}.build(), cols);
+    };
+
+    const std::string coder_feed =
+        "\xe2\x97\x86 coder \xc2\xb7 turn 7/80 \xc2\xb7 9 tools \xc2\xb7 1m 12s\n"
+        "  \xe2\x9c\x93 grep  minimal_splice\n"
+        "  \xe2\x9c\x93 read  third_party/mcp-cpp/src/tools/fs_edit.cpp\n"
+        "  \xe2\x9c\x93 edit  third_party/mcp-cpp/src/tools/fs_edit.cpp\n"
+        "  \xe2\x9c\x97 shell  cmake --build /tmp/mcp-build  \xe2\x80\x94 exit 1: fs_edit.cpp:88 'repl' undeclared\n"
+        "  \xe2\x9c\x93 edit  third_party/mcp-cpp/src/tools/fs_edit.cpp\n"
+        "  \xe2\x9c\x93 shell  cmake --build /tmp/mcp-build  14.2s\n"
+        "  \xe2\x97\x8b shell  ctest --test-dir /tmp/mcp-build -R edit\n"
+        "  \xe2\x96\xb8 Build is green; running the edit tests next.";
+    scene("agent \xc2\xb7 running (coder, mid-run)", "make edit splice in place",
+          {running(task("t1", "coder", "Make edit splice in place"), 72, coder_feed)});
+
+    scene("agent \xc2\xb7 running (explorer, first seconds)", "map the sandbox",
+          {running(task("t2", "explorer", "Map the sandbox spawn path"), 3,
+                   "\xe2\x97\x86 explorer \xc2\xb7 turn 1/32 \xc2\xb7 0 tools \xc2\xb7 3s\n")});
+
+    scene("agent \xc2\xb7 running (retrying)", "review the PR",
+          {running(task("t3", "reviewer", "Review PR #132 gate changes"), 95,
+                   "\xe2\x97\x86 reviewer \xc2\xb7 turn 4/32 \xc2\xb7 6 tools \xc2\xb7 1m 35s\n"
+                   "  \xe2\x9c\x93 git_diff  master...pr-132\n"
+                   "  \xe2\x9c\x93 read  src/tool/util/handoff_gate.cpp\n"
+                   "  \xe2\x86\xbb retry 1/3 in 2000ms (HTTP 529: overloaded)")});
+
+    // Parallel fan-out: three agents in one turn, at different stages.
+    {
+        ToolUse done = task("f1", "explorer", "Map the gate");
+        done.status = ToolUse::Done{now - seconds{80}, now - seconds{17},
+            "Subagent report (explorer, 14 turns):\n\n**Outcome:** the gate checks shapes first, then resolved paths.\n- `handoff_gate.cpp:127` resolves symlinks\n- `handoff_gate.cpp:741` git-config targets"};
+        scene("agent \xc2\xb7 fan-out (3 parallel)", "review PR #132",
+              {std::move(done),
+               running(task("f2", "reviewer", "Review env scope + spawn"), 80,
+                       "\xe2\x97\x86 reviewer \xc2\xb7 turn 9/32 \xc2\xb7 14 tools \xc2\xb7 1m 20s\n"
+                       "  \xe2\x9c\x93 read  src/domain/sandbox_provenance.cpp\n"
+                       "  \xe2\x97\x8b grep  env_allowed"),
+               running(task("f3", "reviewer", "Review pane + docs"), 80,
+                       "\xe2\x97\x86 reviewer \xc2\xb7 turn 12/32 \xc2\xb7 19 tools \xc2\xb7 1m 20s\n"
+                       "  \xe2\x96\xb8 Writing the findings now.")});
+    }
+
+    // Settled: clean success, budget-exhausted partial, provider failure.
+    {
+        ToolUse ok = task("s1", "coder", "Add a glob test");
+        ok.status = ToolUse::Done{now - seconds{8}, now,
+            "Subagent report (coder, 3 turns):\n\nI added `check(m(\"docs/**\", \"docs/a/b.md\"))` at "
+            "`tests/glob_path_test.cpp:35`.\n- Built `mcp_glob_path_test`: passed.\n- No other files changed."};
+        scene("agent \xc2\xb7 done", "add a glob test", {std::move(ok)});
+
+        ToolUse partial = task("s2", "explorer", "Map src/tool/util");
+        partial.status = ToolUse::Failed{now - seconds{6}, now,
+            "Subagent report (explorer, 2 turns):\n\n[subagent hit its turn budget without producing a final report \xe2\x80\x94 the summary below is incomplete]\n\n"
+            "OUTCOME: partial. I listed 12 files but read none, so purposes are inferred from names.\n"
+            "| File | Purpose |\n|---|---|\n| exec.cpp | command execution |\n| sandbox.cpp | sandbox setup |"};
+        scene("agent \xc2\xb7 partial (out of turns)", "map the util dir", {std::move(partial)});
+
+        ToolUse bad = task("s3", "reviewer", "Review the neowall diff");
+        bad.status = ToolUse::Failed{now - seconds{187}, now,
+            "Subagent report (reviewer, 9 turns):\n\n[subagent failed: HTTP 529: overloaded]\n\n"
+            "Last steps:\n  \xe2\x9c\x93 git_diff  v0.9.0..HEAD\n  \xe2\x9c\x93 read  src/render.c\n"
+            "  \xe2\x9a\xa0 stream failed 4\xc3\x97 \xe2\x80\x94 giving up: HTTP 529: overloaded"};
+        scene("agent \xc2\xb7 failed (provider)", "review neowall", {std::move(bad)});
+    }
+}
 // the states a user actually sees.
 // A real reasoning block (taken from a recorded thread), settled and live,
 // with the answer that followed it.
@@ -603,6 +699,7 @@ int main(int argc, char** argv) {
         else if (a == "--prose") { render_prose(cols); return 0; }
         else if (a == "--welcome") { render_welcome(cols); return 0; }
         else if (a == "--panels") { render_panels(cols); return 0; }
+        else if (a == "--agents") { render_agents(cols); return 0; }
         else if (a == "--viewer") {
             std::vector<std::string> w; std::string k;
             for (int j = i + 1; j < argc; ++j) {

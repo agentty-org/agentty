@@ -29,6 +29,7 @@ chrome|--chrome
 prose|--prose
 welcome|--welcome
 panels|--panels
+agents|--agents
 native|--kind typical edit grep
 '
 fail=0

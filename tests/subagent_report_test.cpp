@@ -339,6 +339,24 @@ int main() {
                                 && has(s.substr(0, s.find('\n')), "tools"));
         check(!snaps->empty() && status,
               "U: every progress snapshot leads with '◆ <type> · turn N/M · K tools · t'");
+
+        // V. One feed line per call: "○ grep …" while it runs, the SAME line
+        // turned into "✓ grep …" when it finishes -- never a second echo.
+        const std::string& last = snaps->back();
+        const auto count = [&](std::string_view needle) {
+            std::size_t n = 0, at = 0;
+            while ((at = last.find(needle, at)) != std::string::npos) { ++n; at += needle.size(); }
+            return n;
+        };
+        check(count("zzz_no_match_expected_u0") == 1 && count("zzz_no_match_expected_u1") == 1,
+              "V: each tool call is ONE feed line (no ⚙/✓ echo pair)");
+        check(last.find("\xe2\x9c\x93 grep  zzz_no_match_expected_u0") != std::string::npos,
+              "V: a finished call's line is resolved to ✓");
+        bool saw_pending = false;
+        for (const auto& s : *snaps)
+            saw_pending = saw_pending
+                || s.find("\xe2\x97\x8b grep  zzz_no_match_expected_u0") != std::string::npos;
+        check(saw_pending, "V: a call shows as ○ while it is in flight");
     }
 
     // ── B. Writes prose at the end: clean final report. ─────────────────

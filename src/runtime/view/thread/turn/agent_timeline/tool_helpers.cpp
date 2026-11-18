@@ -293,6 +293,22 @@ static std::string tool_failure_reason(const ToolUse& tc) {
     const std::string_view out = card_output(tc);
     if (out.empty()) return {};
 
+    // A subagent report names WHY in its banner: say that, not "failed".
+    if (tc.name.value == "task") {
+        if (out.find("wall-clock") != std::string_view::npos)
+            return "out of time \xc2\xb7 partial";
+        if (out.find("turn budget") != std::string_view::npos)
+            return "out of turns \xc2\xb7 partial";
+        if (auto p = out.find("[subagent failed: "); p != std::string_view::npos) {
+            std::string why{out.substr(p + 18, out.find(']', p) - p - 18)};
+            if (why.size() > 40) why = why.substr(0, 39) + "\xe2\x80\xa6";
+            return why;
+        }
+        if (out.find("[subagent stopped") != std::string_view::npos) return "stopped";
+        if (out.find("cancelled") != std::string_view::npos) return "cancelled";
+        return "reported it could not finish";
+    }
+
     // "[kind] detail" — the structured ToolError shape. Several tags can
     // stack ("[unknown] [not found] …"); skip the vague `unknown` one.
     std::string_view rest = out;
@@ -859,15 +875,10 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         }
         std::string detail = type_tag;
         if (!what.empty()) detail += "  \xc2\xb7  " + what;
-        if (tc.is_running()) {
-            // The runner's status line ("◆ coder · turn 12/80 · 18 tools ·
-            // 2m 31s") leads every progress snapshot: lift its counters into
-            // the header so they're visible however the feed scrolls.
-            const std::string_view pt = tc.progress_text();
-            const std::string_view first = pt.substr(0, pt.find('\n'));
-            if (auto at = first.find("turn "); at != std::string_view::npos)
-                detail += "  \xc2\xb7  " + std::string{first.substr(at)};
-        }
+        // No live counters here: a running card's HEADER row must stay
+        // byte-stable once it crosses into native scrollback (see
+        // agent_timeline.cpp elapsed_seconds). The turn/tools/time status is
+        // the first row of the live BODY instead (task_body.cpp).
         if (tc.is_terminal()) {
             const std::string_view out = card_output(tc);
             if (auto p = out.find("report ("); p != std::string::npos) {
