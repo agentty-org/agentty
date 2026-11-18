@@ -157,8 +157,13 @@ struct TrustedSnapshot {
     // in one is a handoff, whatever its name.
     std::vector<std::string> pinned_dirs;
 
+    // Every git dir under the root (a `.git` dir holding a config), found by
+    // the shallow scan. The sandbox anchors each; review() compares the set
+    // before and after, so a git dir moved away or newly created is reported.
+    std::vector<std::string> git_dirs;
+
     [[nodiscard]] bool empty() const noexcept {
-        return entries.empty() && roots.empty() && pinned_dirs.empty();
+        return entries.empty() && roots.empty() && pinned_dirs.empty() && git_dirs.empty();
     }
 };
 
@@ -168,6 +173,10 @@ struct TrustedSnapshot {
 
 // Did the most recent snapshot hit its entry cap? Read by the Sandbox pane.
 [[nodiscard]] bool last_snapshot_truncated() noexcept;
+
+// Did the most recent snapshot find a core.hooksPath dir too large to pin
+// whole? Read by the Sandbox pane.
+[[nodiscard]] bool last_snapshot_large_hook_dir() noexcept;
 
 // Compare after the call and record a handoff for every path that changed,
 // appeared or vanished. Returns the number recorded.

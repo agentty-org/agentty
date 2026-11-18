@@ -650,7 +650,8 @@ TEST_CASE("sandbox env: each scope passes exactly its tier") {
     const auto ok = [&](E s, const char* k) { return sandbox_cfg::env_allowed(s, k, none); };
 
     // Essential: the fixed list, under every scope but Host's "everything".
-    for (auto k : {"PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "TMPDIR"}) {
+    for (auto k : {"PATH", "HOME", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "TMPDIR",
+                   "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL"}) {
         INFO(k);
         CHECK(ok(E::Essential, k));
         CHECK(ok(E::Toolchain, k));
@@ -1092,6 +1093,14 @@ TEST_CASE("sandbox list: a port list validates on readback") {
     std::get<form::field::Text>(ed.form.fields[0].value).value.clear();
     const std::vector<std::string> after{"80"};
     CHECK(pn::read_sandbox_list(ed) == after);
+}
+
+TEST_CASE("sandbox list: a name list keeps variable names, drops the rest") {
+    auto ed = pn::build_sandbox_list(pn::kSbEnvKeep, "Custom variables", "h",
+                                     {"MKLROOT", "PROGRAMFILES(X86)", "1BAD", "A B", "(X)"},
+                                     pn::SandboxListPane::ListKind::Name);
+    const std::vector<std::string> want{"MKLROOT", "PROGRAMFILES(X86)"};
+    CHECK(pn::read_sandbox_list(ed) == want);
 }
 
 TEST_CASE("sandbox list: a non-port is dropped, not guessed at") {
@@ -2658,7 +2667,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     facts.workspace_is_home = true;
     facts.handoff_truncated = true;
     auto form = pn::build_sandbox_form(cfg, facts);
-    pn::annotate_host_risks(form, cfg, facts);
+    pn::annotate_host_risks(form, facts);
 
     auto err_of = [&](std::string_view id) {
         const int i = row_of(form, id);
@@ -2676,7 +2685,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     cfg.net_mode = sandbox_cfg::NetMode::Ports;
     auto calm = facts_for(cfg);
     auto quiet = pn::build_sandbox_form(cfg, calm);
-    pn::annotate_host_risks(quiet, cfg, calm);
+    pn::annotate_host_risks(quiet, calm);
     for (auto id : {pn::kSbFsScope, pn::kSbHandoff}) {
         const int i = row_of(quiet, id);
         REQUIRE(i >= 0);

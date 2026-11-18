@@ -40,6 +40,7 @@ RULES = {
             "src/io/shared_file.cpp",           # write_atomic / create_exclusive
             "src/tool/util/disk_files.cpp",     # the edit tool's writer (keeps symlinks, modes)
             "include/agentty/tool/util/disk_files.hpp",
+            "include/agentty/tool/util/gated_files.hpp",  # gates, then forwards to DiskFiles
             "src/config/inventory.cpp",         # `config move`: moves whole dirs, store idle
             "src/rag/adapter.cpp",              # one-time move of old index files into cache/
             "src/util/user_root.cpp",           # one-time legacy layout migration

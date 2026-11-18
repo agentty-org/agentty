@@ -214,6 +214,10 @@ struct HostFacts {
     // The last trust-handoff snapshot hit its entry cap, so a write below
     // the cut would not be reported. Logged before; now shown on the row.
     bool handoff_truncated = false;
+
+    // The last snapshot found a core.hooksPath dir too large to pin whole, so
+    // only its hook-named files are protected.
+    bool large_hook_dir = false;
 };
 
 // ── The path list editor ────────────────────────────────────────
@@ -496,11 +500,9 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
                            const sandbox_cfg::Config& cfg, EngineStatus status);
 
 // Warnings that depend on the HOST rather than the config: the workspace is
-// $HOME (every dotfile writable), or the last handoff snapshot hit its cap.
-// Also config warnings the audit found misleading: allow_ports does nothing
-// under Full, and Ports covers TCP only. Run after annotate_sandbox_form.
-void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts);
+// $HOME (every dotfile writable), the last handoff snapshot hit its cap, or a
+// core.hooksPath points at a large folder. Run after annotate_sandbox_form.
+void annotate_host_risks(form::Form& f, const HostFacts& facts);
 
 }  // namespace agentty::ui::panel
 

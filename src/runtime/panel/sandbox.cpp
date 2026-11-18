@@ -730,13 +730,13 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
-// A portable variable name: what POSIX shells accept, and a subset of what
-// Windows does. Anything else could never match a real variable.
+// A variable name: what POSIX shells accept, plus the parentheses Windows
+// uses (PROGRAMFILES(X86)). Anything else could never match a real variable.
 [[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
-    if (v.empty() || (v.front() >= '0' && v.front() <= '9')) return false;
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || v.front() == '(') return false;
     for (char c : v)
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-              || (c >= '0' && c <= '9') || c == '_'))
+              || (c >= '0' && c <= '9') || c == '_' || c == '(' || c == ')'))
             return false;
     return true;
 }
@@ -1285,8 +1285,7 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     }
 }
 
-void annotate_host_risks(form::Form& f, [[maybe_unused]] const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts) {
+void annotate_host_risks(form::Form& f, const HostFacts& facts) {
     auto row_of = [&](std::string_view id) -> form::Field* {
         for (auto& fld : f.fields)
             if (fld.id == id) return &fld;
@@ -1310,6 +1309,10 @@ void annotate_host_risks(form::Form& f, [[maybe_unused]] const sandbox_cfg::Conf
         warn(kSbHandoff, "last check hit its 20000-entry cap \xc2\xb7 a write "
                          "deeper in the tree is not reported \xc2\xb7 use a smaller "
                          "workspace");
+    // A core.hooksPath dir too large to pin whole: only the hook names are.
+    if (facts.large_hook_dir)
+        warn(kSbHandoff, "core.hooksPath points at a large folder \xc2\xb7 only its "
+                         "hook-named files are protected");
 }
 
 #else
@@ -1331,8 +1334,7 @@ void annotate_sandbox_form(form::Form&, const Preview&,
     // fact twice.
 }
 
-void annotate_host_risks(form::Form&, const sandbox_cfg::Config&,
-                         const HostFacts&) {}
+void annotate_host_risks(form::Form&, const HostFacts&) {}
 
 #endif
 

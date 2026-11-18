@@ -20,6 +20,7 @@
 #include "agentty/runtime/app/update/stream_args.hpp"  // canonify_tool_args (`cmd`→`command`)
 #include "agentty/tool/spec.hpp"       // spec catalog — effects authority
 #include "agentty/tool/util/disk_files.hpp"
+#include "agentty/tool/util/gated_files.hpp"   // every file-tool write is gated
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/util/home_dir.hpp"   // agentty workspace_root()
 
@@ -502,7 +503,7 @@ std::vector<ToolDef> build_mcp_tool_defs() {
     svc.web_search_plan = tools::web_search_plan::make_plan_source();
     svc.exec = ka.exec;
     // Every file the tools touch: mcp-cpp does no IO itself, the host does.
-    svc.files = std::make_shared<util::DiskFiles>();
+    svc.files = std::make_shared<util::GatedFiles>();
     // search / repo map fan out on maya::scope.
     svc.split = util::make_splitter();
     svc.state    = ka.state;

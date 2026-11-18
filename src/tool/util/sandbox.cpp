@@ -1,12 +1,18 @@
 #include "agentty/tool/util/sandbox.hpp"
 
 #include "agentty/tool/util/fs_helpers.hpp"
+#include "agentty/io/shared_file.hpp"   // write_atomic: the identity file
+#include "agentty/tool/util/subprocess.hpp"   // host_git_identity
 #include "agentty/util/logx.hpp"   // AGT_LOG — the sealed-policy refusal
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>   // shared_ptr — the config snapshot
 #include <optional>
 #include <string_view>
@@ -343,6 +349,45 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     return s;
 }
 
+// The host's global git identity, read once per process. Empty when the host
+// has none (identity set per repository, which the guest reads itself).
+[[nodiscard]] const std::string& host_git_identity() {
+    static const std::string identity = [] {
+        std::string out;
+        for (const char* key : {"user.name", "user.email"}) {
+            auto r = run_argv_s({"git", "config", "--global", "--includes", "--get", key},
+                                4096, std::chrono::seconds{5});
+            if (!r.started || r.timed_out || r.exit_code != 0) continue;
+            std::string v = r.output;
+            while (!v.empty() && (v.back() == '\n' || v.back() == '\r')) v.pop_back();
+            if (v.empty() || v.find_first_of("\n\"\\") != std::string::npos) continue;
+            out += std::string{"\t"} + (key[5] == 'n' ? "name" : "email") + " = \"" + v + "\"\n";
+        }
+        return out.empty() ? out : "[user]\n" + out;
+    }();
+    return identity;
+}
+
+// `<workspace>/.agentty/cache/git-identity`, holding only [user] name and
+// email, rewritten when it differs. Nullopt when the host has no global
+// identity or the file cannot be written.
+[[nodiscard]] std::optional<std::string> global_git_identity_file(const std::string& workspace) {
+    const std::string& body = host_git_identity();
+    if (body.empty() || workspace.empty()) return std::nullopt;
+    const fs::path file = fs::path{workspace} / ".agentty" / "cache" / "git-identity";
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    if (ec) return std::nullopt;
+    std::string have;
+    if (std::ifstream in{file, std::ios::binary}; in)
+        have.assign(std::istreambuf_iterator<char>{in}, {});
+    if (have != body
+        && !persistence::write_atomic(::agentty::IoAccess::grant(), file, body,
+                                      {.durability = persistence::Durability::Atomic}))
+        return std::nullopt;
+    return file.string();
+}
+
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 // The directory a trusted file under one of these is protected through, or
 // nullopt. These hold many files (and running binaries), so one read-only
@@ -460,6 +505,16 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
                 p.write_paths.push_back(std::move(a));
     }
 
+    // Minimal scope hides ~/.gitconfig, so a user whose identity is only
+    // global could not commit. Hand over the two identity values and nothing
+    // else of that file: GIT_CONFIG_GLOBAL is the global scope, so a repo's
+    // own user.name still wins, as on the host.
+    if (cfg.fs_scope == sandbox_cfg::FsScope::Minimal)
+        if (auto f = global_git_identity_file(p.workspace)) {
+            p.extra_env.emplace_back("GIT_CONFIG_GLOBAL", *f);
+            p.handoff_ro.push_back(*f);
+        }
+
 #if defined(__APPLE__)
     // darwin's per-user temp and cache dirs (/var/folders/xx/yyy/{T,C}).
     // This is where $TMPDIR points, NOT /tmp: mktemp, python's tempfile,
@@ -554,8 +609,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         if (!trusted) walked = handoff::snapshot_trusted(p.workspace);
         const auto& snap = trusted ? *trusted : walked;
         p.handoff_ro.reserve(snap.entries.size());
-        // Files under a .git/hooks or .git/info dir get one ro bind of that
-        // dir instead of one each. A checkout of many repos has thousands.
+        // Files under a .git/hooks dir get one ro bind of that dir instead of
+        // one each. A checkout of many repos has thousands.
         std::set<std::string> dirs;
         // A masked path must stay masked. The handoff walk matches .agentty
         // as a hook-config dir, so with the workspace at $HOME it found
@@ -578,6 +633,18 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
                 && dirs.insert(d).second)
                 p.handoff_ro.push_back(d);
         }
+        // Anchor each git dir in place (all postures), and each nested repo's
+        // worktree under the strict ones, where `mv repo` is rarer than the
+        // escape it closes. The workspace root is a mount already.
+        const bool strict = cfg.syscall_mode == sandbox_cfg::SyscallMode::Strict;
+        for (const auto& g : snap.git_dirs) {
+            if (under_mask(g) || fs::is_symlink(fs::symlink_status(g, plec))) continue;
+            p.handoff_anchor.push_back(g);
+            const std::string wt = fs::path{g}.parent_path().string();
+            if (strict && wt != p.workspace) p.handoff_anchor.push_back(wt);
+        }
+        // Outermost first, so an inner anchor is not covered by an outer one.
+        std::ranges::sort(p.handoff_anchor);
         for (const auto& e : snap.entries) {
             if (!e.existed) continue;
             if (under_mask(e.path)) continue;
@@ -588,7 +655,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             const fs::path parent = fs::path{e.path}.parent_path();
             if (dirs.contains(parent.string())) continue;
             const auto pname = parent.filename();
-            if ((pname == "hooks" || pname == "info")
+            if (pname == "hooks"
                 && parent.parent_path().filename() == ".git"
                 && !fs::is_symlink(fs::symlink_status(parent, lec))) {
                 if (dirs.insert(parent.string()).second && !under_mask(parent.string()))

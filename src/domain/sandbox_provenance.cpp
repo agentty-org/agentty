@@ -421,6 +421,9 @@ constexpr std::string_view kEnvEssential[] = {
     "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY",
     "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE",
     "LC_MEASUREMENT", "LC_IDENTIFICATION",
+    // Who a commit is from. Identity, not a secret, and git ranks these above
+    // every config file, so a user who exports them means it.
+    "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
 #if defined(__APPLE__)
     // TMPDIR above points at the /var/folders dir the sandbox grants.
     "__CF_USER_TEXT_ENCODING",
