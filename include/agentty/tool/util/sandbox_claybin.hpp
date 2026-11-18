@@ -37,6 +37,12 @@ namespace agentty::tools::util::sandbox::claybin_backend {
                                  std::span<const std::string> keep,
                                  std::string_view value = {}) noexcept;
 
+#if !defined(__APPLE__)
+// clay::probe_host() calls made for spawns (each forks probe children).
+// A work budget for tests: back-to-back spawns must share one probe.
+[[nodiscard]] std::uint64_t host_probes_for_test() noexcept;
+#endif
+
 // What to build. Populated from the SHARED read-set constants in sandbox.cpp
 // rather than restated here -- see the note at the top of sandbox_claybin.cpp
 // about a backend that restated them and granted read on `/`.

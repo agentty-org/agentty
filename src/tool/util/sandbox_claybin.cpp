@@ -671,6 +671,10 @@ const ::clay::HostCapabilities& host() {
 std::uint32_t landlock_abi() { return host().landlock_abi; }
 
 namespace {
+maya::snapshot<std::uint64_t>& host_probes() {
+    static maya::snapshot<std::uint64_t> n;
+    return n;
+}
 // probe_host(), at most once per kHostReprobe. Lock-free read side.
 ::clay::HostCapabilities recent_host() {
     constexpr auto kHostReprobe = std::chrono::seconds{5};
@@ -682,12 +686,14 @@ namespace {
     const auto now = std::chrono::steady_clock::now();
     if (auto cur = cache.load(); cur->at.time_since_epoch().count() != 0 && now - cur->at < kHostReprobe)
         return cur->caps;
+    (void)host_probes().update([](const std::uint64_t& n) { return n + 1; });
     Probed next{now, ::clay::probe_host()};
     auto caps = next.caps;
     cache.store(std::move(next));
     return caps;
 }
 }  // namespace
+std::uint64_t host_probes_for_test() noexcept { return *host_probes().load(); }
 #endif
 
 #if defined(__APPLE__)

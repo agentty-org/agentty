@@ -180,6 +180,11 @@ struct TrustedSnapshot {
 // Did the most recent snapshot hit its entry cap? Read by the Sandbox pane.
 [[nodiscard]] bool last_snapshot_truncated() noexcept;
 
+// Directories snapshot_trusted had to re-read rather than take from its
+// mtime-keyed cache, process-wide. A work budget for tests: snapshotting a
+// tree nothing changed in must add 0.
+[[nodiscard]] std::uint64_t listings_built_for_test() noexcept;
+
 // Did the most recent snapshot find a core.hooksPath dir too large to pin
 // whole? Read by the Sandbox pane.
 [[nodiscard]] bool last_snapshot_large_hook_dir() noexcept;

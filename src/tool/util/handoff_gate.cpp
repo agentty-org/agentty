@@ -385,8 +385,15 @@ maya::snapshot<ListingCache>& listing_cache() {
 struct ListingWalk {
     maya::shared<ListingCache> seen = listing_cache().load();
     ListingCache               fresh;
+    std::uint64_t              built = 0;   // directories actually re-read
     ~ListingWalk();
 };
+// Directories the handoff walk had to re-read (cache miss), across the
+// process. A work budget: a snapshot of an unchanged tree adds 0.
+maya::snapshot<std::uint64_t>& listings_built() {
+    static maya::snapshot<std::uint64_t> n;
+    return n;
+}
 constexpr std::size_t kMaxCachedDirs = 200000;
 // A dir changed this recently may change again within the same mtime tick,
 // so its listing isn't cached (git's "racy" rule).
@@ -439,6 +446,7 @@ ListingPtr list_dir(ListingWalk& walk, const fs::path& dir) {
     if (hit && (*hit)->mtime == mtime) return hit;
 
     Listing built;
+    ++walk.built;
     Listing* l = &built;
     l->mtime = mtime;
     fs::directory_iterator it{dir, fs::directory_options::skip_permission_denied, ec};
@@ -476,6 +484,9 @@ ListingPtr list_dir(ListingWalk& walk, const fs::path& dir) {
 // Publish what this walk built. A destructor so every return path of
 // snapshot_trusted() keeps what it learned.
 ListingWalk::~ListingWalk() {
+    if (built > 0)
+        (void)listings_built().update(
+            [](const std::uint64_t& n, std::uint64_t add) { return n + add; }, built);
     if (fresh.empty()) return;
     (void)listing_cache().update(
         [](const ListingCache& old, const ListingCache& add) {
@@ -1112,6 +1123,8 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
 }
 
 bool last_snapshot_truncated() noexcept { return *last_truncated().load(); }
+
+std::uint64_t listings_built_for_test() noexcept { return *listings_built().load(); }
 
 bool last_snapshot_large_hook_dir() noexcept { return *last_large_hook_dir().load(); }
 

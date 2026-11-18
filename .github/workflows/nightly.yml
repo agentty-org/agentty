@@ -264,6 +264,16 @@ jobs:
           cmake --build build -j"$(nproc)" --target agentty_standalone_tests
           BENCH_ASSERT=1 ./build/agentty_standalone_tests long_session_bench
 
+      - name: Tool latency gate
+        # The agent's own tools, timed through `agentty mcp-serve` (dispatcher,
+        # sandbox, handoff gate: the real path). Ceilings are ~5-10x today's
+        # medians, so this trips on a lost cache or an algorithm going
+        # quadratic -- the kind of regression that took edit from 0.4 ms to
+        # 38 ms without any test noticing -- and not on runner jitter. The
+        # per-spawn WORK (walks, re-reads, probes) is pinned exactly by
+        # spawn_work_budget_test in the gating suite above.
+        run: python3 scripts/tool_latency.py ./build/agentty 30 --assert
+
   # macOS. Not a courtesy leg: a Mac is a first-class sandbox platform
   # (seatbelt via claybin), and with no mac job every one of these shipped
   # silently -- tool commands running UNSANDBOXED, a hang on exit

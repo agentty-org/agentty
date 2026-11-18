@@ -588,6 +588,10 @@ struct Config {
 [[nodiscard]] std::vector<std::string> mask_paths(
     const Config& cfg, std::string_view workspace, std::string_view home);
 
+// Times mask_paths walked the workspace instead of answering from its change
+// watch. A work budget for tests: a spawn with nothing changed must add 0.
+[[nodiscard]] std::uint64_t mask_tree_walks_for_test() noexcept;
+
 // A path the user typed, made absolute: `~` and `~/x` expand to home,
 // relative paths resolve against the workspace, a trailing `/` is dropped.
 // Empty when it can't be resolved (e.g. `~` with no home).

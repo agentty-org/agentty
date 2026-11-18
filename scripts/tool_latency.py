@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
 """Time agentty's native tools through `agentty mcp-serve` (the real path:
-dispatcher, sandbox, gate). Usage: tool_latency.py [AGENTTY_BIN] [N]"""
+dispatcher, sandbox, gate). Usage: tool_latency.py [AGENTTY_BIN] [N] [--assert]
+
+--assert fails (exit 1) when a tool's median blows its ceiling. Ceilings are
+~5-10x today's numbers on a 12-core box: they catch an algorithm or a cache
+going missing (an O(n*m) diff, a per-spawn walk or fork coming back), not
+runner jitter. Tighten them when a tool gets faster for good."""
 import json, subprocess, sys, time, statistics, os
 
-BIN = sys.argv[1] if len(sys.argv) > 1 else "./build/agentty"
-N = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+ASSERT = "--assert" in sys.argv
+argv = [a for a in sys.argv[1:] if a != "--assert"]
+BIN = argv[0] if len(argv) > 0 else "./build/agentty"
+N = int(argv[1]) if len(argv) > 1 else 30
 ROOT = os.getcwd()
+# p50 ceilings in ms (today, release, 12 cores: shell 12, edit 0.4, grep 20).
+CEILING = {
+    "shell: true": 120, "shell: ls": 120, "shell: git status": 250,
+    "read: 250-line window": 10, "read: whole small file": 10,
+    "grep: literal, tree": 200, "grep: regex, glob": 200, "glob: *.hpp": 40,
+    "list_dir": 10, "outline": 40, "edit: 1 line, 2k-line file": 10,
+    "write: small": 10,
+}
+failed = []
 
 p = subprocess.Popen([BIN, "mcp-serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL, text=True, bufsize=1)
@@ -63,8 +79,14 @@ for label, tool, args in cases:
         if i == 0 and (r.get("error") or r.get("result", {}).get("isError")):
             print(f"  {label}: ERROR {json.dumps(r)[:200]}")
     ts.sort()
-    print(f"{label:26s} {statistics.median(ts):8.1f} {ts[int(.9*len(ts))-1]:8.1f} {ts[0]:7.1f}")
+    p50 = statistics.median(ts)
+    print(f"{label:26s} {p50:8.1f} {ts[int(.9*len(ts))-1]:8.1f} {ts[0]:7.1f}")
+    if ASSERT and label in CEILING and p50 > CEILING[label]:
+        failed.append(f"{label}: p50 {p50:.1f} ms > ceiling {CEILING[label]} ms")
 p.terminate()
 for f in (EDIT, os.path.join(ROOT, ".agentty_bench_w.txt")):
     try: os.remove(f)
     except OSError: pass
+if failed:
+    print("\nLATENCY REGRESSION:\n  " + "\n  ".join(failed))
+    sys.exit(1)

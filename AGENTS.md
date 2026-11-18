@@ -32,3 +32,32 @@
   targets, e.g. `mcp_connection_race_test`.
 
 Details: [docs/website/building.md](docs/website/building.md).
+
+## Tool performance
+
+shell, edit, read, grep and write are ~92% of all tool calls, and every one
+runs on the agent's critical path. The rules below come from bugs that made
+edit 20x and shell 2x slower than they had to be, with every test green.
+
+- **Measure, don't guess.** `python3 scripts/tool_latency.py <bin>` times the
+  real tools through `agentty mcp-serve`; profile with `perf record
+  --call-graph dwarf` wrapping that process, on a RelWithDebInfo build (debug
+  numbers mislead). `third_party/mcp-cpp/tests/edit_stress --bench` times
+  edit on 1 MiB files.
+- **Cost must scale with the change, not the file or the tree.** Diffs window
+  to the changed lines (`myers::window`); edits splice in place; nothing
+  copies or re-splits a whole buffer per edit.
+- **Per-command work must be cached and change-driven.** Anything a spawn
+  needs about the workspace (handoff snapshot, secret mask, host caps) is
+  answered from a cache invalidated by mtime/inotify, never re-walked. Keep
+  caches exact: a cache that can go stale is a sandbox hole.
+- **Use the libc primitives.** `memchr`/`memmem`/`memcmp`, readdir's `d_type`
+  (`directory_entry::is_directory()`, not `symlink_status()`), one `lstat`
+  per path, `string::find` is NOT fast for code (it stalls on the needle's
+  first byte; use `mcp::tools::util::find_bytes`).
+- **No O(n^2) where n can be big:** no sort-per-insert, no LCS tables, no
+  linear scans inside per-line or per-entry loops.
+- **Guarded by:** `spawn_work_budget_test` (counts walks/re-reads/probes per
+  spawn: an unchanged tree must cost 0), `edit_stress` (speed budgets), and
+  the nightly `tool_latency.py --assert` ceilings. If you make a tool
+  faster for good, tighten its ceiling.

@@ -401,6 +401,16 @@ SweepWatchSlot& sweep_watch_slot() {
     static auto* s = new SweepWatchSlot;   // leaked: outlives every spawner
     return *s;
 }
+#endif
+
+// How many times mask_paths had to walk the workspace (dir_stamp + maybe a
+// sweep) instead of answering from the watch. A spawn with nothing changed
+// must not walk; spawn_work_budget_test holds that line.
+maya::snapshot<std::uint64_t>& mask_tree_walks() {
+    static maya::snapshot<std::uint64_t> n;
+    return n;
+}
+#if defined(__linux__)
 
 // Re-arm if no one else is; 0 when another spawn holds the lane.
 std::uint64_t try_rearm(const std::filesystem::path& root, int depth) {
@@ -416,6 +426,8 @@ std::uint64_t try_rearm(const std::filesystem::path& root, int depth) {
 #endif
 
 }  // namespace
+
+std::uint64_t mask_tree_walks_for_test() noexcept { return *mask_tree_walks().load(); }
 
 std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspace,
                                    std::string_view home) {
@@ -491,6 +503,7 @@ std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspac
         }
 #endif
         if (!done) {
+            mask_tree_walks().update([](const std::uint64_t& n) { return n + 1; });
             // Arm FIRST, so whatever changes while we walk is already queued.
             std::uint64_t gen = 0;
 #if defined(__linux__)
