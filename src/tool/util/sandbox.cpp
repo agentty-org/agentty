@@ -668,7 +668,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     if (cfg.handoff != sandbox_cfg::HandoffPolicy::Allow && !p.workspace.empty()) {
         // The dispatcher already walked the workspace for this call (to watch
         // it); reuse that instead of walking again, when it walked this root.
-        if (trusted && (trusted->roots.empty() || trusted->roots.front() != p.workspace))
+        if (trusted && fs::path{trusted->root}.lexically_normal() != fs::path{p.workspace}.lexically_normal()
+            && fs::path{trusted->root + "/"}.lexically_normal() != fs::path{p.workspace + "/"}.lexically_normal())
             trusted = nullptr;
         handoff::TrustedSnapshot walked;
         if (!trusted) walked = handoff::snapshot_trusted(p.workspace);
@@ -722,9 +723,15 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             const fs::path parent = fs::path{e.path}.parent_path();
             if (dirs.contains(parent.string())) continue;
             const auto pname = parent.filename();
-            if (pname == "hooks"
-                && parent.parent_path().filename() == ".git"
-                && !fs::is_symlink(fs::symlink_status(parent, lec))) {
+            // Any git dir's hooks/: the main .git, a submodule's
+            // .git/modules/<name> (one checkout with 7 submodules was paying
+            // 98 per-file binds per command), or a worktree's commondir.
+            const fs::path gd = parent.parent_path();
+            const bool git_hooks = pname == "hooks"
+                && (gd.filename() == ".git"
+                    || gd.parent_path().filename() == "modules"
+                    || fs::exists(gd / "HEAD", lec));
+            if (git_hooks && !fs::is_symlink(fs::symlink_status(parent, lec))) {
                 if (dirs.insert(parent.string()).second && !under_mask(parent.string()))
                     p.handoff_ro.push_back(parent.string());
                 continue;

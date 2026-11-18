@@ -30,6 +30,9 @@
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <sys/stat.h>
+#  if defined(__linux__)
+#    include <sys/vfs.h>   // statfs: rename_orders_data
+#  endif
 #endif
 
 namespace agentty::tools::util {
@@ -39,6 +42,36 @@ using ::mcp::tools::FileStat;
 using ::mcp::tools::WalkStep;
 
 namespace {
+#if defined(__linux__)
+// Does a rename that REPLACES a file on this filesystem commit only after
+// the new file's data is on disk? btrfs always; ext4 under its default
+// auto_da_alloc. Anything else (xfs, f2fs, nfs, tmpfs, overlay...) answers
+// no and keeps the fdatasync.
+[[nodiscard]] bool rename_orders_data(const fs::path& dir) {
+    struct ::statfs sf{};
+    if (::statfs(dir.empty() ? "." : dir.c_str(), &sf) != 0) return false;
+    constexpr unsigned long kBtrfs = 0x9123683E, kExt4 = 0xEF53;
+    const auto t = static_cast<unsigned long>(sf.f_type);
+    if (t == kBtrfs) return true;
+    if (t != kExt4) return false;
+    // ext4 with noauto_da_alloc opts out of the rename flush. Read once per
+    // process: mount options do not change under a running edit loop often
+    // enough to pay for parsing /proc/self/mounts on every write.
+    static const bool noauto = [] {
+        std::ifstream m("/proc/self/mounts");
+        std::string line;
+        while (std::getline(m, line))
+            if (line.find(" ext4 ") != std::string::npos
+                && line.find("noauto_da_alloc") != std::string::npos)
+                return true;
+        return false;
+    }();
+    return !noauto;
+}
+#else
+[[nodiscard]] bool rename_orders_data(const fs::path&) { return false; }
+#endif
+
 // Translate the most common filesystem errno values to a sentence the
 // model can act on. Raw `strerror` reads as "Permission denied" /
 // "No such file or directory" — fine for humans, but the LLM responds
@@ -273,7 +306,14 @@ std::string write_file(const fs::path& p, std::string_view content) {
 #if defined(__APPLE__)
     (void)::fsync(fd);
 #else
-    (void)::fdatasync(fd);
+    // btrfs and ext4 (data=ordered, auto_da_alloc: the default) flush a
+    // file's data before a rename that REPLACES an existing file commits, so
+    // a crash leaves the old or the new content, never a torn or empty file
+    // -- the one guarantee an edit needs. fdatasync on top of that bought
+    // nothing and was ~4 ms, most of an edit. A NEW file (no rename-replace)
+    // and every other filesystem keep it.
+    if (!(had_mode && rename_orders_data(real.parent_path())))
+        (void)::fdatasync(fd);
 #endif
     ::close(fd);
 #endif
@@ -297,8 +337,11 @@ std::string write_file(const fs::path& p, std::string_view content) {
         cleanup_tmp();
         return err;
     }
-    // fsync parent dir so the rename itself survives power loss.
-    if (!parent.empty()) {
+    // fsync parent dir so the rename itself survives power loss -- for a NEW
+    // file only. Replacing one that exists, a lost rename leaves the old
+    // content in place (consistent, merely one edit stale), which is not
+    // worth ~3 ms on every edit; a new file that silently vanishes is.
+    if (!parent.empty() && !had_mode) {
         int dfd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (dfd >= 0) { (void)::fsync(dfd); ::close(dfd); }
     }
@@ -378,11 +421,35 @@ std::optional<std::string> DiskFiles::read(const fs::path& p) const {
 }
 
 std::optional<std::string> DiskFiles::read_prefix(const fs::path& p, std::size_t n) const {
-    std::ifstream ifs(p, std::ios::binary);
+    std::ifstream ifs(p, std::ios::binary | std::ios::ate);
     if (!ifs) return std::nullopt;
-    std::string out(n, '\0');
-    ifs.read(out.data(), static_cast<std::streamsize>(n));
-    out.resize(static_cast<std::size_t>(ifs.gcount()));
+    // Size the buffer to what is THERE, not to the cap: edit asks for
+    // kMaxEditBytes+1 as a bound, and zero-filling megabytes to read a 60 KB
+    // file was a page-fault storm on every edit. The size is a hint only:
+    // reading stops at n either way, and a file that grew since the seek is
+    // still read up to n below.
+    const auto end = ifs.tellg();
+    ifs.seekg(0);
+    std::size_t want = n;
+    if (end > 0) want = std::min<std::size_t>(n, static_cast<std::size_t>(end) + 1);
+    std::string out;
+    out.resize(want);
+    ifs.read(out.data(), static_cast<std::streamsize>(want));
+    std::size_t got = static_cast<std::size_t>(ifs.gcount());
+    // Grew past the hint (and the cap allows more): read the rest.
+    if (got == want && want < n) {
+        ifs.clear();
+        char buf[65536];
+        while (got < n && ifs.read(buf, static_cast<std::streamsize>(std::min(sizeof buf, n - got)))
+                              .gcount() > 0) {
+            const auto k = static_cast<std::size_t>(ifs.gcount());
+            out.resize(got);
+            out.append(buf, k);
+            got += k;
+            if (ifs.eof()) break;
+        }
+    }
+    out.resize(got);
     return out;
 }
 

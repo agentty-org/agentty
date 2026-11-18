@@ -767,14 +767,42 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             // kick_pending_tools, which either continues the turn
             // (post-tool sub-turn) or drops cleanly to Idle.
             //
-            // kToolWedge is kept just ABOVE bash's own max self-timeout
-            // (300s, the `timeout` arg ceiling in mcp-cpp shell.cpp) so a
-            // legitimately long user-set bash command finishes on its own
+            // kToolWedge is the FLOOR, for calls that declare no deadline. A
+            // call that declares one (shell `timeout` up to 600 s, test
+            // `timeout_seconds`, process_poll `wait_ms`) gets that plus slack
+            // (wedge_cap_for), so it finishes or backgrounds itself on its own
             // terms before this last-resort net ever trips. The real fix for
             // a SPINNING weak-model loop is the doom-loop breaker in
             // kick_pending_tools, not this hung-syscall net.
             constexpr auto kNoRunningGrace = std::chrono::seconds(30);
             constexpr auto kToolWedge      = std::chrono::seconds(330);
+            // A call that ASKED for longer gets it, plus slack for the tool's
+            // own wind-down (shell hands a still-running command to a
+            // background session at its deadline and returns). A flat 330 s
+            // killed `shell timeout:600` and `test timeout_seconds:1800` mid
+            // run and threw their output away -- the net is for a hung
+            // syscall, not for a command doing exactly what it was told.
+            const auto wedge_cap_for = [](const ToolUse& tc, std::chrono::seconds floor) {
+                std::int64_t secs = 0;
+                const auto& a = tc.args;
+                if (a.is_object()) {
+                    const auto num = [&](const char* k) -> std::int64_t {
+                        auto it = a.find(k);
+                        if (it == a.end()) return 0;
+                        if (it->is_number()) return static_cast<std::int64_t>(it->get<double>());
+                        if (it->is_string()) {
+                            try { return std::stoll(it->get<std::string>()); } catch (...) {}
+                        }
+                        return 0;
+                    };
+                    secs = std::max({num("timeout"), num("timeout_seconds"),
+                                     (num("timeout_ms") + 999) / 1000,
+                                     (num("wait_ms") + 999) / 1000});
+                }
+                // Clamp: a model asking for a day must not disable the net.
+                secs = std::clamp<std::int64_t>(secs, 0, 3600);
+                return std::max(floor, std::chrono::seconds{secs + 30});
+            };
             if (m.s.is_executing_tool()
                 && !m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
@@ -807,7 +835,7 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
                     if (const auto* r = std::get_if<ToolUse::Running>(&tc.status))
                         liveness = r->liveness_origin();
                     if (started.time_since_epoch().count() != 0
-                        && now - liveness >= kToolWedge) {
+                        && now - liveness >= wedge_cap_for(tc, kToolWedge)) {
                         // Report the time SPENT EXECUTING. Reporting card age
                         // here is how the old message came to claim a tool
                         // "ran 400s" when it had been waiting on a human for

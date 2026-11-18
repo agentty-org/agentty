@@ -212,4 +212,46 @@ TEST_CASE("tool wedge liveness") {
               "F: silent for longer than the cap SINCE EXECUTION began is "
               "still wedged");
     }
+
+    // ── G. A call that DECLARED a longer deadline gets it. ───────────────
+    // `shell timeout:600` running a silent build (output piped to grep) was
+    // killed at 330s and its output discarded, though shell itself would
+    // have backgrounded it cleanly at 600s.
+    const auto with_args = [](Model m, nlohmann::json args) {
+        for (auto& msg : m.d.current.messages)
+            for (auto& tc : msg.tool_calls) { tc.name = ToolName{"shell"}; tc.args = args; }
+        return m;
+    };
+    {
+        Model m = with_args(model_with_running_tool(seconds{500}, seconds{-1}),
+                            {{"command", "make 2>&1 | grep error"}, {"timeout", 600}});
+        m = tick(std::move(m));
+        check(tool_running(m), "G: timeout:600 is not wedged at 500s");
+    }
+    {
+        Model m = with_args(model_with_running_tool(seconds{700}, seconds{-1}),
+                            {{"command", "make"}, {"timeout", 600}});
+        m = tick(std::move(m));
+        check(tool_failed(m), "G: ...but past its own deadline plus slack it is");
+    }
+    {
+        Model m = with_args(model_with_running_tool(seconds{900}, seconds{-1}),
+                            {{"timeout_seconds", 1200}});
+        m = tick(std::move(m));
+        check(tool_running(m), "G: test timeout_seconds:1200 is honoured");
+    }
+    {
+        // A huge request cannot disarm the net: clamped to an hour.
+        Model m = with_args(model_with_running_tool(seconds{4000}, seconds{-1}),
+                            {{"timeout", "999999"}});
+        m = tick(std::move(m));
+        check(tool_failed(m), "G: an absurd timeout is clamped, not obeyed");
+    }
+    {
+        // A small timeout never LOWERS the floor.
+        Model m = with_args(model_with_running_tool(seconds{300}, seconds{-1}),
+                            {{"timeout", 5}});
+        m = tick(std::move(m));
+        check(tool_running(m), "G: a short timeout keeps the 330s floor");
+    }
 }

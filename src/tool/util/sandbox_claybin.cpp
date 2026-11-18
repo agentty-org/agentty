@@ -25,6 +25,8 @@
 #include "agentty/tool/util/sandbox_broker.hpp"
 #include "agentty/util/logx.hpp"   // AGT_LOG — the broker audit trail
 
+#include <maya/runtime.hpp>   // maya::snapshot: the recent host probe
+
 // POSIX, not Linux-only. claybin's plan compiler is portable, and as of the
 // macOS and Windows backends there are now three platforms that can APPLY a
 // policy:
@@ -41,6 +43,7 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -293,12 +296,21 @@ namespace {
     // merged-/usr aliases, as the host has them (Posture::system_links)
     for (const auto& [link, target] : p.system_links)
         d = std::move(d).symlink(target, link);
-    for (const auto& f : p.etc_readable) d = std::move(d).bind_try(f, f);
-    for (const auto& h : p.home_tool_dirs) d = std::move(d).bind_try(h, h);
+    // Optional binds of host paths that don't exist are dropped HERE, not
+    // left to claybin: each absent one failed its bind, then fell through to
+    // a /proc/self/mountinfo walk for the remount -- 19 walks per command on
+    // a stock desktop (no ~/.nvm, /etc/gitconfig, ...). One lstat each in
+    // the parent is far cheaper and the result is identical.
+    const auto present = [](const std::string& s) {
+        std::error_code ec;
+        return std::filesystem::exists(std::filesystem::symlink_status(s, ec));
+    };
+    for (const auto& f : p.etc_readable) if (present(f)) d = std::move(d).bind_try(f, f);
+    for (const auto& h : p.home_tool_dirs) if (present(h)) d = std::move(d).bind_try(h, h);
     // Extra grants from the pane. read_paths are read-only; write_paths are
     // separate because granting write is a different decision from granting
     // read, and one combined list would make the dangerous one the easy one.
-    for (const auto& r : p.read_paths) d = std::move(d).bind_try(r, r);
+    for (const auto& r : p.read_paths) if (present(r)) d = std::move(d).bind_try(r, r);
     // write_paths are bound after the /tmp tmpfs below, like the workspace:
     // one under /tmp would otherwise be covered by it.
 
@@ -657,6 +669,25 @@ const ::clay::HostCapabilities& host() {
     return h;
 }
 std::uint32_t landlock_abi() { return host().landlock_abi; }
+
+namespace {
+// probe_host(), at most once per kHostReprobe. Lock-free read side.
+::clay::HostCapabilities recent_host() {
+    constexpr auto kHostReprobe = std::chrono::seconds{5};
+    struct Probed {
+        std::chrono::steady_clock::time_point at{};
+        ::clay::HostCapabilities caps{};
+    };
+    static maya::snapshot<Probed> cache;
+    const auto now = std::chrono::steady_clock::now();
+    if (auto cur = cache.load(); cur->at.time_since_epoch().count() != 0 && now - cur->at < kHostReprobe)
+        return cur->caps;
+    Probed next{now, ::clay::probe_host()};
+    auto caps = next.caps;
+    cache.store(std::move(next));
+    return caps;
+}
+}  // namespace
 #endif
 
 #if defined(__APPLE__)
@@ -1084,8 +1115,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
     }
 
     auto sealed = build_policy(p);
-    // Live probe at spawn: what this command gets must match the kernel now.
-    auto compiled = compile(sealed, probe_host());
+    // A recent probe, not a fresh one per command: probe_host() forks six
+    // throwaway children (userns, mount/net ns, user-notif, cgroup) and was
+    // ~15% of every sandboxed `true`. Re-probed every few seconds, so a
+    // kernel or cgroup change still reaches the next command promptly; a
+    // spawn that then fails on a stale yes is reported, not silent.
+    auto compiled = compile(sealed, recent_host());
     if (!compiled) {
         out.start_error = "claybin: compile failed: " + std::string{compiled.error().mechanism};
         return out;

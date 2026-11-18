@@ -4,6 +4,36 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A long `shell` or `test` call is no longer killed at 330 s.** The
+  no-progress watchdog now waits for the timeout the call asked for (plus
+  slack), so `timeout: 600` or `timeout_seconds: 1800` runs to its own
+  deadline instead of losing its output.
+- **`cd` carries over between `shell` calls inside the sandbox.** It was
+  saved to a file the sandbox's private `/tmp` couldn't reach, so every call
+  printed "No such file or directory" and the directory never stuck.
+- **A glob can reach into `third_party/`, `vendor/`, `build-*/` and the
+  like.** `replace`, `grep`, `glob`, `extract`, `aggregate` and the
+  structural tools skipped those directories even when the glob named them,
+  and `replace` just said "No files to scan". An empty scan now says why.
+- **Globs mean the same thing in every tool:** `*.{ts,tsx}` alternation and
+  `src/**/*.go` paths work in `search_structural` and `rewrite_structural`
+  too, which only matched file names.
+
+### Performance
+- **`edit` is ~13x faster** (8 ms to 0.6 ms for a one-line edit in a
+  2,000-line file): Myers diff instead of a full LCS table, no zero-filled
+  multi-megabyte read buffer, and no redundant `fdatasync`/directory `fsync`
+  when replacing an existing file on btrfs or ext4, which already order the
+  data before the rename.
+- **Sandboxed `shell` is ~45% faster** (22 ms to 12 ms for `true`). It no
+  longer forks a fresh host probe per command, re-walks the workspace for
+  the secret mask (an inotify watch answers "nothing changed"), binds
+  missing optional paths, watches git's `.sample` hooks, or re-sorts the
+  seccomp table on every insert.
+- **`grep` is ~40% faster** (32 ms to 19 ms on this repo), from the same
+  spawn savings.
+
 ## [0.9.58] - 2026-11-18
 
 ### Added

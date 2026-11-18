@@ -1,5 +1,7 @@
 #include "agentty/diff/diff.hpp"
 
+#include <mcp/tools/util/myers.hpp>
+
 #include <algorithm>
 #include <sstream>
 #include <string>
@@ -21,98 +23,14 @@ std::vector<std::string> split_lines(const std::string& s) {
     return out;
 }
 
-// LCS-based diff, good enough for hunking.
-struct Edit { enum K { Keep, Del, Ins } k; int a_idx, b_idx; };
+using Edit = myers::Edit;
 
-// Worst-case DP table cap. Beyond this many cells the full O(N*M) table is
-// both too slow and too memory-hungry, so the middle region falls back to a
-// block replacement (delete-all-then-insert-all). The hunk still reconstructs
-// `after` exactly; it just isn't minimal. 6M cells ~= 24MB of int, ~ms-scale.
-constexpr std::size_t kCellCap = 6'000'000;
-
-// LCS edits for the interned ranges a[a0,a1) vs b[b0,b1), appended to `out`
-// in forward order. `ai`/`bi` are line ids (cheap int compares).
-void lcs_middle(const std::vector<int>& ai, const std::vector<int>& bi,
-                int a0, int a1, int b0, int b1, std::vector<Edit>& out) {
-    int nn = a1 - a0, mm = b1 - b0;
-    if (nn == 0) {
-        for (int j = b0; j < b1; ++j) out.push_back({Edit::Ins, -1, j});
-        return;
-    }
-    if (mm == 0) {
-        for (int i = a0; i < a1; ++i) out.push_back({Edit::Del, i, -1});
-        return;
-    }
-    if ((std::size_t)nn * (std::size_t)mm > kCellCap) {
-        for (int i = a0; i < a1; ++i) out.push_back({Edit::Del, i, -1});
-        for (int j = b0; j < b1; ++j) out.push_back({Edit::Ins, -1, j});
-        return;
-    }
-    const int stride = mm + 1;
-    std::vector<int> dp((std::size_t)(nn + 1) * (std::size_t)stride, 0);
-    for (int i = 1; i <= nn; ++i) {
-        const int av = ai[a0 + i - 1];
-        int* row = &dp[(std::size_t)i * stride];
-        const int* prev = &dp[(std::size_t)(i - 1) * stride];
-        for (int j = 1; j <= mm; ++j)
-            row[j] = (av == bi[b0 + j - 1]) ? prev[j - 1] + 1
-                                            : std::max(prev[j], row[j - 1]);
-    }
-    std::vector<Edit> rev;
-    int i = nn, j = mm;
-    while (i > 0 && j > 0) {
-        if (ai[a0 + i - 1] == bi[b0 + j - 1]) {
-            rev.push_back({Edit::Keep, a0 + i - 1, b0 + j - 1}); --i; --j;
-        } else if (dp[(std::size_t)(i - 1) * stride + j] >=
-                   dp[(std::size_t)i * stride + (j - 1)]) {
-            rev.push_back({Edit::Del, a0 + i - 1, -1}); --i;
-        } else {
-            rev.push_back({Edit::Ins, -1, b0 + j - 1}); --j;
-        }
-    }
-    while (i > 0) { rev.push_back({Edit::Del, a0 + (--i), -1}); }
-    while (j > 0) { rev.push_back({Edit::Ins, -1, b0 + (--j)}); }
-    out.insert(out.end(), rev.rbegin(), rev.rend());
-}
-
-std::vector<Edit> compute_edits(const std::vector<std::string>& a,
-                                const std::vector<std::string>& b) {
-    int n = (int)a.size(), m = (int)b.size();
-
-    // Intern lines to ints so the DP and trims compare ids, not std::strings.
-    std::unordered_map<std::string_view, int> ids;
-    ids.reserve((std::size_t)(n + m) * 2);
-    std::vector<int> ai(n), bi(m);
-    int next_id = 0;
-    for (int i = 0; i < n; ++i) {
-        auto [it, inserted] = ids.emplace(std::string_view(a[i]), next_id);
-        if (inserted) ++next_id;
-        ai[i] = it->second;
-    }
-    for (int j = 0; j < m; ++j) {
-        auto [it, inserted] = ids.emplace(std::string_view(b[j]), next_id);
-        if (inserted) ++next_id;
-        bi[j] = it->second;
-    }
-
-    std::vector<Edit> edits;
-    edits.reserve((std::size_t)(n + m));
-
-    // Common prefix: definitely in the LCS, emit as Keep and skip the DP.
-    int p = 0;
-    while (p < n && p < m && ai[p] == bi[p]) {
-        edits.push_back({Edit::Keep, p, p});
-        ++p;
-    }
-    // Common suffix: shrink both ends inward (also in the LCS).
-    int sa = n, sb = m;
-    while (sa > p && sb > p && ai[sa - 1] == bi[sb - 1]) { --sa; --sb; }
-
-    // Diff only the divergent middle, then re-attach the trimmed suffix.
-    lcs_middle(ai, bi, p, sa, p, sb, edits);
-    for (int k = 0; sa + k < n; ++k)
-        edits.push_back({Edit::Keep, sa + k, sb + k});
-    return edits;
+// Myers' O((N+M)D) diff, shared with mcp-cpp (mcp/tools/util/myers.hpp): cost
+// follows how much changed, not how big the file is. The O(N*M) LCS table it
+// replaced page-faulted through megabytes for a one-line edit.
+std::vector<Edit> compute_edits(const std::vector<std::string_view>& a,
+                                const std::vector<std::string_view>& b) {
+    return myers::diff(a, b);
 }
 } // namespace
 
@@ -124,8 +42,10 @@ FileChange compute(const std::string& path,
     c.original_contents = before;
     c.new_contents = after;
 
-    auto a = split_lines(before);
-    auto b = split_lines(after);
+    // Views into `before`/`after`: copying every line into its own string was
+    // the largest cost of computing the hunks for a one-line edit.
+    const auto a = myers::detail::split_views(before);
+    const auto b = myers::detail::split_views(after);
     auto edits = compute_edits(a, b);
 
     const int ctx = 3;

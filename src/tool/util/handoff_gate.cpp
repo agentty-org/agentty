@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <sys/stat.h>   // stat_entry: one lstat per watched path
+#endif
+
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/util/logx.hpp"
 
@@ -316,6 +320,11 @@ constexpr std::string_view kGitWatchFiles[] = {"config", "config.worktree"};
         if (rest == p.end()) return false;                      // info/ itself: walk it
         return !(*rest == "attributes" && std::next(rest) == p.end());
     }
+    // hooks/*.sample: git never runs a .sample, and git init writes 14 of
+    // them into every repo and submodule. Watching them cost ~100 stats and
+    // a bind per submodule per command. Renaming one to its live name is a
+    // NEW file in hooks/, which review() sees through the dir root.
+    if (seg == "hooks" && !is_dir && p.extension() == ".sample") return true;
     return std::ranges::find(kGitWatch, seg) == std::ranges::end(kGitWatch);
 }
 
@@ -387,6 +396,36 @@ constexpr auto kRacyWindow = std::chrono::seconds{2};
     sandbox_cfg::TrustKind k{};
     return sandbox_cfg::is_host_trusted(p + "/probe", &k);
 }
+
+#if !defined(_WIN32)
+// What record() and review() measure about one watched path, in one or two
+// syscalls: exists (the link itself counts), and the size + mtime of what it
+// resolves to, which is what fs::file_size / last_write_time reported.
+struct EntryStat {
+    bool exists = false, regular = false;
+    std::uintmax_t size = 0;
+    std::int64_t mtime_ns = 0;
+};
+[[nodiscard]] EntryStat stat_entry(const fs::path& p) {
+    EntryStat s;
+    struct ::stat st{};
+    if (::lstat(p.c_str(), &st) != 0) return s;
+    s.exists = true;
+    if (S_ISLNK(st.st_mode) && ::stat(p.c_str(), &st) != 0) return s;   // dangling
+    s.regular = S_ISREG(st.st_mode);
+    s.size = s.regular ? static_cast<std::uintmax_t>(st.st_size) : 0;
+#if defined(__APPLE__)
+    const auto& ts = st.st_mtimespec;
+#else
+    const auto& ts = st.st_mtim;
+#endif
+    // Raw ns since the unix epoch. Only ever compared with another
+    // stat_entry (record vs review), so the clock just has to be the same on
+    // both sides -- not file_clock's, whose epoch differs by library.
+    s.mtime_ns = static_cast<std::int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+    return s;
+}
+#endif
 
 // The listing of `dir`, from the cache when its mtime hasn't moved. One stat
 // on a hit. No lock is held while touching the filesystem.
@@ -824,6 +863,7 @@ struct ShallowHit { fs::path path; bool link = false; };
 TrustedSnapshot snapshot_trusted(std::string_view root) {
     TrustedSnapshot snap;
     if (root.empty()) return snap;
+    snap.root = std::string{root};
     ListingWalk walk;
 
     // Allow means "do not gate", so there is nothing to report and no reason to
@@ -856,9 +896,13 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
         TrustedSnapshot::Entry entry;
         entry.path    = p;
         entry.kind    = kind;
-        // Usually true; false for a watched-but-absent path (a git include
-        // that does not exist yet), which review() reports if it appears and
-        // the sandbox does not try to bind.
+        // ONE lstat yields existence, size and mtime. This ran exists() +
+        // file_size() + last_write_time() per trusted path, ~450 syscalls
+        // per command on a repo with submodules.
+        // existed=false is a watched-but-absent path (a git include that
+        // does not exist yet): review() reports it if it appears and the
+        // sandbox does not try to bind it.
+#if defined(_WIN32)
         std::error_code xec;
         entry.existed = fs::exists(fs::symlink_status(p, xec));
         if (!entry.existed) { snap.entries.push_back(std::move(entry)); return; }
@@ -870,6 +914,12 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
         entry.mtime_ns = tec ? 0
             : std::chrono::duration_cast<std::chrono::nanoseconds>(
                   t.time_since_epoch()).count();
+#else
+        const auto s = stat_entry(p);
+        entry.existed  = s.exists;
+        entry.size     = s.size;
+        entry.mtime_ns = s.mtime_ns;
+#endif
         snap.entries.push_back(std::move(entry));
     };
 
@@ -1116,8 +1166,13 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
         }
     }
     for (const auto& e : before.entries) {
+#if !defined(_WIN32)
+        const auto now = stat_entry(e.path);
+        const bool exists = now.exists && now.regular;
+#else
         std::error_code ec;
         const bool exists = fs::is_regular_file(e.path, ec);
+#endif
 
         const char* what = nullptr;
         if (!e.existed) {
@@ -1126,6 +1181,12 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
         } else if (!exists) {
             what = "deleted";
         } else {
+#if !defined(_WIN32)
+            // Size OR mtime: a same-length rewrite is the case a size check
+            // alone misses, and flipping one character in a hook script is
+            // exactly that.
+            if (now.size != e.size || now.mtime_ns != e.mtime_ns) what = "modified";
+#else
             std::error_code sec, tec;
             const auto sz = fs::file_size(e.path, sec);
             const auto t = fs::last_write_time(e.path, tec);
@@ -1137,6 +1198,7 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
             // alone misses, and flipping one character in a hook script is
             // exactly that.
             if ((!sec && sz != e.size) || ns != e.mtime_ns) what = "modified";
+#endif
         }
         if (!what) continue;
 

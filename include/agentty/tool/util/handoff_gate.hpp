@@ -162,6 +162,12 @@ struct TrustedSnapshot {
     // away is reported through its config, which is an entry.
     std::vector<std::string> git_dirs;
 
+    // The root this snapshot walked, as given. The sandbox reuses the
+    // dispatcher's snapshot only when it walked the same workspace; that check
+    // used to read roots.front(), which is the first PRIORITY dir (.git/hooks),
+    // never the workspace -- so every shell call walked the tree twice.
+    std::string root;
+
     [[nodiscard]] bool empty() const noexcept {
         return entries.empty() && roots.empty() && pinned_dirs.empty() && git_dirs.empty();
     }

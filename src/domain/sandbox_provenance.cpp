@@ -19,6 +19,14 @@
 #include <chrono>
 #include <filesystem>
 #include <span>
+#include <string>
+#include <vector>
+
+#if defined(__linux__)
+#include <sys/inotify.h>   // SweepWatch: change detection for the mask sweep
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 #include <maya/runtime.hpp>
 
@@ -228,13 +236,12 @@ void sweep(const std::filesystem::path& dir, int depth_left,
     for (const auto& entry : it) {
         std::error_code sec;
         const auto name = entry.path().filename().string();
-        // symlink_status, not status: a symlink NAMED .env is masked as the
-        // link rather than followed. Following it would mask wherever it
-        // points and leave the link itself readable.
-        const auto st = entry.symlink_status(sec);
+        // A symlink NAMED .env is masked as the link rather than followed:
+        // following it would mask wherever it points and leave the link
+        // itself readable. The entry's type comes from readdir's d_type.
+        const bool link = entry.is_symlink(sec);
         if (sec) continue;
-
-        if (std::filesystem::is_directory(st)) {
+        if (!link && entry.is_directory(sec) && !sec) {
             if (depth_left > 0 && !never_walk(name))
                 sweep(entry.path(), depth_left - 1, out);
             continue;
@@ -279,15 +286,134 @@ std::uint64_t dir_stamp(const std::filesystem::path& dir, int depth_left) {
 
     for (const auto& entry : it) {
         if (depth_left <= 0) break;
+        // is_symlink()/is_directory() on the ENTRY use the d_type readdir
+        // already returned (no syscall on Linux/macOS filesystems that
+        // report it), and fall back to lstat only when d_type is unknown.
+        // entry.symlink_status() always lstat'ed: ~2,000 syscalls per
+        // spawn on this tree, ~15% of a sandboxed `true`.
         std::error_code sec;
-        const auto st = entry.symlink_status(sec);
-        if (sec || !std::filesystem::is_directory(st)) continue;
+        if (entry.is_symlink(sec) || sec) continue;
+        if (!entry.is_directory(sec) || sec) continue;
         const auto name = entry.path().filename().string();
         if (never_walk(name)) continue;
         mix(dir_stamp(entry.path(), depth_left - 1));
     }
     return h;
 }
+
+#if defined(__linux__)
+// "Has anything under the swept dirs changed?" -- answered without walking.
+//
+// dir_stamp re-walks every directory down to mask_scan_depth on EVERY spawn
+// (~400 openat+getdents+stat on this tree, the largest share left in a
+// sandboxed `true`) to learn, almost always, that nothing changed. An
+// inotify watch over those same directories answers with one ioctl.
+//
+// Race-free by construction:
+//   - the queue is only PEEKED (FIONREAD) on the read path, so a pending
+//     event is seen by every reader until a re-arm;
+//   - a re-arm bumps the generation BEFORE it drains and re-watches, and
+//     the cache trusts only an entry taken under the CURRENT generation, so a
+//     reader racing a re-arm fails the generation check and walks;
+//   - the walk happens AFTER the watches are in place, so a change landing
+//     mid-walk is already queued and the next reader walks again.
+// Anything else -- no inotify, too many dirs, queue overflow (itself an
+// event) -- leaves the generation at 0 and falls back to dir_stamp: slower,
+// never stale. One inotify fd for the process; never closed.
+struct WatchState {
+    std::string   root;
+    int           depth = -1;
+    std::uint64_t gen = 0;   // 0: not armed
+};
+
+class SweepWatch {
+public:
+    // The current generation when nothing is pending for (root, depth);
+    // 0 when the caller must walk.
+    [[nodiscard]] std::uint64_t quiet(std::string_view root, int depth) const {
+        if (fd_ < 0) return 0;
+        const auto st = state_.load();
+        if (st->gen == 0 || st->root != root || st->depth != depth) return 0;
+        int pending = 0;
+        if (::ioctl(fd_, FIONREAD, &pending) != 0 || pending != 0) return 0;
+        return st->gen;
+    }
+
+    // Re-watch every dir dir_stamp visits under `root`. Returns the new
+    // generation, or 0 when the tree can't be watched (then: always walk).
+    std::uint64_t arm(const std::filesystem::path& root, int depth) {
+        if (fd_ < 0) return 0;
+        // Invalidate first: any reader from here on sees gen 0 and walks.
+        const auto gen = ++gen_counter_;   // only arm() touches it (lane-serialised)
+        state_.store(WatchState{});
+        // Drop the previous watches and drain what they queued.
+        for (int wd : wds_) (void)::inotify_rm_watch(fd_, wd);
+        wds_.clear();
+        alignas(inotify_event) char buf[8192];
+        while (::read(fd_, buf, sizeof buf) > 0) {}
+        bool ok = true;
+        constexpr std::size_t kMaxWatches = 4096;
+        std::vector<std::pair<std::filesystem::path, int>> stack{{root, depth}};
+        while (ok && !stack.empty()) {
+            auto [d, left] = std::move(stack.back());
+            stack.pop_back();
+            const int wd = wds_.size() >= kMaxWatches ? -1
+                : ::inotify_add_watch(fd_, d.c_str(),
+                      IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
+                      | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR | IN_DONT_FOLLOW);
+            if (wd < 0) { ok = false; break; }
+            wds_.push_back(wd);
+            if (left <= 0) continue;
+            std::error_code ec;
+            std::filesystem::directory_iterator it{
+                d, std::filesystem::directory_options::skip_permission_denied, ec};
+            if (ec) continue;
+            for (const auto& e : it) {
+                std::error_code sec;
+                if (e.is_symlink(sec) || sec || !e.is_directory(sec) || sec) continue;
+                if (never_walk(e.path().filename().string())) continue;
+                stack.emplace_back(e.path(), left - 1);
+            }
+        }
+        if (!ok) return 0;
+        state_.store(WatchState{root.string(), depth, gen});
+        return gen;
+    }
+
+private:
+    // arm() is serialised by try_rearm's lane; it alone touches wds_.
+    int fd_ = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    std::vector<int> wds_;
+    std::uint64_t gen_counter_ = 0;
+    maya::snapshot<WatchState> state_;
+};
+
+// The one watch, and a try-lock lane so a spawn that finds another already
+// re-arming just walks instead of waiting (or racing wds_). The lane is a
+// snapshot<int> taken by CAS: update() returns what it stored, so the caller
+// whose unique ticket landed there owns the re-arm.
+struct SweepWatchSlot {
+    SweepWatch           watch;
+    maya::snapshot<int>  arming;   // 0 idle; otherwise the owner's ticket
+    maya::snapshot<int>  tickets;
+};
+SweepWatchSlot& sweep_watch_slot() {
+    static auto* s = new SweepWatchSlot;   // leaked: outlives every spawner
+    return *s;
+}
+
+// Re-arm if no one else is; 0 when another spawn holds the lane.
+std::uint64_t try_rearm(const std::filesystem::path& root, int depth) {
+    auto& s = sweep_watch_slot();
+    const int me = *s.tickets.update([](const int& t) { return t + 1; });
+    const int got = *s.arming.update(
+        [](const int& cur, int mine) { return cur == 0 ? mine : cur; }, me);
+    if (got != me) return 0;
+    const auto gen = s.watch.arm(root, depth);
+    s.arming.store(0);
+    return gen;
+}
+#endif
 
 }  // namespace
 
@@ -344,6 +470,7 @@ std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspac
             std::string              ws;
             int                      depth = -1;
             std::uint64_t            stamp = 0;
+            std::uint64_t            gen = 0;   // SweepWatch generation it was taken under
             std::vector<std::string> paths;
         };
         // Function-local static: the first command can land from a worker
@@ -351,28 +478,44 @@ std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspac
         static maya::snapshot<Cache> cache;
 
         const int depth = static_cast<int>(cfg.mask_scan_depth);
-        // OUTSIDE the lock: stat-ing the tree is the slow part, and holding
-        // the lock across it would serialise every concurrent spawn behind
-        // one filesystem walk -- turning a latency fix into a latency bug.
-        const std::uint64_t stamp =
-            dir_stamp(std::filesystem::path{workspace}, depth);
-
-        // Copying ~16 short strings once per command is nothing against the
-        // walk this exists to avoid.
         std::vector<std::string> hits;
-        {
+        bool done = false;
+#if defined(__linux__)
+        // Fast path: a quiet watch that vouches for exactly this sweep.
+        if (const auto gen = sweep_watch_slot().watch.quiet(workspace, depth); gen != 0) {
+            auto cur = cache.load();
+            if (cur->gen == gen && cur->ws == workspace && cur->depth == depth) {
+                hits = cur->paths;
+                done = true;
+            }
+        }
+#endif
+        if (!done) {
+            // Arm FIRST, so whatever changes while we walk is already queued.
+            std::uint64_t gen = 0;
+#if defined(__linux__)
+            gen = try_rearm(std::filesystem::path{workspace}, depth);
+#endif
+            // OUTSIDE any lock: stat-ing the tree is the slow part, and
+            // holding a lock across it would serialise every concurrent
+            // spawn behind one filesystem walk.
+            const std::uint64_t stamp =
+                dir_stamp(std::filesystem::path{workspace}, depth);
             auto cur = cache.load();
             if (cur->ws == workspace && cur->depth == depth && cur->stamp == stamp) {
                 hits = cur->paths;
             } else {
-                Cache next;
-                sweep(std::filesystem::path{workspace}, depth, next.paths);
-                next.ws    = std::string{workspace};
-                next.depth = depth;
-                next.stamp = stamp;
-                hits = next.paths;
-                cache.store(std::move(next));
+                Cache fresh;
+                sweep(std::filesystem::path{workspace}, depth, fresh.paths);
+                fresh.ws    = std::string{workspace};
+                fresh.depth = depth;
+                fresh.stamp = stamp;
+                hits = fresh.paths;
+                cur = maya::shared<Cache>::make(std::move(fresh));
             }
+            Cache next = *cur;
+            next.gen = gen;
+            cache.store(std::move(next));
         }
         out.insert(out.end(), std::make_move_iterator(hits.begin()),
                    std::make_move_iterator(hits.end()));

@@ -452,6 +452,23 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
     // write/edit run in agentty's process, outside the sandbox's binds, so
     // their gate must resolve the repo's config itself.
     {
+        // The snapshot names the root it walked, so the sandbox can reuse it
+        // (it used to compare roots.front(), a priority dir, and never did).
+        CHECK(hg::snapshot_trusted(g_root.string()).root == g_root.string());
+
+        // Shipped .sample hooks are inert and not watched; renaming one to a
+        // live name is a new hook and IS reported.
+        write_file(g_root / ".git" / "hooks" / "pre-push.sample", "#!/bin/sh\n");
+        auto ss = hg::snapshot_trusted(g_root.string());
+        bool sample_watched = false;
+        for (const auto& e : ss.entries)
+            if (e.path.ends_with("pre-push.sample")) sample_watched = true;
+        CHECK_FALSE(sample_watched);
+        hg::clear_handoff_feed();
+        fs::rename(g_root / ".git" / "hooks" / "pre-push.sample", g_root / ".git" / "hooks" / "pre-push");
+        CHECK(hg::review_trusted(ss, "mv pre-push.sample pre-push") >= 1);
+        fs::remove(g_root / ".git" / "hooks" / "pre-push");
+
         write_file(g_root / ".git" / "config",
                    "[core]\n\thooksPath = .husky\n\tfsmonitor = tools/fsmon.sh\n");
         write_file(g_root / ".husky" / "pre-commit", "#!/bin/sh\n");
