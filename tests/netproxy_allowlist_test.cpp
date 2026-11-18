@@ -105,7 +105,7 @@ TEST_CASE("netproxy: entries that cannot mean a host are rejected, with a reason
     CHECK(rejected("github..com"));
     CHECK(rejected("github.com:http"));
     CHECK(rejected("https://"));
-    CHECK(rejected("gith\xc3\xbcb.com"));      // raw UTF-8: punycode it first
+    CHECK(rejected("gith\xc3\xbc" "b.com"));      // raw UTF-8: punycode it first
     CHECK(rejected(std::string(260, 'a') + ".com"));
 }
 

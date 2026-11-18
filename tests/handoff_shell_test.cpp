@@ -395,8 +395,10 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
         write_file(g_root / ".git" / "config",
                    "[include]\n\tpath = ../conf/extra.gitconfig\n"
                    "[credential]\n\thelper = store\n");
+        // Config quotes keep the space; the shell quotes inside choose the
+        // program, which is how git hands the value to sh.
         write_file(g_root / "conf" / "extra.gitconfig",
-                   "[core]\n\tfsmonitor = \"tools/my mon.sh\" --flag\n");
+                   "[core]\n\tfsmonitor = \"'tools/my mon.sh' --flag\"\n");
         write_file(g_root / "tools" / "my mon.sh", "#!/bin/sh\n");
         write_file(g_root / "store", "decoy\n");
         auto snap = hg::snapshot_trusted(g_root.string());

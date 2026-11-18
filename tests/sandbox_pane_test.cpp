@@ -1095,6 +1095,14 @@ TEST_CASE("sandbox list: a port list validates on readback") {
     CHECK(pn::read_sandbox_list(ed) == after);
 }
 
+TEST_CASE("sandbox list: a name list keeps variable names, drops the rest") {
+    auto ed = pn::build_sandbox_list(pn::kSbEnvKeep, "Custom variables", "h",
+                                     {"MKLROOT", "PROGRAMFILES(X86)", "1BAD", "A B", "(X)"},
+                                     pn::SandboxListPane::ListKind::Name);
+    const std::vector<std::string> want{"MKLROOT", "PROGRAMFILES(X86)"};
+    CHECK(pn::read_sandbox_list(ed) == want);
+}
+
 TEST_CASE("sandbox list: a non-port is dropped, not guessed at") {
     // Enforced on readback now that the widget cannot enforce it. Dropping
     // beats clamping: silently turning "8O80" (letter O) into 8080 would be
@@ -1650,6 +1658,24 @@ TEST_CASE("sandbox pane: the form teaches itself") {
     // And the sweep actually ran -- a loop that skipped everything would
     // report zero failures, which is the failure mode this file is about.
     CHECK(rows >= 15);
+}
+
+TEST_CASE("sandbox pane: W^X can be turned off with the filter on") {
+    // Off lifts the profile's RWX rule (and Strict's MDWE), so a JVM runs
+    // without dropping the whole filter. A locked row hid a real setting.
+    sandbox_cfg::Config cfg;
+    cfg.configured = true;
+    cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    for (auto mode : {sandbox_cfg::SyscallMode::Compiler, sandbox_cfg::SyscallMode::Strict}) {
+        cfg.syscall_mode = mode;
+        cfg.wx_protect = false;
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        const int i = row_of(form, pn::kSbWxProtect);
+        REQUIRE(i >= 0);
+        if (facts_for(cfg).claybin_available)
+            CHECK_FALSE(form.fields[static_cast<std::size_t>(i)].locked);
+        CHECK_FALSE(pn::read_sandbox_form(form, cfg).wx_protect);
+    }
 }
 
 TEST_CASE("sandbox pane: a toggle says what its CURRENT state does") {
@@ -2659,7 +2685,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     facts.workspace_is_home = true;
     facts.handoff_truncated = true;
     auto form = pn::build_sandbox_form(cfg, facts);
-    pn::annotate_host_risks(form, cfg, facts);
+    pn::annotate_host_risks(form, facts);
 
     auto err_of = [&](std::string_view id) {
         const int i = row_of(form, id);
@@ -2677,7 +2703,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     cfg.net_mode = sandbox_cfg::NetMode::Ports;
     auto calm = facts_for(cfg);
     auto quiet = pn::build_sandbox_form(cfg, calm);
-    pn::annotate_host_risks(quiet, cfg, calm);
+    pn::annotate_host_risks(quiet, calm);
     for (auto id : {pn::kSbFsScope, pn::kSbHandoff}) {
         const int i = row_of(quiet, id);
         REQUIRE(i >= 0);

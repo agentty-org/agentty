@@ -419,19 +419,17 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
         toggle(kSbWxProtect, "W^X",
                "no page may be writable and executable at the same time",
                cfg.wx_protect,
-               "on: a single writable+executable mapping is refused \xc2\xb7 "
-               "writing a page and then making it executable still works \xc2\xb7 "
-               "breaks JITs that ask for RWX (some node flags, any JVM)",
+               cfg.syscall_mode == sandbox_cfg::SyscallMode::Strict
+                   ? "on: no writable+executable mapping, and no making a written "
+                     "page executable later \xc2\xb7 breaks every JIT (node, any JVM)"
+                   : "on: a single writable+executable mapping is refused \xc2\xb7 "
+                     "writing a page and then making it executable still works \xc2\xb7 "
+                     "breaks JITs that ask for RWX (some node flags, any JVM)",
                "off: JITs work \xc2\xb7 a memory bug can map writable+executable "
                "memory directly"));
+    // Live under every filter: turning it off lifts the profile's own RWX rule
+    // too (and Strict's MDWE), so a JVM can run without dropping the filter.
     if (!claybin_live) lock_row(form, kSbWxProtect, why_locked);
-    // Every syscall profile denies RWX, so the toggle only matters with the
-    // filter off.
-    else if (cfg.syscall_mode != sandbox_cfg::SyscallMode::Off) {
-        lock_row(form, kSbWxProtect, "always on while the syscall filter is on");
-        if (auto* t = std::get_if<form::field::Toggle>(&form.fields.back().value))
-            t->on = true;
-    }
 
     // ── Resources ─────────────────────────────────────────────────────
     // All four are cgroup2 (with rlimit as a backstop for memory/procs), and
@@ -582,14 +580,12 @@ sandbox_cfg::Config read_sandbox_form(const form::Form& f,
             if (const auto* c = std::get_if<form::field::Choice>(&fld->value)) return c->index;
         return fallback;
     };
-    // A LOCKED row is a report, not an input. Several rows display what the
+    // A LOCKED row is a report, not an input. Some rows display what the
     // ENGINE will do rather than what the config says (Scope IPC reads "on"
-    // under seatbelt whatever the config holds; W^X reads "on" whenever the
-    // syscall filter is on). Reading those displays back wrote the engine's
-    // fact INTO the config: picking Permissive (scope_ipc=false) came back
-    // scope_ipc=true, Balanced (wx_protect=false) came back true, and both
-    // presets read as Custom. A locked row therefore keeps base's value --
-    // the user could not have changed it, so nothing changed.
+    // under seatbelt whatever the config holds). Reading such a display back
+    // wrote the engine's fact INTO the config: picking Permissive
+    // (scope_ipc=false) came back scope_ipc=true and read as Custom. A locked
+    // row therefore keeps base's value -- the user could not have changed it.
     auto toggle_of = [&](std::string_view id, bool fallback) {
         if (const auto* fld = f.find(id); fld && !fld->locked)
             if (const auto* t = std::get_if<form::field::Toggle>(&fld->value)) return t->on;
@@ -730,13 +726,13 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
-// A portable variable name: what POSIX shells accept, and a subset of what
-// Windows does. Anything else could never match a real variable.
+// A variable name: what POSIX shells accept, plus the parentheses Windows
+// uses (PROGRAMFILES(X86)). Anything else could never match a real variable.
 [[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
-    if (v.empty() || (v.front() >= '0' && v.front() <= '9')) return false;
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || v.front() == '(') return false;
     for (char c : v)
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-              || (c >= '0' && c <= '9') || c == '_'))
+              || (c >= '0' && c <= '9') || c == '_' || c == '(' || c == ')'))
             return false;
     return true;
 }
@@ -1285,8 +1281,7 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     }
 }
 
-void annotate_host_risks(form::Form& f, [[maybe_unused]] const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts) {
+void annotate_host_risks(form::Form& f, const HostFacts& facts) {
     auto row_of = [&](std::string_view id) -> form::Field* {
         for (auto& fld : f.fields)
             if (fld.id == id) return &fld;
@@ -1335,8 +1330,7 @@ void annotate_sandbox_form(form::Form&, const Preview&,
     // fact twice.
 }
 
-void annotate_host_risks(form::Form&, const sandbox_cfg::Config&,
-                         const HostFacts&) {}
+void annotate_host_risks(form::Form&, const HostFacts&) {}
 
 #endif
 

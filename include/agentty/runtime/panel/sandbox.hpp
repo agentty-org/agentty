@@ -500,11 +500,9 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
                            const sandbox_cfg::Config& cfg, EngineStatus status);
 
 // Warnings that depend on the HOST rather than the config: the workspace is
-// $HOME (every dotfile writable), or the last handoff snapshot hit its cap.
-// Also config warnings the audit found misleading: allow_ports does nothing
-// under Full, and Ports covers TCP only. Run after annotate_sandbox_form.
-void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
-                         const HostFacts& facts);
+// $HOME (every dotfile writable), the last handoff snapshot hit its cap, or a
+// core.hooksPath points at a large folder. Run after annotate_sandbox_form.
+void annotate_host_risks(form::Form& f, const HostFacts& facts);
 
 }  // namespace agentty::ui::panel
 
