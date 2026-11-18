@@ -5,6 +5,7 @@
 #include "agentty/tool/util/subprocess.hpp"   // host_git_identity
 #include "agentty/util/logx.hpp"   // AGT_LOG — the sealed-policy refusal
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -632,6 +633,20 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
                 && dirs.insert(d).second)
                 p.handoff_ro.push_back(d);
         }
+        // Anchor each git dir in place (all postures), and each nested repo's
+        // worktree under the strict ones, where `mv repo` is rarer than the
+        // escape it closes. The workspace root is a mount already.
+        const bool strict = cfg.syscall_mode == sandbox_cfg::SyscallMode::Strict;
+        for (const auto& g : snap.git_dirs) {
+            if (under_mask(g) || fs::is_symlink(fs::symlink_status(g, plec))) continue;
+            p.handoff_anchor.push_back(g);
+            const std::string wt = fs::path{g}.parent_path().string();
+            if (strict && wt != p.workspace && !under_mask(wt)
+                && !fs::is_symlink(fs::symlink_status(wt, plec)))
+                p.handoff_anchor.push_back(wt);
+        }
+        // Outermost first, so an inner anchor is not covered by an outer one.
+        std::ranges::sort(p.handoff_anchor);
         for (const auto& e : snap.entries) {
             if (!e.existed) continue;
             if (under_mask(e.path)) continue;

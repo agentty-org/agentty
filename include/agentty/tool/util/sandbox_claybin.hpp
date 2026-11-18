@@ -70,6 +70,10 @@ struct Posture {
     // unprivileged userns -- which is why the detection half exists and runs
     // everywhere regardless.
     std::vector<std::string> handoff_ro;
+    // Writable self-binds that pin a dir in place: each git dir, and nested
+    // repo roots under the strict postures. A mount point cannot be renamed
+    // (EBUSY), so the read-only binds inside cannot be moved off.
+    std::vector<std::string> handoff_anchor;
     std::string workspace;                       // read-write, bound last
     std::string cwd;                             // where the shell starts
 

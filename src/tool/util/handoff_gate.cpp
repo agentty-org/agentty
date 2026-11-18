@@ -712,6 +712,62 @@ bool is_git_config_target(const fs::path& path) {
     return false;
 }
 
+// Directories that are small, entirely trusted and worth guaranteeing, so the
+// snapshot walks them first and uncapped (see snapshot_trusted). Named here
+// rather than derived from the rule table because the table is match SHAPES,
+// not locations. is_host_trusted() stays the one authority on whether a path
+// counts -- this list only decides walk ORDER.
+constexpr std::string_view kPriorityDirs[] = {
+    ".git", ".vscode", ".claude", ".agentty", ".cursor", ".idea",
+    ".direnv", ".codex", ".gemini",
+};
+
+// How deep the shallow scan looks: deep enough to find .vscode in a
+// sub-package, and every real layout keeps these near the root.
+constexpr int kShallowDepth = 3;
+
+struct ShallowHit { fs::path path; bool link = false; };
+
+// Every priority-named dir within kShallowDepth of `base`, by the walk's skip
+// rules. The snapshot and review() both find git dirs through this, so the
+// dirs one anchors and the other compares cannot drift apart.
+[[nodiscard]] std::vector<ShallowHit> shallow_scan(ListingWalk& walk, const fs::path& base) {
+    std::vector<ShallowHit> out;
+    std::vector<std::pair<fs::path, int>> stack{{base, 0}};
+    std::size_t seen = 0;
+    while (!stack.empty() && seen <= kMaxEntries) {
+        auto [dir, depth] = std::move(stack.back());
+        stack.pop_back();
+        const auto lp = list_dir(walk, dir);
+        if (!lp) continue;
+        const Listing* l = &**lp;
+        if (depth > 0 && l->has_cmake_cache) continue;
+        seen += l->entries;
+        for (const auto& s : l->dirs) {
+            fs::path p = dir / s.name;
+            if (std::ranges::find(kPriorityDirs, s.name) != std::ranges::end(kPriorityDirs)) {
+                out.push_back({std::move(p), s.link});
+                continue;
+            }
+            if (depth < kShallowDepth && !s.link && !skip_name(s.name))
+                stack.push_back({std::move(p), depth + 1});
+        }
+    }
+    return out;
+}
+
+// Every `.git` dir the shallow scan finds under `root`, sorted. review() runs
+// it again after a command that may have moved them; the listing cache is
+// keyed by mtime, and a rename bumps the parent's.
+[[nodiscard]] std::vector<std::string> scan_git_dirs(const fs::path& root) {
+    ListingWalk walk;
+    std::vector<std::string> out;
+    for (const auto& h : shallow_scan(walk, root))
+        if (h.path.filename() == ".git" && !h.link) out.push_back(h.path.string());
+    std::ranges::sort(out);
+    return out;
+}
+
 }  // namespace
 
 TrustedSnapshot snapshot_trusted(std::string_view root) {
@@ -781,16 +837,8 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
     // Truncation still exists and can still drop a deep Basename match (a
     // vendored Makefile). That is the right thing to lose: it is bounded
     // work, and the directories that carry every exploit in the Pillar series
-    // are covered before the budget is spent.
+    // are covered before the budget is spent. The directories are kPriorityDirs.
     //
-    // Named here rather than derived from the rule table because the table is
-    // match SHAPES, not locations, and only these have the "small, entirely
-    // trusted, worth guaranteeing" property. is_host_trusted() stays the one
-    // authority on whether a path counts -- this list only decides walk ORDER.
-    static constexpr std::string_view kPriorityDirs[] = {
-        ".git", ".vscode", ".claude", ".agentty", ".cursor", ".idea",
-        ".direnv", ".codex", ".gemini",
-    };
     // The same idea for paths that only exist under $HOME and need two
     // components to name: run at login or found on PATH. Small, and the
     // most dangerous thing to lose to the cap when the workspace is ~.
@@ -799,16 +847,12 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
         ".config/systemd", ".config/hypr", ".config/sway", ".config/i3",
         ".config/plasma-workspace", ".local/bin",
     };
-    const auto is_priority = [](std::string_view name) {
-        return std::ranges::find(kPriorityDirs, name) != std::ranges::end(kPriorityDirs);
-    };
     // Directories the priority pass walked in full. The general walk below
     // skips them, or it records their roots twice and walks .git again.
     std::unordered_set<std::string> walked;
     {
         // Find the priority directories with a SHALLOW scan (they live at or
         // near the workspace root in every real layout), then walk each fully.
-        // Depth 3 is deep enough to find .vscode in a sub-package.
         std::vector<fs::path> targets;
         for (auto rel : kPriorityHomeDirs) {
             std::error_code hec;
@@ -816,23 +860,11 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
             if (fs::is_directory(p, hec) && !fs::is_symlink(fs::symlink_status(p, hec)))
                 targets.push_back(std::move(p));
         }
-        std::vector<std::pair<fs::path, int>> stack{{base, 0}};
-        std::size_t pseen = 0;
-        while (!stack.empty() && pseen <= kMaxEntries) {
-            auto [dir, depth] = std::move(stack.back());
-            stack.pop_back();
-            const auto lp = list_dir(walk, dir);
-            if (!lp) continue;
-            const Listing* l = &**lp;
-            if (depth > 0 && l->has_cmake_cache) continue;
-            pseen += l->entries;
-            for (const auto& s : l->dirs) {
-                fs::path p = dir / s.name;
-                if (is_priority(s.name)) { targets.push_back(std::move(p)); continue; }
-                if (depth < 3 && !s.link && !skip_name(s.name))
-                    stack.push_back({std::move(p), depth + 1});
-            }
+        for (auto& h : shallow_scan(walk, base)) {
+            if (h.path.filename() == ".git" && !h.link) snap.git_dirs.push_back(h.path.string());
+            targets.push_back(std::move(h.path));
         }
+        std::ranges::sort(snap.git_dirs);
         // Uncapped. Pruning .git/objects and friends is what keeps it cheap.
         for (const auto& t : targets) {
             std::vector<fs::path> st{t};
@@ -977,10 +1009,56 @@ bool last_snapshot_truncated() noexcept { return *last_truncated().load(); }
 
 bool last_snapshot_large_hook_dir() noexcept { return *last_large_hook_dir().load(); }
 
+namespace {
+
+// A hook git would run: any file in hooks/ that is not a shipped sample.
+[[nodiscard]] bool has_live_hook(const fs::path& git_dir) {
+    std::error_code ec;
+    for (fs::directory_iterator it{git_dir / "hooks", ec}; !ec && it != fs::directory_iterator{};
+         it.increment(ec)) {
+        std::error_code tec;
+        if (it->is_regular_file(tec) && !it->path().filename().string().ends_with(".sample"))
+            return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool) {
     if (before.empty()) return 0;
 
     std::size_t recorded = 0;
+
+    // A new git dir has no protection until the next spawn, so one that git
+    // would act on is reported here. A git dir moved or deleted needs no
+    // report of its own: its config is an entry, reported below as deleted.
+    if (!before.roots.empty()) {
+        const auto& was = before.git_dirs;
+        const auto now = scan_git_dirs(before.roots.front());
+        const auto report = [&](const std::string& p, const char* what) {
+            sandbox_cfg::TrustHandoff h;
+            h.kind = sandbox_cfg::TrustKind::GitConfig;
+            h.write.path = p;
+            h.write.command = std::string{tool};
+            h.write.at_ms = now_ms();
+            h.write.created = std::string_view{what} == "created";
+            remember(h);
+            ++recorded;
+            AGT_LOG(General, Warn, "handoff", "{} a git dir outside the gate: {}", what, p);
+        };
+        for (const auto& g : now) {
+            if (std::ranges::binary_search(was, g)) continue;
+            std::error_code cec;
+            const fs::path cfg = fs::path{g} / "config";
+            const bool targets = fs::is_regular_file(cfg, cec)
+                && [&] {
+                       const auto t = resolve_git_targets(cfg, g);
+                       return !t.files.empty() || !t.dirs.empty();
+                   }();
+            if (has_live_hook(g) || targets) report(g, "created");
+        }
+    }
     for (const auto& e : before.entries) {
         std::error_code ec;
         const bool exists = fs::is_regular_file(e.path, ec);

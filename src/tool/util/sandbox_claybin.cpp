@@ -341,8 +341,8 @@ namespace {
         // Re-apply any mask that lives INSIDE the workspace, because the bind
         // above just remounted over it.
         //
-        // This is an ordering bug I shipped and then measured: masks are
-        // applied at line ~94, the workspace bind lands here, and a bind of
+        // This is an ordering bug I shipped and then measured: the masks are
+        // applied above, the workspace bind lands here, and a bind of
         // the workspace root covers every mount underneath it. So
         // `<workspace>/.env` was masked and then un-masked one line later,
         // and a planted .env came back readable IN FULL under both backends.
@@ -355,6 +355,15 @@ namespace {
         for (const auto& m : p.masked) {
             if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
         }
+
+        // Anchors next: a writable self-bind of each git dir (and, under the
+        // strict postures, each nested repo root) makes it a mount point, so
+        // `mv .git elsewhere` fails with EBUSY instead of carrying the
+        // read-only binds below off with it. Before those binds, or this one
+        // would cover them.
+        for (const auto& a : p.handoff_anchor)
+            if (a.starts_with(p.workspace) && a != p.workspace)
+                d = std::move(d).bind_try(a, a, /*ro=*/false);
 
         // Then the handoff binds, for exactly the same ordering reason: a
         // read-only bind of <workspace>/.vscode/tasks.json is covered by the
@@ -378,7 +387,7 @@ namespace {
         // Masks go last, after every bind. build_claybin_posture already
         // keeps masked paths out of handoff_ro; this makes the order itself
         // safe too, so no later bind can uncover a mask again.
-        if (!p.handoff_ro.empty())
+        if (!p.handoff_ro.empty() || !p.handoff_anchor.empty())
             for (const auto& m : p.masked)
                 if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
     }
