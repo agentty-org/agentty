@@ -246,6 +246,11 @@ std::size_t shutdown_running(const maya::unlocked&,
 // UI surfaces it; it is NOT blocked (its tools stay gated like any other).
 [[nodiscard]] std::string_view agent_origin(Io, std::string_view name) noexcept;
 
+// Whether a run of agent type `name` would be offered (and allowed to call)
+// the registered tool `tool`. Same gate the runner uses; false for unknown tools.
+[[nodiscard]] bool agent_tool_allowed(Io, std::string_view name,
+                                      std::string_view tool);
+
 } // namespace agentty::tools::subagent
 
 // The stream seams are util::Callback: set at install and called, never

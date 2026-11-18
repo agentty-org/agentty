@@ -303,11 +303,24 @@ public:
         return mem_root([&](const maya::unlocked& cap) { return memory::forget_by_id(cap, id); });
     }
     std::size_t forget_by_substring(const std::string& needle) override {
-        return mem_root([&](const maya::unlocked& cap) { return memory::forget_by_substring(cap, needle); });
+        return forget_by_substring_in(needle, {}).value_or(0);
     }
     std::vector<mt::MemoryRecord> preview_forget(const std::string& needle) override {
+        return preview_forget_in(needle, {}).value_or(std::vector<mt::MemoryRecord>{});
+    }
+    // Case-insensitive; `scope` empty = both. An unknown scope is nullopt.
+    std::optional<std::size_t>
+    forget_by_substring_in(const std::string& needle, const std::string& scope) override {
+        std::optional<memory::Scope> only;
+        if (!scope.empty()) { only = memory::parse_scope(scope); if (!only) return std::nullopt; }
+        return mem_root([&](const maya::unlocked& cap) { return memory::forget_by_substring(cap, needle, only); });
+    }
+    std::optional<std::vector<mt::MemoryRecord>>
+    preview_forget_in(const std::string& needle, const std::string& scope) override {
+        std::optional<memory::Scope> only;
+        if (!scope.empty()) { only = memory::parse_scope(scope); if (!only) return std::nullopt; }
         std::vector<mt::MemoryRecord> out;
-        for (const auto& r : mem_root([&](const maya::unlocked& cap) { return memory::preview_forget_by_substring(cap, needle); })) {
+        for (const auto& r : mem_root([&](const maya::unlocked& cap) { return memory::preview_forget_by_substring(cap, needle, only); })) {
             mt::MemoryRecord m;
             m.id     = r.id;
             m.text   = r.text;
@@ -650,6 +663,8 @@ struct AgentType {
     // task card surfaces "project agent" — not a block, just so an injected
     // persona is never invisible. Mirrors the plugins picker's scope badge.
     AgentOrigin                   origin = AgentOrigin::Builtin;
+    // Effective tool mode shown in the task result header (empty ⇒ none).
+    std::string_view              mode_note;
 };
 
 // ── User-defined agents (.agentty/agents/*.md) ─────────────────────
@@ -696,6 +711,18 @@ maya::published<const UserAgentStore>& user_agent_gen() {
     return *g;
 }
 
+// A project agent file is trusted when a human approved its exact bytes
+// (user-state approvals store, so a clone can't vouch for itself), or via
+// the AGENTTY_AGENTS_ALLOW_PROJECT opt-in — same shape as MCP's gate.
+bool project_agent_trusted(const std::string& raw) {
+    if (const char* e = std::getenv("AGENTTY_AGENTS_ALLOW_PROJECT");
+        e && (e[0] == '1' || e[0] == 't' || e[0] == 'T'
+           || e[0] == 'y' || e[0] == 'Y'))
+        return true;
+    return scope::load_approvals(::agentty::config::kAgentsApprovals)
+        .approved(scope::content_hash(raw));
+}
+
 // Frontmatter subset parser (same lenient rules as commands/skills).
 void parse_user_agent(const std::string& raw, const std::string& slug,
                       AgentOrigin origin, UserAgentStore& store) {
@@ -734,6 +761,25 @@ void parse_user_agent(const std::string& raw, const std::string& slug,
     at->name = store.owned.back();
     store.owned.push_back(std::move(body));
     at->role = store.owned.back();
+    // Least privilege for repo-shipped personas: an untrusted PROJECT agent
+    // is forced read-only; a trusted one gets write/exec only for tools it
+    // names in `tools:` (no allowlist ⇒ still read-only, no implicit set).
+    if (origin == AgentOrigin::Project) {
+        const bool trusted = project_agent_trusted(raw);
+        if (!trusted) {
+            read_only = true;
+            at->mode_note = "read-only (untrusted project agent)";
+        } else if (trim(tools_line).empty()) {
+            read_only = true;
+            at->mode_note = "read-only (trusted project agent, no tools: allowlist)";
+        } else if (!read_only) {
+            at->mode_note = "allowlist only (trusted project agent)";
+        }
+        AGT_LOG(Tool, Info, "subagent.project_agent", "agent={} trusted={} mode={}",
+                  slug, trusted ? 1 : 0,
+                  at->mode_note.empty() ? std::string_view{"read-only"}
+                                        : at->mode_note);
+    }
     at->read_only = read_only;
     at->model_role = read_only ? smart::ModelRole::Utility
                                : smart::ModelRole::Implementation;
@@ -2294,7 +2340,10 @@ public:
 
         std::ostringstream out;
         out << "Subagent report (" << type.name << ", " << turns << " turn"
-            << (turns == 1 ? "" : "s") << "):\n\n" << report;
+            << (turns == 1 ? "" : "s") << "):\n";
+        if (!type.mode_note.empty())
+            out << "tools: " << type.mode_note << "\n";
+        out << "\n" << report;
         return out.str();
     }
 };
@@ -2783,6 +2832,12 @@ std::string_view agent_origin(Io, std::string_view name) noexcept {
         case AgentOrigin::Builtin: break;
     }
     return "builtin";
+}
+
+bool agent_tool_allowed(Io, std::string_view name, std::string_view tool) {
+    const ResolvedAgent r = resolve_agent_type(name);
+    const auto def = tools::find(std::string{tool});
+    return def && subagent_tool_allowed(*def, *r, nullptr);
 }
 }  // namespace subagent
 

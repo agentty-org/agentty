@@ -107,6 +107,7 @@ inline constexpr dirs::Spec kFeedbackSpec{
 inline constexpr std::string_view kSkillsApprovals = "skills_approved.json";
 inline constexpr std::string_view kHooksApprovals  = "hooks_approved.json";
 inline constexpr std::string_view kMcpApprovals    = "mcp_approvals.json";
+inline constexpr std::string_view kAgentsApprovals = "agents_approved.json";
 
 // ── One concern, both halves ─────────────────────────────────────────────
 //

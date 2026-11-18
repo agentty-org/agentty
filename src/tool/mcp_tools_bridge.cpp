@@ -229,6 +229,12 @@ struct AgenttyHttpClient final : mt::HttpClient {
         mt::HttpResponse out;
         std::string url = in.url;
         std::vector<std::string> visited;
+        // Per-hop request state: a redirect may downgrade the method and must
+        // not carry credentials to a different origin (curl / fetch spec).
+        std::string method = in.method;
+        std::string body   = in.body;
+        std::vector<std::pair<std::string, std::string>> headers = in.headers;
+        std::string origin;   // host:port of the FIRST hop
 
         for (int hop = 0; hop <= kMaxRedirects; ++hop) {
             auto p = parse(url);
@@ -238,22 +244,32 @@ struct AgenttyHttpClient final : mt::HttpClient {
                 out.error  = "blocked host (SSRF guard): " + p.host;
                 return out;
             }
+            std::string here = p.host + ":" + std::to_string(p.port);
+            for (char& c : here) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (hop == 0) origin = here;
+            else if (here != origin)
+                std::erase_if(headers, [](const auto& kv) {
+                    std::string k = kv.first;
+                    for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    return k == "authorization" || k == "cookie" || k == "proxy-authorization"
+                        || k == "x-api-key" || k == "api-key";
+                });
 
             http::Request req;
-            req.method = (in.method == "POST") ? http::HttpMethod::Post
-                       : (in.method == "HEAD") ? http::HttpMethod::Head
-                                               : http::HttpMethod::Get;
+            req.method = (method == "POST") ? http::HttpMethod::Post
+                       : (method == "HEAD") ? http::HttpMethod::Head
+                                            : http::HttpMethod::Get;
             req.host = p.host;
             req.port = p.port;
             req.path = p.path;
-            req.body = in.body;
+            req.body = body;
             // Defense in depth: host_blocked() above rejects obvious internal
             // NAMES/literals fast, but a public hostname can DNS-rebind to an
             // internal IP that the name check can't see. ssrf_guard re-checks
             // the RESOLVED sockaddr at dial time and refuses loopback/private/
             // link-local/metadata targets — the authoritative backstop.
             req.ssrf_guard = true;
-            for (const auto& [k, v] : in.headers) req.headers.push_back({k, v});
+            for (const auto& [k, v] : headers) req.headers.push_back({k, v});
 
             http::Timeouts tos{
                 .connect = std::chrono::milliseconds(10'000),
@@ -274,7 +290,7 @@ struct AgenttyHttpClient final : mt::HttpClient {
             }
 
             // Manual redirect following (agentty's client doesn't auto-follow).
-            if (r->status >= 300 && r->status < 400 && in.method != "HEAD") {
+            if (r->status >= 300 && r->status < 400 && method != "HEAD") {
                 std::string loc;
                 for (const auto& h : r->headers)
                     if (h.name == "location") { loc = h.value; break; }
@@ -287,6 +303,17 @@ struct AgenttyHttpClient final : mt::HttpClient {
                         out.body   = std::move(r->body);
                         for (const auto& h : r->headers) out.headers.push_back({h.name, h.value});
                         return out;
+                    }
+                    // 301/302/303 turn a POST into a body-less GET (what every
+                    // browser and curl -L do); 307/308 keep method and body.
+                    if (method == "POST" && (r->status == 301 || r->status == 302 || r->status == 303)) {
+                        method = "GET";
+                        body.clear();
+                        std::erase_if(headers, [](const auto& kv) {
+                            std::string k = kv.first;
+                            for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                            return k == "content-type" || k == "content-length";
+                        });
                     }
                     url = std::move(nxt);
                     continue;

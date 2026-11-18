@@ -223,7 +223,44 @@ StoreLock& store() { static StoreLock f; return f; }
         out.push_back(static_cast<char>(c));
     }
     while (!out.empty() && out.back() == ' ') out.pop_back();
+    // Trailing punctuation is noise ("Use -j12." == "use -j12").
+    while (!out.empty() && (std::string_view{".,!?;:"}.find(out.back())
+                                != std::string_view::npos
+                            || out.back() == ' '))
+        out.pop_back();
     return out;
+}
+
+// Polarity of a normalised text: the multiset of negation markers. Two texts
+// dedup only when these match, so "always build with -j12" never folds into
+// "never build with -j12" however close the Jaro score is.
+[[nodiscard]] std::vector<std::string> negation_tokens(std::string_view norm) {
+    static constexpr std::string_view kNeg[] = {
+        "not", "never", "no", "don't", "dont", "avoid", "stop",
+        "doesn't", "isn't", "can't", "cannot", "won't", "shouldn't"};
+    std::vector<std::string> out;
+    std::string tok;
+    auto flush = [&] {
+        while (!tok.empty() && std::ispunct(static_cast<unsigned char>(tok.back()))
+               && tok.back() != '\'')
+            tok.pop_back();
+        for (auto n : kNeg) if (tok == n) { out.push_back(tok); break; }
+        tok.clear();
+    };
+    for (char c : norm) {
+        if (c == ' ') flush(); else tok.push_back(c);
+    }
+    flush();
+    // "do not" and "don't" are the same marker.
+    for (auto& t : out) if (t == "don't" || t == "dont") t = "not";
+    std::ranges::sort(out);
+    return out;
+}
+
+[[nodiscard]] std::string ascii_lower(std::string_view s) {
+    std::string o{s};
+    for (char& c : o) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    return o;
 }
 
 // Cheap similarity: prefix-bounded Jaro for short strings. Returns a
@@ -615,9 +652,11 @@ AppendResult append_locked(Files&, Scope actual_scope, std::string body,
     // and `deduped` flags the dedup for the caller.
     if (!opts.no_dedup) {
         const auto needle = normalise_for_dedup(body);
+        const auto needle_neg = negation_tokens(needle);
         for (auto& rec : existing) {
             if (rec.scope != actual_scope) continue;
             const auto hay = normalise_for_dedup(rec.text);
+            if (negation_tokens(hay) != needle_neg) continue;
             if (hay == needle
                 || jaro_similarity(hay, needle) >= 0.92) {
                 rec.ts = now_unix();
@@ -850,9 +889,11 @@ PromptSelection select_for_prompt(std::vector<Record> recent,
 namespace {
 // Drop every record matching `pred` from both scope files.
 template <class Pred>
-std::size_t remove_where(Files&, Pred pred) {
+std::size_t remove_where(Files&, Pred pred,
+                         std::optional<Scope> only = std::nullopt) {
     std::size_t removed = 0;
     for (auto s : {Scope::User, Scope::Project}) {
+        if (only && *only != s) continue;
         const auto p = path_for(s);
         if (p.empty()) continue;
         const persistence::FileLocks xlock({p});   // see the note on store()
@@ -879,13 +920,19 @@ std::size_t forget_by_id(const locks::below_memory_store& cap, std::string_view 
 
 std::size_t forget_by_substring(const locks::below_memory_store& cap,
                                 std::string_view needle) {
-    std::string want = trim(needle);
+    return forget_by_substring(cap, needle, std::nullopt);
+}
+
+std::size_t forget_by_substring(const locks::below_memory_store& cap,
+                                std::string_view needle,
+                                std::optional<Scope> only) {
+    std::string want = ascii_lower(trim(needle));
     if (want.empty()) return 0;
-    return store().with(cap, [](Files& f, std::string w) {
+    return store().with(cap, [](Files& f, std::string w, std::optional<Scope> only) {
         return remove_where(f, [&w](const Record& r) {
-            return r.text.find(w) != std::string::npos;
-        });
-    }, want);
+            return ascii_lower(r.text).find(w) != std::string::npos;
+        }, only);
+    }, want, only);
 }
 
 std::string render_for_prompt(const Record& r) {
@@ -928,19 +975,27 @@ std::optional<std::pair<Record, Scope>> find_by_id(const locks::below_memory_sto
 
 std::vector<Record> preview_forget_by_substring(const locks::below_memory_store& cap,
                                                 std::string_view needle) {
+    return preview_forget_by_substring(cap, needle, std::nullopt);
+}
+
+std::vector<Record> preview_forget_by_substring(const locks::below_memory_store& cap,
+                                                std::string_view needle,
+                                                std::optional<Scope> only) {
     std::vector<Record> out;
-    std::string want = trim(needle);
+    std::string want = ascii_lower(trim(needle));
     if (want.empty()) return out;
-    return store().with(cap, [](Files&, std::string w) {
+    return store().with(cap, [](Files&, std::string w, std::optional<Scope> only) {
         std::vector<Record> hits;
         for (auto s : {Scope::User, Scope::Project}) {
+            if (only && *only != s) continue;
             const auto p = path_for(s);
             if (p.empty()) continue;
             for (auto& r : read_records(p))
-                if (r.text.find(w) != std::string::npos) hits.push_back(std::move(r));
+                if (ascii_lower(r.text).find(w) != std::string::npos)
+                    hits.push_back(std::move(r));
         }
         return hits;
-    }, want);
+    }, want, only);
 }
 
 std::optional<std::size_t> wipe(const locks::below_memory_store& cap, Scope s) {

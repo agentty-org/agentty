@@ -1603,7 +1603,7 @@ void feed_sse(StreamCtx& ctx, const char* data, size_t len) {
         if (is_assistant_with_results(m))
             total_tool_results += static_cast<int>(m.tool_calls.size());
     int tool_results_emitted = 0;
-    const auto superseded = wire::superseded_read_ids(msgs);
+    const auto superseded = wire::supersede_reads(msgs);
     for (const auto& m : msgs) {
         const bool has_text  = !m.text.empty();
         const bool has_tools = is_assistant_with_results(m);
@@ -1650,8 +1650,9 @@ void feed_sse(StreamCtx& ctx, const char* data, size_t len) {
                 if (out.empty()) {
                     if (tc.is_rejected())       out = "(rejected by user)";
                     else if (!tc.is_terminal()) out = "(no output)";
-                } else if (!is_error && superseded.count(tc.id.value)) {
-                    out = std::string{wire::kSupersededReadPointer};
+                } else if (auto s = is_error ? std::nullopt
+                       : wire::render_superseded(superseded, tc, out, recency_rank)) {
+                    out = std::move(*s);
                 } else {
                     out = wire::cap_tool_result_aged(out, recency_rank, is_error);
                 }
@@ -2066,9 +2067,10 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
         if (is_assistant_with_results(m))
             total_tool_results += static_cast<int>(m.tool_calls.size());
     int tool_results_emitted = 0;
-    // Earlier reads whose file a later turn re-read/edited are collapsed to a
-    // one-line pointer instead of their full body — see wire::superseded_read_ids.
-    const auto superseded = wire::superseded_read_ids(t);
+    // Earlier reads a later read fully covers collapse to a pointer; reads a
+    // later edit made stale keep their body behind a banner — see
+    // wire::supersede_reads.
+    const auto superseded = wire::supersede_reads(t);
     const unsigned max_side = util::wire_max_side(wire::wire_image_count(t.messages));
     for (const auto& m : t.messages) {
         const bool has_text   = !m.text.empty();
@@ -2196,8 +2198,9 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
                 if (out.empty()) {
                     if (tc.is_rejected())      out = "(rejected by user)";
                     else if (!tc.is_terminal()) out = "(no output)";
-                } else if (!is_error && superseded.count(tc.id.value)) {
-                    out = std::string{wire::kSupersededReadPointer};
+                } else if (auto s = is_error ? std::nullopt
+                       : wire::render_superseded(superseded, tc, out, recency_rank)) {
+                    out = std::move(*s);
                 } else {
                     out = wire::cap_tool_result_aged(out, recency_rank, is_error);
                 }
@@ -2206,7 +2209,7 @@ json build_messages(const Thread& t, std::uint8_t reasoning_echo) {
                     {"tool_call_id", tc.id.value},
                     {"content", scrub_utf8(out)},
                 });
-                if (is_error || superseded.count(tc.id.value)) continue;
+                if (is_error || superseded.is_collapsed(tc.id.value)) continue;
                 for (const auto* imgp : wire::wire_tool_result_images(tc, max_side)) {
                     if (tool_images.empty())
                         tool_images.push_back({{"type", "text"},

@@ -4,20 +4,6 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- **git works in the sandbox again.** Commit, add, switch, rebase, stash and
-  gc failed under every preset, because git's own state files (`HEAD`,
-  `index`, `packed-refs`) were bound read-only. Only `.git/config`,
-  `.git/hooks` and `.git/info/attributes` are protected now, and files that
-  merely share a name (`src/hooks/`, `deploy/config`) are ordinary.
-- **https works under `hardened`.** Port-restricted network no longer points
-  tools at a proxy that is not running.
-- **Saving the Sandbox pane keeps resource limits it could not show.** On a
-  host where claybin cannot start, the locked memory, process, CPU and `/tmp`
-  rows were saved as 0 (or 512 MB), not as configured.
-- **Secret files under `vendor/` are masked.** The secret scan skipped
-  `vendor/`, where Go and PHP projects keep checked-in code.
-
 ### Added
 - **Environment variables setting** (Settings → Sandbox): `toolchain`
   (default), `essential` or `host`, plus a **Custom variables** list. A token
@@ -40,6 +26,28 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 - **A git `include.path` that does not exist yet is protected too.** git
   skips a missing include, so creating one later was a way to add a
   `hooksPath` without touching the protected config.
+- **`json_query` runs real jq.** A new engine implements the jq language
+  agents actually write: `select`, `map`, `..`, `//`, `?`, `reduce`/`foreach`,
+  `if`, `try`, `as $x`, string interpolation, `@csv`/`@tsv`/`@sh`/`@base64`,
+  assignment (`|=`, `+=`, `//=`), regex with named captures, and about 110
+  builtins. A conformance test diffs 300 queries against jq 1.8 byte for byte.
+  Step, depth, size and regex guards stop runaway queries.
+- **Multi-file `apply_patch`.** One call can add, update, move and delete
+  files, as a Codex-style `*** Begin Patch` envelope or a multi-file unified
+  diff. It is all-or-nothing, with rollback if a write fails.
+- **`shell` keeps going instead of being killed.** A command still running
+  at its timeout becomes a background session you can poll (`on_timeout:
+  "kill"` opts out). The maximum timeout is now 600 s. A `cd` carries over
+  to the next call, inside the workspace.
+- **Full logs for background processes.** Every `process_start` session
+  (and every `shell` command that outlives its timeout) has its complete
+  output in a private log file (0600, capped at 64 MiB, under
+  `$TMPDIR/agentty-proc-<uid>/`), so a build error that scrolls out of the
+  on-screen tail is still there. The host's pump writes it, so no byte is
+  missed between polls.
+- `web_search` takes `allowed_domains` / `blocked_domains`. `web_fetch` pages
+  long documents (`max_chars`, `start_char`) and serves repeat fetches in the
+  same session from a cache. `forget` takes a `scope`.
 
 ### Changed
 - **Upgrading changes what commands inherit.** A saved setup that matches a
@@ -49,6 +57,65 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   behaviour.
 - **Allowed ports and Allowed hosts show only where Access uses them**, and
   your lists are kept while hidden.
+- **Edits say how they matched.** `edit` and `apply_patch` report exact,
+  indentation-relative, whitespace-normalised or fuzzy (with a score) for
+  every change, and flag the inexact ones. A miss shows the closest real
+  lines. Fuzzy matching is stricter: 85% similarity unless a nearby `line`
+  hint is given, never for `replace_all`, never overlapping another edit, and
+  never on a file that changed since it was last read.
+- **`grep` uses smart case**, like `rg -S`: lowercase patterns ignore case,
+  and an uppercase letter makes the search exact.
+- **Edits no longer erase what the model just read.** A `read` followed by an
+  `edit` of the same file used to replace the read with a pointer to a later
+  read that didn't exist, so the model re-read files after every edit. Now the
+  read stays, marked stale. A read and an edit in the same parallel batch also
+  no longer hide the read before the model has seen it.
+- **`web_fetch` never sends pages to a third party on its own.** Rendering a
+  JavaScript page through r.jina.ai is now opt-in (`render: "jina"`), and it
+  is refused for URLs carrying tokens or naming internal hosts.
+- `process_start`, `test` and `diagnostics` get the same non-interactive
+  environment as `shell` (no pager, colour or git credential prompt).
+- **Project-defined subagents are read-only by default.** A `.agentty/agents`
+  file inside a cloned repo gets read-only tools until you trust it, and then
+  only the tools it lists.
+- `forget` matches case-insensitively, and "Always X" and "Never X" are no
+  longer merged as duplicates.
+
+### Security
+- Redirects now drop `Authorization`, `Cookie` and API-key headers when they
+  change origin, and a 301/302/303 turns a POST into a GET, as browsers do.
+  The per-hop SSRF check is unchanged.
+- `web_fetch` decodes Latin-1 and Windows-1252 pages instead of passing their
+  bytes through as replacement characters.
+
+### Changed (build)
+- **Building from source no longer needs babysitting.** Configure fetches any
+  missing submodules (pinned commits; never moves one you've checked out), so
+  a plain `git clone` builds. Ninja parallelism is now sized from RAM as well
+  as cores: a full `-j12` build had filled a 31 GB machine and thrashed swap.
+  It now peaks around 20 GB. Override with `AGENTTY_COMPILE_JOBS` /
+  `AGENTTY_LINK_JOBS`. The new `scripts/build.sh` builds at `-j12` by default
+  (`AGENTTY_BUILD_JOBS` overrides) and locks the build tree, so two
+  builds of one tree take turns instead of tearing `.ninja_deps`. A torn file
+  made ninja rebuild the same objects on every run. The script also repairs
+  the logs after an interrupted build. `resync.sh` now builds through it at
+  `-j12` as well.
+
+### Fixed
+- **git works in the sandbox again.** Commit, add, switch, rebase, stash and
+  gc failed under every preset, because git's own state files (`HEAD`,
+  `index`, `packed-refs`) were bound read-only. Only `.git/config`,
+  `.git/hooks` and `.git/info/attributes` are protected now, and files that
+  merely share a name (`src/hooks/`, `deploy/config`) are ordinary.
+- **https works under `hardened`.** Port-restricted network no longer points
+  tools at a proxy that is not running.
+- **Saving the Sandbox pane keeps resource limits it could not show.** On a
+  host where claybin cannot start, the locked memory, process, CPU and `/tmp`
+  rows were saved as 0 (or 512 MB), not as configured.
+- **Secret files under `vendor/` are masked.** The secret scan skipped
+  `vendor/`, where Go and PHP projects keep checked-in code.
+- Removed an unused MCP tool-route helper that produced a `-Wunused-function`
+  warning in every build.
 
 ## [0.9.57] - 2026-11-16
 

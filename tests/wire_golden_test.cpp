@@ -142,7 +142,9 @@ TEST_CASE("wire_golden") {
     // 3. Byte-identity: the exact serialization is pinned. A refactor that
     //    changes even one byte trips this. Update kGoldenHash ONLY after
     //    confirming the change is intentional.
-    const std::uint64_t kGoldenHash = 0x172e2b86aae44ee2ull;
+    // 0x9bf2…: kSupersededReadPointer reworded (it now only means "a later
+    // read carries these lines").
+    const std::uint64_t kGoldenHash = 0x9bf20319b3a50f14ull;
     const std::uint64_t got = fnv1a(wire);
 
     if (kGoldenHash == 0) {

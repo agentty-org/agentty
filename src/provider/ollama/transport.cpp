@@ -1209,7 +1209,7 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
         if (is_assistant_with_results(m))
             total_tool_results += static_cast<int>(m.tool_calls.size());
     int tool_results_emitted = 0;
-    const auto superseded = wire::superseded_read_ids(msgs);
+    const auto superseded = wire::supersede_reads(msgs);
     // Per-side image ceiling for THIS request (see wire::wire_image_count):
     // the many-image rule counts blocks across the whole request, so the cap
     // is derived once here rather than per message.
@@ -1243,8 +1243,9 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
                 if (out.empty()) {
                     if (tc.is_rejected())       out = "(rejected by user)";
                     else if (!tc.is_terminal()) out = "(no output)";
-                } else if (!is_error && superseded.count(tc.id.value)) {
-                    out = std::string{wire::kSupersededReadPointer};
+                } else if (auto s = is_error ? std::nullopt
+                       : wire::render_superseded(superseded, tc, out, recency_rank)) {
+                    out = std::move(*s);
                 } else {
                     out = wire::cap_tool_result_aged(out, recency_rank, is_error);
                 }
@@ -1292,8 +1293,9 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
                 if (out.empty()) {
                     if (tc.is_rejected())       out = "(rejected by user)";
                     else if (!tc.is_terminal()) out = "(no output)";
-                } else if (!is_error && superseded.count(tc.id.value)) {
-                    out = std::string{wire::kSupersededReadPointer};
+                } else if (auto s = is_error ? std::nullopt
+                       : wire::render_superseded(superseded, tc, out, recency_rank)) {
+                    out = std::move(*s);
                 } else {
                     out = wire::cap_tool_result_aged(out, recency_rank, is_error);
                 }

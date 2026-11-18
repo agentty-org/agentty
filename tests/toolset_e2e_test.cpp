@@ -37,6 +37,7 @@
 #include "agentty/tool/spec.hpp"
 #include "agentty/tool/tool.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
+#include "agentty/util/user_root.hpp"
 #include "agtest_cap.hpp"
 
 namespace fs = std::filesystem;
@@ -865,6 +866,104 @@ int main() {
               "agent provenance: a built-in agent is 'builtin' (no tag)");
         check(sub::agent_origin(agentty::IoAccess::grant(), "nonexistent") == "builtin",
               "agent provenance: an unknown name is 'builtin' (safe default)");
+        fs::current_path(prev_cwd);
+    }
+
+    // ── memory store: dedup polarity, forget case, supersede, concurrency ──
+    {
+        namespace mem = tools::memory;
+        const auto U = mem::Scope::User;
+        auto with = [](auto&& f) { return maya::thread_root(f); };
+        (void)with([&](const maya::unlocked& c) { return mem::wipe(c, U); });
+        auto a1 = with([&](const maya::unlocked& c) {
+            return mem::append(c, U, "Always build with -j12"); });
+        auto a2 = with([&](const maya::unlocked& c) {
+            return mem::append(c, U, "Never build with -j12"); });
+        check(a1.error.empty() && a2.error.empty() && !a2.deduped && a1.id != a2.id,
+              "memory: negation does not dedup");
+        auto a3 = with([&](const maya::unlocked& c) {
+            return mem::append(c, U, "  always   BUILD with -j12. "); });
+        check(a3.deduped && a3.id == a1.id,
+              "memory: case/punctuation/whitespace dedup");
+        auto a4 = with([&](const maya::unlocked& c) {
+            return mem::append(c, U, "Do not build with -j12"); });
+        check(!a4.deduped, "memory: 'do not' vs 'always' does not dedup");
+        const auto before = with([&](const maya::unlocked& c) {
+            return mem::load_all(c, U).size(); });
+        mem::AppendOptions so; so.supersedes_id = "deadbeef";
+        auto a5 = with([&](const maya::unlocked& c) {
+            return mem::append(c, U, "Fresh fact about tabs", so); });
+        const auto after = with([&](const maya::unlocked& c) {
+            return mem::load_all(c, U).size(); });
+        check(a5.error.empty() && !a5.note.empty() && after == before + 1,
+              "memory: unknown supersedes writes once and notes the miss");
+        const auto n = with([&](const maya::unlocked& c) {
+            return mem::forget_by_substring(c, "FRESH FACT"); });
+        check(n == 1, "memory: forget is case-insensitive");
+        const auto pv = with([&](const maya::unlocked& c) {
+            return mem::preview_forget_by_substring(c, "NEVER BUILD WITH -J12", mem::Scope::Project); });
+        const auto pu = with([&](const maya::unlocked& c) {
+            return mem::preview_forget_by_substring(c, "NEVER BUILD WITH -J12", U); });
+        check(pv.empty() && pu.size() == 1, "memory: scoped preview skips other scope");
+        // Two threads appending distinct facts lose nothing.
+        (void)with([&](const maya::unlocked& c) { return mem::wipe(c, U); });
+        auto worker = [&](int t) {
+            for (int i = 0; i < 20; ++i)
+                (void)maya::thread_root([&](const maya::unlocked& c) {
+                    mem::AppendOptions o; o.no_dedup = true;
+                    return mem::append(c, U, "thread " + std::to_string(t)
+                                           + " record " + std::to_string(i), o);
+                });
+        };
+        std::thread t1(worker, 1), t2(worker, 2);
+        t1.join(); t2.join();
+        const auto total = with([&](const maya::unlocked& c) {
+            return mem::load_all(c, U).size(); });
+        check(total == 40, "memory: concurrent appends lose no records (got "
+                               + std::to_string(total) + ")");
+        (void)with([&](const maya::unlocked& c) { return mem::wipe(c, U); });
+    }
+
+    // ── project agents: least privilege ──────────────────────────────────
+    {
+        namespace sub = tools::subagent;
+        auto io = agentty::IoAccess::grant();
+        auto prev_cwd = fs::current_path();
+        const fs::path proj = root / "agent_proj";
+        fs::create_directories(proj);
+        fs::current_path(proj);
+        ::unsetenv("AGENTTY_AGENTS_ALLOW_PROJECT");
+        // Untrusted project agent asking for write tools → read-only.
+        write_file(proj / ".agentty" / "agents" / "pwn.md",
+                   "---\ntools: read edit shell\n---\nYour role: write.\n");
+        check(sub::agent_tool_allowed(io, "pwn", "read"),
+              "project agent: untrusted keeps read tools");
+        check(!sub::agent_tool_allowed(io, "pwn", "edit"),
+              "project agent: untrusted is read-only (no edit)");
+        check(!sub::agent_tool_allowed(io, "pwn", "shell"),
+              "project agent: untrusted is read-only (no shell)");
+        // Trusted + declared edit → edit, nothing more.
+        ::setenv("AGENTTY_AGENTS_ALLOW_PROJECT", "1", 1);
+        write_file(proj / ".agentty" / "agents" / "trusted.md",
+                   "---\ntools: read edit\n---\nYour role: edit.\n");
+        check(sub::agent_tool_allowed(io, "trusted", "edit"),
+              "project agent: trusted gets its declared edit");
+        check(!sub::agent_tool_allowed(io, "trusted", "shell"),
+              "project agent: trusted gets nothing undeclared");
+        write_file(proj / ".agentty" / "agents" / "nolist.md",
+                   "---\ndescription: x\n---\nYour role: x.\n");
+        check(!sub::agent_tool_allowed(io, "nolist", "edit"),
+              "project agent: trusted without allowlist stays read-only");
+        ::unsetenv("AGENTTY_AGENTS_ALLOW_PROJECT");
+        // User agent: unchanged (no allowlist ⇒ full write set).
+        const fs::path uroot = agentty::util::user_root() / "agents";
+        write_file(uroot / "mine.md", "---\ndescription: u\n---\nYour role: u.\n");
+        check(sub::agent_origin(io, "mine") == "user",
+              "user agent: discovered as user");
+        check(sub::agent_tool_allowed(io, "mine", "edit"),
+              "user agent: unchanged, write tools available");
+        std::error_code ec;
+        fs::remove(uroot / "mine.md", ec);
         fs::current_path(prev_cwd);
     }
 

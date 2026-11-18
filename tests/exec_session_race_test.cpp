@@ -37,7 +37,7 @@ claybin_backend::SpawnResult spawn_in_sandbox(const std::vector<std::string>&, s
                                               int, const std::vector<std::string>&,
                                               const handoff::TrustedSnapshot*,
                                               const std::vector<std::pair<std::string, std::string>>&,
-                                              int, int) {
+                                              int /*err_fd*/, int /*in_fd*/) {
     return {};
 }
 #if defined(__APPLE__)

@@ -243,9 +243,11 @@ void write_tool_use_block(std::string& out, const ToolUse& tc, CachePin pin) {
 // head+tail cap itself — lives once in wire::cap_tool_result_aged (shared by
 // all three transports). `recency_rank` is 0 for the newest terminal tool
 // result in the thread and grows toward the oldest.
+enum class ReadFate { Live, Collapsed, Stale };
+
 void write_tool_result_block(std::string& out, const ToolUse& tc,
                              CachePin pin, int recency_rank,
-                             bool superseded, unsigned max_side) {
+                             ReadFate superseded, unsigned max_side) {
     out.push_back('{');
     bool first = true;
     json_write_field(out, "type", "tool_result", first);
@@ -268,17 +270,21 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
             first);
     } else if (raw_output.empty()) {
         json_write_field(out, "content", "(no output)", first);
-    } else if (superseded) {
-        // A LATER turn read/edited/wrote this same file, so this earlier
-        // read's body is stale — the model already has fresher state for it.
-        // Collapse it to a deterministic one-line pointer NOW instead of
-        // waiting for age-fading (kFullResultWindow turns) to shrink it. In a
-        // read-heavy coding loop the same files get touched repeatedly, so
-        // this reclaims the single largest source of dead wire weight. The
-        // pointer text is FIXED (no byte counts / positions) so a given
-        // superseded read always serialises identically — no cache churn.
+    } else if (superseded == ReadFate::Collapsed) {
+        // A LATER read of this same file carried every line this one did, so
+        // this body is redundant on the wire. Collapse it to a deterministic
+        // one-line pointer NOW instead of waiting for age-fading
+        // (kFullResultWindow turns) to shrink it. The pointer text is FIXED
+        // (no byte counts / positions) so a given superseded read always
+        // serialises identically — no cache churn.
         json_write_field(out, "content",
             std::string{wire::kSupersededReadPointer}, first);
+    } else if (superseded == ReadFate::Stale) {
+        // A later edit changed the file. Keep the (aged) body: the edit result
+        // is a diff, so this may be the only copy of the untouched lines.
+        std::string body{wire::kStaleReadBanner};
+        body += wire::cap_tool_result_aged(raw_output, recency_rank, false);
+        json_write_field(out, "content", wire::scrub_utf8(body), first);
     } else if (const auto refs = wire::tool_search_references(tc); !refs.empty()) {
         // tool_search on the Anthropic wire: answer with tool_reference
         // blocks, which the API expands into the deferred tools' schemas
@@ -348,11 +354,11 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
 
 [[nodiscard]] std::string messages_json_string(const Thread& t,
                                                bool include_thinking) {
-    // Read-collapse analysis: earlier reads whose file a later turn touched
-    // again are stale on the wire and get a one-line pointer instead of their
-    // full body (see wire::superseded_read_ids). Deterministic, so it never
+    // Read-collapse analysis (see wire::supersede_reads): earlier reads that a
+    // later read fully covers collapse to a pointer; reads a later edit made
+    // stale keep their body behind a banner. Deterministic, so it never
     // churns the prompt cache.
-    const auto superseded = wire::superseded_read_ids(t);
+    const auto superseded = wire::supersede_reads(t);
 
     // The many-image ceiling is a property of the REQUEST, not of any single
     // picture, so it is computed once here over the whole thread and passed
@@ -635,9 +641,12 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
                 const int recency_rank =
                     total_tool_results - 1 - tool_results_emitted;
                 ++tool_results_emitted;
-                const bool is_superseded = superseded.count(tc.id.value) != 0;
+                const ReadFate fate = superseded.is_collapsed(tc.id.value)
+                    ? ReadFate::Collapsed
+                    : superseded.is_stale(tc.id.value) ? ReadFate::Stale
+                                                       : ReadFate::Live;
                 write_tool_result_block(out, tc, pin_if_last(do_pin, last_block),
-                                        recency_rank, is_superseded, max_side);
+                                        recency_rank, fate, max_side);
             }
             out.append("]}");
         }

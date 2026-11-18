@@ -208,12 +208,19 @@ struct PromptSelection {
 // a stray `forget {}` doesn't nuke everything.
 [[nodiscard]] std::size_t forget_by_substring(const locks::below_memory_store& cap,
                                               std::string_view needle);
+// Same, case-insensitive (ASCII), limited to one scope when `only` is set.
+[[nodiscard]] std::size_t forget_by_substring(const locks::below_memory_store& cap,
+                                              std::string_view needle,
+                                              std::optional<Scope> only);
 
 // Preview a substring forget without writing. Returns the records
 // that WOULD be removed. Used by the `forget` tool's `dry_run` path
 // so the model can confirm a non-trivial wipe before committing.
 [[nodiscard]] std::vector<Record> preview_forget_by_substring(
     const locks::below_memory_store& cap, std::string_view needle);
+[[nodiscard]] std::vector<Record> preview_forget_by_substring(
+    const locks::below_memory_store& cap, std::string_view needle,
+    std::optional<Scope> only);
 
 // Wipe an entire scope. The hard "start afresh on this codebase"
 // switch — removes every record in the scope file (the file itself is

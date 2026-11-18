@@ -945,12 +945,13 @@ TEST_CASE("wire body golden") {
     CHECK(wire.find("content was dropped to save context") != std::string::npos);
     CHECK(wire.find("SECOND_") != std::string::npos);     // live read full
 
-    constexpr std::uint64_t kGolden = 0x945cece785ad177full;
+    // 0x070b…: kSupersededReadPointer reworded.
+    constexpr std::uint64_t kGolden = 0x070bc41b9813cd53ull;
     const std::uint64_t got = oll_fnv1a(wire);
-    if (kGolden == 0)
+    if (kGolden == 0 || got != kGolden)
         std::fprintf(stderr, "OLLAMA wire golden = 0x%016llxull (len=%zu)\n",
                      static_cast<unsigned long long>(got), wire.size());
-    else
+    if (kGolden != 0)
         CHECK(got == kGolden);
 }
 

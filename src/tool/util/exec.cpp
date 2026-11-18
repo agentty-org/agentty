@@ -39,8 +39,10 @@
 
 #if !defined(_WIN32)
 #  include <fcntl.h>
+#  include <sys/stat.h>    // FullLog: mkdir/lstat
 #  include <unistd.h>
 #  include <cerrno>
+#  include <cstdint>
 #  include <cstdlib>      // mkstemp
 #  include <filesystem>
 #endif
@@ -354,19 +356,123 @@ std::optional<std::chrono::seconds> env_wall_override() {
 class JaalSession;   // below
 
 namespace session_detail {
+class FullLog;
 // What the sandbox handed back with the child: the seccomp listener the pump
-// must answer, and cgroup.kill. Empty when there's no sandbox.
+// must answer, and cgroup.kill. Empty when there's no sandbox. Plus the
+// session's full-output log, which only the pump writes.
 struct SandboxHooks {
     int                   supervisor_fd = -1;
     std::function<bool()> service_broker;   // answer one notification
     std::function<bool()> kill_tree;        // false = fall back to the group
     std::shared_ptr<void> keepalive;        // the sandbox's own resources
+    std::shared_ptr<FullLog> log;           // pump-only after the move
+};
+
+// A background session's complete output, for when the bounded window the
+// model polls has scrolled (process_start / shell's soft timeout ask for it
+// with ExecRequest::keep_full_log). Lives in $TMPDIR/agentty-proc-<uid>/
+// (0700, owner-checked), one 0600 file per session, capped at 64 MiB with a
+// marker. Opened by the handle BEFORE the pump starts; after that only the
+// pump appends, so there is no lock. At most 32 logs are kept, and none
+// older than a day: pruned whenever a new one opens.
+class FullLog {
+  public:
+    static constexpr std::size_t kCap = 64u * 1024u * 1024u;
+
+    FullLog() = default;
+    FullLog(const FullLog&) = delete;
+    FullLog& operator=(const FullLog&) = delete;
+    ~FullLog() {
+#if !defined(_WIN32)
+        if (fd_ >= 0) ::close(fd_);
+#endif
+    }
+
+    void open() {
+#if !defined(_WIN32)
+        std::error_code ec;
+        const auto base = std::filesystem::temp_directory_path(ec);
+        if (ec || base.empty()) return;
+        const auto dir = base / ("agentty-proc-" + std::to_string(::getuid()));
+        ::mkdir(dir.c_str(), 0700);
+        struct stat st{};
+        // Refuse a directory someone else planted (or a symlink to one).
+        if (::lstat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != ::getuid()) return;
+        ::chmod(dir.c_str(), 0700);
+        prune(dir);
+        // Unique without shared state: pid + this object's address + a clock
+        // tick, and O_EXCL settles any collision (try the next suffix).
+        const auto tick = static_cast<unsigned long long>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        const auto self = reinterpret_cast<std::uintptr_t>(this);
+        for (int attempt = 0; attempt < 8 && fd_ < 0; ++attempt) {
+            char name[96];
+            std::snprintf(name, sizeof name, "%ld-%llx-%lx-%d.log", static_cast<long>(::getpid()),
+                          tick, static_cast<unsigned long>(self), attempt);
+            const auto p = dir / name;
+            fd_ = ::open(p.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+            if (fd_ >= 0) path_ = p.string();
+        }
+#endif
+    }
+
+    // Pump thread only.
+    void append(std::string_view s) noexcept {
+#if !defined(_WIN32)
+        if (fd_ < 0 || capped_ || s.empty()) return;
+        const std::size_t room = kCap - written_;
+        const std::size_t n = std::min(room, s.size());
+        write_all(s.substr(0, n));
+        written_ += n;
+        if (n < s.size()) {
+            write_all("\n[log truncated at 64 MiB]\n");
+            capped_ = true;
+        }
+#else
+        (void)s;
+#endif
+    }
+
+    [[nodiscard]] std::string path() const { return path_; }
+
+  private:
+#if !defined(_WIN32)
+    void write_all(std::string_view s) noexcept {
+        while (!s.empty()) {
+            const auto w = ::write(fd_, s.data(), s.size());
+            if (w < 0 && errno == EINTR) continue;
+            if (w <= 0) { capped_ = true; return; }   // disk full etc.: stop, don't spin
+            s.remove_prefix(static_cast<std::size_t>(w));
+        }
+    }
+    static void prune(const std::filesystem::path& dir) {
+        std::error_code ec;
+        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> logs;
+        const auto now = std::filesystem::file_time_type::clock::now();
+        for (auto it = std::filesystem::directory_iterator(dir, ec);
+             !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+            if (it->path().extension() != ".log") continue;
+            const auto t = std::filesystem::last_write_time(it->path(), ec);
+            if (ec) { ec.clear(); continue; }
+            if (now - t > std::chrono::hours{24}) std::filesystem::remove(it->path(), ec);
+            else logs.emplace_back(t, it->path());
+        }
+        std::sort(logs.begin(), logs.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        for (std::size_t i = 31; i < logs.size(); ++i) std::filesystem::remove(logs[i].second, ec);
+    }
+#endif
+    int         fd_ = -1;
+    std::string path_;
+    std::size_t written_ = 0;
+    bool        capped_ = false;
 };
 }  // namespace session_detail
 }  // namespace
 }  // namespace agentty::tools::util
 // Moved once into the pump, never shared: the closures own what they
-// capture (the listener and the cgroup, by shared_ptr only they hold).
+// capture (the listener and the cgroup, by shared_ptr only they hold), and
+// the FullLog is created by the constructor and dropped by it before the
+// pump starts, so the pump holds the only reference.
 MAYA_SENDABLE(agentty::tools::util::session_detail::SandboxHooks);
 namespace agentty::tools::util {
 namespace {
@@ -432,7 +538,18 @@ namespace {
 /// a leaf lock is the only thing it touches.
 class JaalSession final : public mt::Session {
   public:
-    JaalSession(process_t p, std::size_t window, session_detail::SandboxHooks hooks = {}) {
+    JaalSession(process_t p, std::size_t window, session_detail::SandboxHooks hooks = {},
+                bool keep_full_log = false) {
+        // The log is opened here, before the pump exists, and moved into it
+        // with the hooks: from then on only the pump writes the file.
+        if (keep_full_log) {
+            hooks.log = std::make_shared<session_detail::FullLog>();
+            hooks.log->open();
+            maya::thread_root([&](const maya::unlocked& c) {
+                core_->s.with(c, [](Stream& s, std::string lp) { s.log_path = std::move(lp); },
+                              hooks.log->path());
+            });
+        }
         // Core owns the reactor: the handle and the pump both co-own Core,
         // so the reactor (and the eventfd behind its waker) lives until the
         // last of them is gone. stop() can never wake a closed fd. It is
@@ -486,6 +603,12 @@ class JaalSession final : public mt::Session {
         core_->reactor.wake();
     }
 
+    [[nodiscard]] std::string log_path() const override {
+        return maya::thread_root([&](const maya::unlocked& c) {
+            return core_->s.with(c, [](const Stream& s) { return s.log_path; });
+        });
+    }
+
   private:
     // The pump's reactor: see PumpReactor above the class.
     using PumpKey = session_detail::PumpKey;
@@ -503,6 +626,7 @@ class JaalSession final : public mt::Session {
         bool         ended = false;     // child reaped
         mt::ExecOutcome outcome = mt::Exited{0};
         clock_t_::time_point ended_at{};
+        std::string  log_path;          // full-output log; set once at construction
 
         [[nodiscard]] bool fresh() const noexcept { return base + window.size() > seen; }
 
@@ -636,9 +760,11 @@ class JaalSession final : public mt::Session {
                     bool lost = false, closed = false;
                     if (auto h = proc.stdout_handle())
                         drain_into(*h, chunk, std::numeric_limits<std::size_t>::max(), lost, &closed);
-                    if (!chunk.empty())
+                    if (!chunk.empty()) {
+                        if (hooks.log) hooks.log->append(chunk);
                         core->s.with(cap, [](Stream& s, std::string c) { s.append(c); },
                                      std::move(chunk));
+                    }
                     // Drained and closed: stop watching, or the reactor
                     // reports the hangup on every wait and the loop spins.
                     if (closed) { out_reg.reset(); eof = true; }
@@ -793,7 +919,7 @@ class JaalExec final : public mt::Exec {
             std::make_shared<JaalSession>(std::move(st->proc),
                                           req.max_output_bytes.value_or(
                                               d_.max_output_bytes),
-                                          std::move(hooks)));
+                                          std::move(hooks), req.keep_full_log));
     }
 
     [[nodiscard]] bool stops_whole_tree() const noexcept override {

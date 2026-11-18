@@ -2200,12 +2200,14 @@ TEST_CASE("test_wire_body_golden") {
     CHECK(wire.find("content was dropped to save context") != std::string::npos);  // pointer text present
     CHECK(wire.find("SECOND_") != std::string::npos);     // live read full
 
-    constexpr std::uint64_t kGolden = 0x5cbfe9a39e038624ull;
+    // 0xa67d…: kSupersededReadPointer reworded (pointer now means only "a
+    // later read carries these lines").
+    constexpr std::uint64_t kGolden = 0xa67dc7ee4e4ce018ull;
     const std::uint64_t got = fnv1a(wire);
-    if (kGolden == 0)
+    if (kGolden == 0 || got != kGolden)
         std::fprintf(stderr, "OPENAI wire golden = 0x%016llxull (len=%zu)\n",
                      static_cast<unsigned long long>(got), wire.size());
-    else
+    if (kGolden != 0)
         CHECK(got == kGolden);
 }
 

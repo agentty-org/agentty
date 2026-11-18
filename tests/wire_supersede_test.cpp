@@ -54,11 +54,36 @@ std::string unchanged_sentinel() {
            "tool_result in this conversation is still current.";
 }
 
+// One call per assistant turn, then a closing assistant turn, so every result
+// has been in front of the model at least once: the realistic sequential loop.
 std::vector<Message> thread_of(std::vector<ToolUse> calls) {
+    std::vector<Message> out;
+    for (auto& c : calls) {
+        Message m;
+        m.role = Role::Assistant;
+        m.tool_calls.push_back(std::move(c));
+        out.push_back(std::move(m));
+    }
+    Message tail;
+    tail.role = Role::Assistant;
+    tail.text = "done";
+    out.push_back(std::move(tail));
+    return out;
+}
+
+// All calls in ONE assistant message: a parallel batch.
+Message batch_of(std::vector<ToolUse> calls) {
     Message m;
     m.role = Role::Assistant;
     m.tool_calls = std::move(calls);
-    return {std::move(m)};
+    return m;
+}
+
+Message assistant_text(const char* t) {
+    Message m;
+    m.role = Role::Assistant;
+    m.text = t;
+    return m;
 }
 
 // THE invariant: some surviving result still carries the bytes.
@@ -164,15 +189,24 @@ TEST_CASE("supersede: a real re-read still collapses the older one") {
     CHECK(body_survives(msgs, "new contents"));
 }
 
-TEST_CASE("supersede: an edit still collapses the pre-edit read") {
-    // An edit genuinely invalidates the old body, whatever it contained, so
-    // this collapse is correct even though the edit result carries no file
-    // bytes of its own.
+TEST_CASE("supersede: an edit marks the pre-edit read stale but keeps its body") {
+    // The edit result is a diff, not the file. Collapsing the read (the old
+    // behaviour) left the model with no copy of the untouched lines, so it
+    // re-read the file after every edit. Now the body stays, flagged stale.
     auto msgs = thread_of({
         read_call("c1", "/w/f.txt", "before the edit\n"),
         edit_call("c2", "/w/f.txt"),
     });
-    CHECK(wire::superseded_read_ids(msgs).contains("c1"));
+    const auto s = wire::supersede_reads(msgs);
+    CHECK_FALSE(s.is_collapsed("c1"));
+    CHECK(s.is_stale("c1"));
+    CHECK(body_survives(msgs, "before the edit"));
+
+    const auto& tc = msgs[0].tool_calls[0];
+    const auto wired = wire::render_superseded(s, tc, tc.output(), 0);
+    REQUIRE(wired.has_value());
+    CHECK(wired->starts_with(wire::kStaleReadBanner));
+    CHECK(wired->find("before the edit") != std::string::npos);
 }
 
 TEST_CASE("supersede: three reads keep exactly the newest body") {
@@ -349,7 +383,7 @@ TEST_CASE("supersede: a past-the-end read carries nothing and collapses nothing"
     CHECK(body_survives(msgs, "the entire file"));
 }
 
-TEST_CASE("supersede: an edit collapses every live window of the file") {
+TEST_CASE("supersede: an edit marks every live window of the file stale") {
     // Range doesn't enter into it: the file changed, so every earlier body is
     // stale whatever slice it held.
     auto msgs = thread_of({
@@ -358,19 +392,20 @@ TEST_CASE("supersede: an edit collapses every live window of the file") {
         edit_call("c3", "/w/f.txt"),
     });
 
-    const auto dead = wire::superseded_read_ids(msgs);
-    CHECK(dead.contains("c1"));
-    CHECK(dead.contains("c2"));
+    const auto s = wire::supersede_reads(msgs);
+    CHECK(s.is_stale("c1"));
+    CHECK(s.is_stale("c2"));
+    CHECK(s.collapsed.empty());
 }
 
-TEST_CASE("supersede: an edit collapses a read spelled with a different path") {
+TEST_CASE("supersede: an edit marks a read spelled with a different path stale") {
     // The compare is on strings, so the two spellings have to normalise to
     // one. Otherwise the wire serves pre-edit bytes as if they were current.
     auto msgs = thread_of({
         read_call("c1", "/w/sub/../f.txt", "before the edit\n"),
         edit_call("c2", "/w/f.txt"),
     });
-    CHECK(wire::superseded_read_ids(msgs).contains("c1"));
+    CHECK(wire::supersede_reads(msgs).is_stale("c1"));
 }
 
 TEST_CASE("supersede: an unparsable footer falls back to the args") {
@@ -406,7 +441,7 @@ TEST_CASE("supersede: a file that QUOTES the sentinel still counts as a body") {
     CHECK(wire::read_result_has_body(quoting));
 
     auto msgs = thread_of({std::move(quoting), edit_call("c2", "/w/wire_supersede.hpp")});
-    CHECK_MESSAGE(wire::superseded_read_ids(msgs).contains("c1"),
+    CHECK_MESSAGE(wire::supersede_reads(msgs).is_stale("c1"),
                   "the edit must still invalidate it");
 }
 
@@ -434,4 +469,85 @@ TEST_CASE("supersede: a tail read has no absolute span, so it is left alone") {
     });
     CHECK(wire::superseded_read_ids(msgs).empty());
     CHECK(body_survives(msgs, "the last fifty"));
+}
+
+// ── same-batch reads ─────────────────────────────────────────────────────────────────
+//
+// THE THIRD BUG, hit live: a `read` and an `edit` (or a wider `read`) of one
+// file issued in the SAME parallel batch. The batch's results reach the model
+// together, on the next request, and that request already carried the
+// pointer, so the model never saw the bytes at all.
+
+ToolUse failed_edit(const char* id, const char* path) {
+    ToolUse tc = edit_call(id, path);
+    tc.status = ToolUse::Failed{{}, {}, "old_text not found"};
+    return tc;
+}
+
+TEST_CASE("supersede: an unseen batch never collapses or stales its own read") {
+    std::vector<Message> msgs{batch_of({
+        window_read("c1", "/w/f.txt", 150, 160, 400, "inner\n"),
+        read_call("c2", "/w/f.txt", "whole file\n"),
+        edit_call("c3", "/w/f.txt"),
+    })};
+    const auto s = wire::supersede_reads(msgs);
+    CHECK_MESSAGE(s.collapsed.empty(),
+                  "the model has not seen c1 yet: it must arrive in full");
+    CHECK(s.stale.empty());
+    CHECK(body_survives(msgs, "inner"));
+}
+
+TEST_CASE("supersede: a batch becomes eligible once a later turn exists") {
+    // Same batch, but the model has since replied, so it has seen every
+    // result once and the redundant copy can go.
+    std::vector<Message> msgs{
+        batch_of({
+            window_read("c1", "/w/f.txt", 150, 160, 400, "inner\n"),
+            read_call("c2", "/w/f.txt", "whole file\n"),
+        }),
+        assistant_text("looked at both"),
+    };
+    const auto s = wire::supersede_reads(msgs);
+    CHECK(s.is_collapsed("c1"));
+    CHECK_FALSE(s.is_collapsed("c2"));
+}
+
+TEST_CASE("supersede: a read from an EARLIER turn still collapses immediately") {
+    // Cross-turn is unchanged: the earlier read was already seen.
+    std::vector<Message> msgs{
+        batch_of({read_call("c1", "/w/f.txt", "v1\n")}),
+        batch_of({read_call("c2", "/w/f.txt", "v2\n")}),
+    };
+    CHECK(wire::supersede_reads(msgs).is_collapsed("c1"));
+}
+
+TEST_CASE("supersede: a failed edit changes nothing, so nothing goes stale") {
+    auto msgs = thread_of({
+        read_call("c1", "/w/f.txt", "current\n"),
+        failed_edit("c2", "/w/f.txt"),
+    });
+    const auto s = wire::supersede_reads(msgs);
+    CHECK_FALSE(s.is_stale("c1"));
+    CHECK_FALSE(s.is_collapsed("c1"));
+}
+
+TEST_CASE("supersede: a stale read a later full read covers is collapsed") {
+    // read, edit, re-read: the re-read is the live copy; the pre-edit body
+    // is both stale and redundant, so it collapses outright.
+    auto msgs = thread_of({
+        read_call("c1", "/w/f.txt", "before\n"),
+        edit_call("c2", "/w/f.txt"),
+        read_call("c3", "/w/f.txt", "after\n"),
+    });
+    const auto s = wire::supersede_reads(msgs);
+    CHECK(s.is_collapsed("c1"));
+    CHECK_FALSE(s.is_stale("c1"));     // collapsed wins
+    CHECK_FALSE(s.is_collapsed("c3"));
+}
+
+TEST_CASE("supersede: the pointer text promises only what is true") {
+    // It is now emitted ONLY when a later read carries the lines.
+    const std::string_view p = wire::kSupersededReadPointer;
+    CHECK(p.find("edited") == std::string_view::npos);
+    CHECK(p.find("later read") != std::string_view::npos);
 }

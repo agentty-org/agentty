@@ -96,7 +96,7 @@ json build_input(const provider::Request& req, std::string_view site) {
     // request, not per turn.
     const unsigned max_side =
         util::wire_max_side(wire::wire_image_count(req.messages));
-    const auto superseded = wire::superseded_read_ids(req.messages);
+    const auto superseded = wire::supersede_reads(req.messages);
     for (const auto& m : req.messages) {
         if (m.role == Role::System) continue;   // folded into `instructions`
 
@@ -190,10 +190,14 @@ json build_input(const provider::Request& req, std::string_view site) {
                     total_tool_results - 1 - seen_tool_results;
                 ++seen_tool_results;
                 const bool is_error = tc.is_failed() || tc.is_rejected();
-                std::string out = (!is_error && superseded.count(tc.id.value))
-                    ? std::string{wire::kSupersededReadPointer}
-                    : wire::cap_tool_result_aged(
-                          tc.output(), recency_rank, is_error);
+                std::string out = [&] {
+                    if (!is_error)
+                        if (auto s = wire::render_superseded(
+                                superseded, tc, tc.output(), recency_rank))
+                            return std::move(*s);
+                    return wire::cap_tool_result_aged(
+                        tc.output(), recency_rank, is_error);
+                }();
                 // Vision tool_result: when the tool surfaced images (read on an
                 // image file), the Responses API accepts `output` as an ARRAY
                 // of content parts — the text followed by input_image parts —
