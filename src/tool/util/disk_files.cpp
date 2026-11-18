@@ -259,7 +259,11 @@ std::string write_file(const fs::path& p, std::string_view content) {
             d += n;
             left -= static_cast<std::size_t>(n);
         }
+#if defined(__APPLE__)
+        (void)::fsync(fd);
+#else
         (void)::fdatasync(fd);
+#endif
         ::close(fd);
         return {};
     }

@@ -5,6 +5,13 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Subagents read in parallel.** Independent read-only calls in one turn
+  (several greps or reads) run side by side instead of one after another.
+- **The tool panel footer shows the real elapsed time** while tools run (it
+  read `0ms` for a whole agent run), plus the agent's turn when one is
+  running: `0/1 action · turn 7/80   1m12s`.
+- **Windows and macOS build again** after today's speed work (an MSVC-only
+  builtin and a Linux-only sync call).
 - **Subagents no longer die after doing the work.** A reply too long to
   stream (a big `write`) used to end the whole run at the 8k output limit;
   write-capable agents now get the model's output ceiling (up to 32k), and a

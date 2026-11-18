@@ -2180,6 +2180,63 @@ public:
 
             Message& asst = thread.messages.back();
             bool ran_a_tool = false;
+            // PARALLEL READS. A model that batches independent reads into
+            // one turn (the prompt asks it to) used to have them run one
+            // after another. Read-only tools (no WriteFs/Exec/Net, the same
+            // rule the main loop's scheduler uses) are side-effect free, so
+            // they run side by side here, up front; the serial loop below
+            // then takes each precomputed result exactly where it would have
+            // called execute(), so every bit of its bookkeeping (feed lines,
+            // hooks, result caps, loop breakers) is unchanged. Skipped when
+            // PreToolUse hooks are configured: a hook may rewrite or deny a
+            // call, and must see it before it runs.
+            std::vector<std::optional<ExecResult>> prefetched(asst.tool_calls.size());
+            std::vector<long long> prefetched_ms(asst.tool_calls.size(), 0);
+            {
+                std::vector<std::size_t> idx;
+                static const auto no_pre_hooks = [] {
+                    return tools::hooks::pre_tool_matchers(IoAccess::grant()).empty();
+                };
+                for (std::size_t k = 0; k < asst.tool_calls.size(); ++k) {
+                    const auto& tc = asst.tool_calls[k];
+                    if (tc.is_terminal() || tc.args.is_null()) continue;
+                    const auto def = tools::find(tc.name.value);
+                    if (!def || !subagent_tool_allowed(*def, type, stats)) continue;
+                    tools::EffectSet eff = def->effects;
+                    if (const auto* sp = tools::spec::lookup(tc.name.value)) eff = sp->effects;
+                    using tools::Effect;
+                    if (eff.has(Effect::WriteFs) || eff.has(Effect::Exec) || eff.has(Effect::Net))
+                        continue;
+                    idx.push_back(k);
+                }
+                if (idx.size() >= 2 && !child.cancelled() && no_pre_hooks()) {
+                    const auto skills_now = skills::active_in(::agentty::visible_text(thread));
+                    constexpr std::size_t kMaxParallel = 8;
+                    const auto owner = std::this_thread::get_id();
+                    const maya::unlocked& owner_cap = child.capability();
+                    maya::parallel_for(owner_cap, idx.size(),
+                                       std::min(idx.size(), kMaxParallel),
+                        [&](std::size_t j) {
+                            const std::size_t k = idx[j];
+                            const auto& tc = asst.tool_calls[k];
+                            CallContext tool_ctx = child;
+                            tool_ctx.progress = {};   // the feed is written by the serial pass
+                            tool_ctx.active_skills = skills_now;
+                            const auto run = [&](const maya::unlocked& cap) {
+                                const auto t0 = std::chrono::steady_clock::now();
+                                prefetched[k] = tool::DynamicDispatch::execute(
+                                    cap, tc.name.value, tc.args, tool_ctx);
+                                prefetched_ms[k] = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - t0).count();
+                            };
+                            // parallel_for runs one share on THIS thread, which
+                            // already holds the call's capability; a helper
+                            // thread starts holding no lock and takes a root.
+                            if (std::this_thread::get_id() == owner) run(owner_cap);
+                            else maya::thread_root(run);
+                        });
+                }
+            }
             if (!asst.tool_calls.empty()) {
                 const auto now = std::chrono::steady_clock::now();
                 for (auto& tc : asst.tool_calls) {
@@ -2246,6 +2303,7 @@ public:
                         if (pre.stop) hook_stopped = true;
                     }
                     const auto t_start = std::chrono::steady_clock::now();
+                    const std::size_t call_index = static_cast<std::size_t>(&tc - asst.tool_calls.data());
                     // The subagent's own context: deeper, its own reader and
                     // deadline, the parent's card for live output (as before).
                     CallContext tool_ctx = child;
@@ -2254,7 +2312,11 @@ public:
                     if (!tool_ctx.commit_trailers.empty() && !thread.messages.empty())
                         tool_ctx.commit_trailers = {attribution_trailer(
                             thread.messages.back().served_model.value)};
-                    auto res = tool::DynamicDispatch::execute(child.capability(), tc.name.value, tc.args, tool_ctx);
+                    const bool was_prefetched = call_index < prefetched.size()
+                                                && prefetched[call_index].has_value();
+                    auto res = was_prefetched
+                        ? std::move(*prefetched[call_index])
+                        : tool::DynamicDispatch::execute(child.capability(), tc.name.value, tc.args, tool_ctx);
                     // Same tool.exec record the main loop emits, so a headless
                     // `agentty run` and a subagent turn are as diagnosable as
                     // an interactive one. A failing tool is Warn (and therefore
@@ -2267,7 +2329,7 @@ public:
                     // drop results from a superseded turn, and this path has no
                     // reducer and no turn to supersede — it runs each call to
                     // completion in order. Matching on name+args is enough.
-                    const auto t_ms =
+                    const auto t_ms = was_prefetched ? prefetched_ms[call_index] :
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t_start).count();
                     const std::string err_text =

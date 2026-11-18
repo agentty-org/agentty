@@ -359,6 +359,52 @@ int main() {
         check(saw_pending, "V: a call shows as ○ while it is in flight");
     }
 
+    // ── W. A turn's read-only calls run side by side. ────────────────────
+    // Four greps in one turn, each slow enough to time. Serially that is
+    // 4x one grep; side by side it is about one. Both still land as ✓ in
+    // order and the model gets all four results.
+    {
+        namespace fs = std::filesystem;
+        // A tree big enough that one grep takes measurable time (~50 ms):
+        // per-call fixed costs then don't blur serial vs parallel.
+        fs::create_directories("w_tree");
+        for (int i = 0; i < 1500; ++i) {
+            std::ofstream f("w_tree/f" + std::to_string(i) + ".txt");
+            for (int l = 0; l < 600; ++l) f << "line " << l << " of file " << i << " lorem ipsum dolor sit amet\n";
+        }
+        auto results = std::make_shared<std::atomic<int>>(0);
+        auto timeit = [&](int n_calls) {
+            install_scripted_stream([n_calls, results](int turn, const provider::Request& req,
+                                                       const provider::EventSink& sink) {
+                if (turn == 0) {
+                    for (int k = 0; k < n_calls; ++k)
+                        emit_tool_call(sink, "w" + std::to_string(k), "grep",
+                                       json{{"pattern", "zz[a-z]*absent_w" + std::to_string(k) + "[0-9]+"},
+                                            {"path", "w_tree"}});
+                    emit_finish(sink, StopReason::ToolUse);
+                    return;
+                }
+                int got = 0;
+                for (const auto& m : req.messages)
+                    for (const auto& tc : m.tool_calls) got += tc.is_done();
+                *results = got;
+                emit_text(sink, "done");
+                emit_finish(sink, StopReason::EndTurn);
+            });
+            const auto t0 = std::chrono::steady_clock::now();
+            (void)run_task("grep");
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        };
+        // Each call is a regex grep (no -F literal fast path), so its cost
+        // is the scan, not the fixed overhead.
+        const double one = timeit(1);
+        const double four = timeit(4);
+        std::printf("     W: 1 grep %.0f ms, 4 greps in one turn %.0f ms\n", one, four);
+        check(results->load() == 4, "W: all four results reach the model");
+        check(four < one * 2.2, "W: four read-only calls in one turn overlap (not 4x serial)");
+        fs::remove_all("w_tree");
+    }
+
     // ── B. Writes prose at the end: clean final report. ─────────────────
     // Explore for a couple of turns, then on turn 3 stop calling tools and
     // write the real answer. The runner must return exactly that prose.

@@ -526,6 +526,7 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             if (tc.is_rejected()) ++rejected;
         }
         const bool all_done = (done == total);
+        std::string agent_turn;   // "turn 7/80" while one subagent runs
         maya::AgentTimelineFooter f;
         if (all_done) {
             f.glyph = "\xe2\x9c\x93";   // ✓
@@ -565,10 +566,34 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             f.glyph = sp.frames[((spinner_frame % sp.count) + sp.count) % sp.count];
             f.text  = "running";
             f.color = muted;
+            // The live clock: wall time since the earliest tool in flight
+            // started, not the sum of the FINISHED ones (which read "0ms"
+            // for a whole 10-minute agent run). Safe to tick: this is the
+            // panel's last row, see above.
+            float live = 0.0f;
+            for (const auto& tc : tool_calls)
+                if (!tc.is_terminal()) live = std::max(live, tool_elapsed(tc));
+            total_elapsed = std::max(total_elapsed, live);
+            // A single subagent running: its turn in the summary, e.g.
+            // "0/1 action · turn 7/80   1m 12s". (The label is letter-spaced
+            // RUNNING; extra words there read as "A G E N T".)
+            int running_tasks = 0;
+            for (const auto& tc : tool_calls)
+                if (!tc.is_terminal() && tc.name.value == "task") ++running_tasks;
+            if (running_tasks == 1 && running_idx >= 0
+                && tool_calls[std::size_t(running_idx)].name.value == "task") {
+                const std::string_view pt = tool_calls[std::size_t(running_idx)].progress_text();
+                const std::string_view first = pt.substr(0, pt.find('\n'));
+                if (auto at = first.find("turn "); at != std::string_view::npos) {
+                    const auto end = first.find(" \xc2\xb7", at);
+                    agent_turn = std::string{first.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at)};
+                }
+            }
         }
         f.summary = std::to_string(done) + "/" + std::to_string(total)
-                  + (total == 1 ? " action   " : " actions   ")
-                  + format_duration_compact(total_elapsed);
+                  + (total == 1 ? " action" : " actions")
+                  + (agent_turn.empty() ? std::string{} : " \xc2\xb7 " + agent_turn)
+                  + "   " + format_duration_compact(total_elapsed);
         cfg.footer = std::move(f);
     }
 
