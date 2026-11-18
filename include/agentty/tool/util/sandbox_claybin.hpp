@@ -109,6 +109,9 @@ struct Posture {
     // names for it.
     int env_scope{0};
     std::vector<std::string> env_keep;
+    // Variables the posture itself sets (GIT_CONFIG_GLOBAL under Minimal).
+    // Added after the scope filter; a request's own env still wins.
+    std::vector<std::pair<std::string, std::string>> extra_env;
 
     // ── syscall brokering ────────────────────────────────────────
     // Decide ptrace and kill at runtime from their scalar arguments, instead

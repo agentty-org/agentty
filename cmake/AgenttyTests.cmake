@@ -203,6 +203,7 @@ add_executable(sandbox_live_check EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_live_check.cpp
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/shared_file.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
@@ -280,6 +281,7 @@ add_executable(ws_bind_probe EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/ws_bind_probe.cpp
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/shared_file.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
@@ -315,6 +317,7 @@ target_compile_definitions(ws_bind_probe PRIVATE
 set(_AGENTTY_EXEC_SANDBOX_SOURCES
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/shared_file.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
@@ -382,6 +385,7 @@ add_executable(sandbox_audit EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/tests/sandbox_audit.cpp
     ${CMAKE_SOURCE_DIR}/tests/sandbox_config_race_stubs.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/shared_file.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_claybin.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_netproxy.cpp
     ${CMAKE_SOURCE_DIR}/src/tool/util/sandbox_broker.cpp
@@ -769,7 +773,7 @@ agentty_test(sandbox_config_race_test MODE raw LABELS race)
 add_executable(sandbox_config_race_test EXCLUDE_FROM_ALL
     tests/sandbox_config_race_test.cpp tests/test_main.cpp
     tests/sandbox_config_race_stubs.cpp
-    src/tool/util/sandbox.cpp src/tool/util/subprocess.cpp
+    src/tool/util/sandbox.cpp src/tool/util/subprocess.cpp src/io/shared_file.cpp
     src/tool/util/exec.cpp   # run_child: subprocess.cpp spawns through it
     src/tool/util/sandbox_claybin.cpp
     src/tool/util/sandbox_netproxy.cpp
@@ -823,7 +827,7 @@ if(TARGET mcp::tools)
         agentty_test(exec_session_race_sandboxed MODE raw LABELS sandbox)
         add_executable(exec_session_race_sandboxed EXCLUDE_FROM_ALL
             tests/exec_session_race_test.cpp tests/sandbox_config_race_stubs.cpp
-            src/tool/util/exec.cpp src/tool/util/sandbox.cpp
+            src/tool/util/exec.cpp src/tool/util/sandbox.cpp src/io/shared_file.cpp
             src/tool/util/subprocess.cpp src/tool/util/sandbox_claybin.cpp
             src/tool/util/sandbox_netproxy.cpp
             src/tool/util/sandbox_broker.cpp src/tool/util/handoff_gate.cpp
