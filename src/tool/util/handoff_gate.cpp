@@ -543,7 +543,7 @@ struct ResolvedTargets {
     return std::string{v.substr(0, v.find_first_of(" \t\n"))};
 }
 
-[[nodiscard]] GitConfigTargets git_config_targets(const fs::path& config) {
+[[nodiscard]] GitConfigTargets parse_git_config(const fs::path& config) {
     GitConfigTargets t;
     std::ifstream in(config, std::ios::binary);
     if (!in) return t;
@@ -586,6 +586,52 @@ struct ResolvedTargets {
     return t;
 }
 
+// parse_git_config, memoised on (path, size, mtime). The write gate runs on
+// EVERY write through GatedFiles -- a `replace` across 2,000 files used to
+// re-read and re-parse the repo's config (and every include) 2,000 times.
+// Only the PARSE is cached: placing a value (weakly_canonical) still runs per
+// call, because a symlink swapped under .husky changes where a hook lands
+// without touching the config, and a cached placement would miss that.
+// Racy rule as for listings: a file written within kRacyWindow may change
+// again inside one mtime tick at the same size, so it is not cached.
+struct ParsedConfig {
+    std::uintmax_t     size = 0;
+    fs::file_time_type mtime{};
+    GitConfigTargets   targets;
+};
+using ParsedConfigCache = std::unordered_map<std::string, maya::shared<ParsedConfig>>;
+constexpr std::size_t kMaxCachedConfigs = 4096;
+
+maya::snapshot<ParsedConfigCache>& parsed_config_cache() {
+    static maya::snapshot<ParsedConfigCache> c;
+    return c;
+}
+
+[[nodiscard]] GitConfigTargets git_config_targets(const fs::path& config) {
+    std::error_code sec, tec;
+    const auto size = fs::file_size(config, sec);
+    const auto mtime = fs::last_write_time(config, tec);
+    if (sec || tec) return parse_git_config(config);
+    std::string key = config.string();
+    {
+        auto cur = parsed_config_cache().load();
+        if (auto it = cur->find(key); it != cur->end()
+            && it->second->size == size && it->second->mtime == mtime)
+            return it->second->targets;
+    }
+    GitConfigTargets t = parse_git_config(config);
+    if (fs::file_time_type::clock::now() - mtime >= kRacyWindow) {
+        auto entry = maya::shared<ParsedConfig>::make(ParsedConfig{size, mtime, t});
+        (void)parsed_config_cache().update(
+            [](const ParsedConfigCache& old, std::string k, maya::shared<ParsedConfig> v) {
+                ParsedConfigCache m = old.size() < kMaxCachedConfigs ? old : ParsedConfigCache{};
+                m.insert_or_assign(std::move(k), std::move(v));
+                return m;
+            }, std::move(key), std::move(entry));
+    }
+    return t;
+}
+
 // `v` as git would find it: ~/ expanded, relative to `from`, symlinks
 // resolved as far as the path exists. Callers that need it to exist check.
 [[nodiscard]] std::optional<fs::path> resolve_config_path(const fs::path& from,
@@ -623,10 +669,15 @@ ResolvedTargets resolve_git_targets(const fs::path& config, const fs::path& git_
             for (auto& d : one.dirs) t.dirs.push_back(std::move(d));
             for (const auto& inc : one.includes) {
                 const auto real = resolve_config_path(file.parent_path(), inc);
-                std::error_code iec;
-                if (!real || !fs::is_regular_file(*real, iec)) continue;
+                if (!real) continue;
+                // Kept even when it does not exist yet: git silently skips a
+                // missing include, so creating the file later is how a
+                // pinned config gets a new hooksPath without being edited.
+                // The write gate refuses that path, and the snapshot watches
+                // it as absent. Only an existing one is followed.
                 out.includes.push_back(*real);
-                next.push_back(*real);
+                std::error_code iec;
+                if (fs::is_regular_file(*real, iec)) next.push_back(*real);
             }
         }
         todo = std::move(next);
@@ -805,7 +856,12 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
         TrustedSnapshot::Entry entry;
         entry.path    = p;
         entry.kind    = kind;
-        entry.existed = true;
+        // Usually true; false for a watched-but-absent path (a git include
+        // that does not exist yet), which review() reports if it appears and
+        // the sandbox does not try to bind.
+        std::error_code xec;
+        entry.existed = fs::exists(fs::symlink_status(p, xec));
+        if (!entry.existed) { snap.entries.push_back(std::move(entry)); return; }
         std::error_code sec;
         entry.size    = fs::file_size(p, sec);
         if (sec) entry.size = 0;
@@ -1064,7 +1120,10 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
         const bool exists = fs::is_regular_file(e.path, ec);
 
         const char* what = nullptr;
-        if (!exists) {
+        if (!e.existed) {
+            if (!exists) continue;   // still absent: nothing happened
+            what = "created";
+        } else if (!exists) {
             what = "deleted";
         } else {
             std::error_code sec, tec;

@@ -703,7 +703,7 @@ add_executable(persistence_race_test_narrow EXCLUDE_FROM_ALL
     src/util/logx.cpp src/util/dbglog.cpp src/util/home_dir.cpp
     src/util/user_root.cpp src/util/base64.cpp src/util/teardown.cpp
     src/io/shared_file.cpp
-    src/domain/web_search_config.cpp)
+    src/domain/web_search_config.cpp src/domain/sandbox_provenance.cpp)
 target_include_directories(persistence_race_test_narrow PRIVATE include)
 # The runtime's headers: user_root.cpp uses maya::guarded for its warn-once set
 # (the concurrency banlist forbids a raw std::mutex). Header-only here, so the
@@ -713,7 +713,7 @@ target_include_directories(persistence_race_test_narrow PRIVATE
     $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 # maya::runtime for SharedFile's cross-process lock (platform file_lock).
 target_link_libraries(persistence_race_test_narrow PRIVATE
-    nlohmann_json::nlohmann_json simdjson::simdjson Threads::Threads maya::runtime)
+    nlohmann_json::nlohmann_json simdjson::simdjson Threads::Threads maya::runtime claybin)
 target_compile_definitions(persistence_race_test_narrow PRIVATE
     AGENTTY_MCP=0)
 add_test(NAME persistence_race_test_narrow COMMAND persistence_race_test_narrow)

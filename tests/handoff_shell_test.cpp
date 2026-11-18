@@ -406,6 +406,24 @@ TEST_CASE("handoff: the shell path is watched by observation, not parsing") {
         CHECK(has(snap, "tools/my mon.sh"));
         CHECK_FALSE(has(snap, "/store"));
 
+        // An include that does not exist yet: git skips it silently, so
+        // creating it later would hand the config a new hooksPath without
+        // the pinned config ever being edited. Refused up front, and its
+        // creation is reported.
+        write_file(g_root / ".git" / "config",
+                   "[include]\n\tpath = ../conf/later.gitconfig\n");
+        fs::remove(g_root / "conf" / "later.gitconfig");
+        CHECK_FALSE(hg::check_with((g_root / "conf" / "later.gitconfig").string(), "write",
+                                   sc::HandoffPolicy::Refuse).allowed);
+        snap = hg::snapshot_trusted(g_root.string());
+        CHECK(has(snap, "conf/later.gitconfig"));
+        hg::clear_handoff_feed();
+        CHECK(hg::review_trusted(snap, "true") == 0);   // still absent: nothing to say
+        write_file(g_root / "conf" / "later.gitconfig", "[core]\n\thooksPath = .h\n");
+        CHECK(hg::review_trusted(snap, "echo > conf/later.gitconfig") >= 1);
+        CHECK(events_for("later.gitconfig") >= 1);
+        fs::remove(g_root / "conf" / "later.gitconfig");
+
         // A submodule's targets resolve against its core.worktree.
         write_file(g_root / ".git" / "config", "[core]\n\tbare = false\n");
         write_file(g_root / ".git" / "modules" / "lib" / "config",

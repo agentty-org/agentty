@@ -658,13 +658,23 @@ TEST_CASE("sandbox env: each scope passes exactly its tier") {
         CHECK(ok(E::Host, k));
     }
     // Toolchain only: listed names and prefixes Essential does not guess at.
-    for (auto k : {"CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "JAVA_HOME"}) {
+    for (auto k : {"CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "JAVA_HOME",
+                   // what a build reads to find its compiler, libs and env
+                   "CC", "CXX", "CFLAGS", "LDFLAGS", "LD_LIBRARY_PATH", "PKG_CONFIG_PATH",
+                   "CMAKE_PREFIX_PATH", "VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH",
+                   "npm_config_cache", "NODE_OPTIONS", "MAKEFLAGS", "SSL_CERT_FILE",
+                   "RUSTFLAGS", "RUSTC_WRAPPER", "CCACHE_DIR", "UV_CACHE_DIR", "CI"}) {
         INFO(k);
         CHECK_FALSE(ok(E::Essential, k));
         CHECK(ok(E::Toolchain, k));
     }
     // Secret inside an allowed prefix: dropped by Toolchain, passed by Host.
-    for (auto k : {"CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_X_TOKEN"}) {
+    // Case-blind on every OS -- npm's own spelling is npm_config__authToken.
+    for (auto k : {"CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_X_TOKEN",
+                   "npm_config__authToken", "npm_config__auth", "NPM_CONFIG_//reg/:_password",
+                   "CONAN_PASSWORD", "CONAN_LOGIN_PASS", "NUGET_API_KEY", "MAVEN_GPG_PASSPHRASE",
+                   "GRADLE_ENTERPRISE_ACCESS_KEY", "ANDROID_SIGNING_KEY", "PIP_SESSION_COOKIE",
+                   "VCPKG_BINARY_PAT"}) {
         INFO(k);
         CHECK_FALSE(ok(E::Toolchain, k));
         CHECK(ok(E::Host, k));
@@ -684,6 +694,35 @@ TEST_CASE("sandbox env: each scope passes exactly its tier") {
         CHECK(sandbox_cfg::env_allowed(s, "MKLROOT", keep));
         CHECK(sandbox_cfg::env_allowed(s, "GH_TOKEN", keep));
     }
+}
+
+TEST_CASE("sandbox env: a credential in a toolchain VALUE is dropped") {
+    using E = sandbox_cfg::EnvScope;
+    const std::vector<std::string> none;
+    const auto ok = [&](const char* k, const char* v) {
+        return sandbox_cfg::env_allowed(E::Toolchain, k, none, v);
+    };
+    // Ordinary values of allowed names pass.
+    CHECK(ok("PIP_INDEX_URL", "https://pypi.org/simple"));
+    CHECK(ok("GOPROXY", "https://proxy.golang.org,direct"));
+    CHECK(ok("npm_config_registry", "https://registry.npmjs.org/"));
+    CHECK(ok("CARGO_NET_GIT_FETCH_WITH_CLI", "true"));
+    CHECK(ok("PIP_EXTRA_INDEX_URL", "ssh://git@host/repo"));   // ssh account, not a secret
+    CHECK(ok("PIP_EXTRA_INDEX_URL", "https://pypi.org/simple?x=a@b"));   // '@' past the host
+    // user:password in any scheme, and a bare user (token) under http(s).
+    CHECK_FALSE(ok("PIP_INDEX_URL", "https://user:hunter2@pypi.corp/simple"));
+    CHECK_FALSE(ok("GOPROXY", "https://proxy.golang.org,https://u:p@goproxy.corp"));
+    CHECK_FALSE(ok("npm_config_registry", "https://npm_abc123@registry.corp/"));
+    CHECK_FALSE(ok("CARGO_REGISTRIES_CORP_INDEX", "sparse+https://tok@cargo.corp/"));
+    CHECK_FALSE(ok("PIP_INDEX_URL", "ftp://u:p@mirror/"));
+    // Essential names are never value-checked (PATH is never a URL), and a
+    // name the user lists passes with whatever value it has.
+    CHECK(sandbox_cfg::env_allowed(E::Toolchain, "PATH", none, "https://u:p@x"));
+    const std::vector<std::string> keep{"PIP_INDEX_URL"};
+    CHECK(sandbox_cfg::env_allowed(E::Toolchain, "PIP_INDEX_URL", keep,
+                                   "https://user:pw@pypi.corp/"));
+    // Host passes everything.
+    CHECK(sandbox_cfg::env_allowed(E::Host, "PIP_INDEX_URL", none, "https://u:p@x"));
 }
 
 TEST_CASE("sandbox posture: balanced is exactly the unconfigured default") {
@@ -1097,9 +1136,12 @@ TEST_CASE("sandbox list: a port list validates on readback") {
 
 TEST_CASE("sandbox list: a name list keeps variable names, drops the rest") {
     auto ed = pn::build_sandbox_list(pn::kSbEnvKeep, "Custom variables", "h",
-                                     {"MKLROOT", "PROGRAMFILES(X86)", "1BAD", "A B", "(X)"},
+                                     {"MKLROOT", "PROGRAMFILES(X86)", "1BAD", "A B", "(X)",
+                                      "FOO()", "A)(B", "X)", "A(B)C", "A(B", "_OK",
+                                      "COMMONPROGRAMFILES(ARM)", "A(B)(C)", "A-B"},
                                      pn::SandboxListPane::ListKind::Name);
-    const std::vector<std::string> want{"MKLROOT", "PROGRAMFILES(X86)"};
+    const std::vector<std::string> want{"MKLROOT", "PROGRAMFILES(X86)", "_OK",
+                                        "COMMONPROGRAMFILES(ARM)"};
     CHECK(pn::read_sandbox_list(ed) == want);
 }
 

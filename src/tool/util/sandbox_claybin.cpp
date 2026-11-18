@@ -136,11 +136,11 @@ constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 
 }  // namespace
 
-// What the guest inherits from agentty's own environment. A denylist, not an
-// allowlist: builds read arbitrary vars (CC, GOPATH, JAVA_HOME, npm_config_*)
-// and an allowlist breaks the next toolchain nobody listed. What goes is the
-// stuff that is either a door out of the box or a credential agentty itself
-// holds:
+// What the guest inherits from agentty's own environment. Two layers:
+//
+//   1. a hard DENYLIST that nothing overrides -- not env_keep, not
+//      EnvScope::Host -- for what is either a door out of the box or a
+//      credential agentty itself holds:
 //   - session and desktop sockets: dbus (systemd-run, secret service),
 //     wayland/X11 (keystrokes, screenshots), the ssh/gpg agents, tmux, kitty
 //     and hyprland control sockets. most also point at a path the box can't
@@ -148,8 +148,14 @@ constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 //     needs no path at all.
 //   - provider keys agentty uses to talk to the model. a command the agent
 //     runs has no business with the key that pays for the agent.
+//
+//   2. the user's EnvScope ALLOWLIST (sandbox_cfg::env_allowed). An allowlist
+//     because a denylist of secrets is never complete (BUNKER, NOSTR_*_KEY,
+//     whatever the next CLI invents); its Toolchain tier carries the build
+//     variables (CC, LDFLAGS, VIRTUAL_ENV, CMAKE_*, npm_config_*) so the
+//     allowlist does not break the build it is guarding.
 bool box_env_keeps(std::string_view key, int env_scope,
-                   std::span<const std::string> keep) noexcept {
+                   std::span<const std::string> keep, std::string_view value) noexcept {
     static constexpr std::string_view kDrop[] = {
         "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS",
         "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY",
@@ -167,7 +173,7 @@ bool box_env_keeps(std::string_view key, int env_scope,
     // GEMINI_API_KEY, ...). Matched by suffix so a new provider is covered.
     if (key.size() > 8 && key.ends_with("_API_KEY")) return false;
     namespace cfg = ::agentty::sandbox_cfg;
-    return cfg::env_allowed(static_cast<cfg::EnvScope>(env_scope), key, keep);
+    return cfg::env_allowed(static_cast<cfg::EnvScope>(env_scope), key, keep, value);
 }
 
 #if defined(__APPLE__)
@@ -724,7 +730,9 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     std::vector<std::string> env_store;
     for (char** e = ::environ; e && *e; ++e) {
         const std::string_view kv{*e};
-        if (box_env_keeps(kv.substr(0, kv.find('=')), p.env_scope, p.env_keep))
+        const auto eq = kv.find('=');
+        if (box_env_keeps(kv.substr(0, eq), p.env_scope, p.env_keep,
+                          eq == std::string_view::npos ? std::string_view{} : kv.substr(eq + 1)))
             env_store.emplace_back(kv);
     }
     for (const auto& [k, v] : p.extra_env) env_store.push_back(k + "=" + v);
@@ -886,12 +894,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
                 const auto eq = wide.find(L'=');
                 if (eq == std::wstring::npos || eq == 0) continue;
                 const std::string name(wide.begin(), wide.begin() + eq);
-                {
-                    std::string upper = name;  // windows names are case-blind
-                    for (char& c : upper)
-                        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
-                    if (!box_env_keeps(upper, p.env_scope, p.env_keep)) continue;
-                }
+                std::string upper = name;  // windows names are case-blind
+                for (char& c : upper)
+                    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32);
+                // A cheap name-only pass first: most of the block is dropped
+                // here without paying for a UTF-8 conversion.
+                if (!box_env_keeps(upper, p.env_scope, p.env_keep)) continue;
                 // overridden names are supplied by the caller below; keep the
                 // name side ASCII-faithful (env var names are ASCII in
                 // practice) and convert the value losslessly via UTF-8
@@ -905,6 +913,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
                     std::string line(n - 1, '\0');
                     ::WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1,
                                           line.data(), n, nullptr, nullptr);
+                    // ...then the value check (URL credentials) on the UTF-8.
+                    if (const auto leq = line.find('=');
+                        leq != std::string::npos &&
+                        !box_env_keeps(upper, p.env_scope, p.env_keep,
+                                       std::string_view{line}.substr(leq + 1)))
+                        continue;
                     env_store.push_back(std::move(line));
                 }
             }
@@ -1111,7 +1125,10 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         for (char** e = ::environ; e && *e; ++e) {
             const std::string_view kv{*e};
             const auto key = kv.substr(0, kv.find('='));
-            if (!box_env_keeps(key, p.env_scope, p.env_keep)) continue;
+            if (!box_env_keeps(key, p.env_scope, p.env_keep,
+                               key.size() < kv.size() ? kv.substr(key.size() + 1)
+                                                      : std::string_view{}))
+                continue;
             bool overridden = false;
             for (const auto& [k, v] : env) if (k == key) { overridden = true; break; }
             if (!overridden) env_store.emplace_back(kv);

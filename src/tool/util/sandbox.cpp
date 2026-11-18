@@ -3,6 +3,7 @@
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/io/shared_file.hpp"   // write_atomic: the identity file
 #include "agentty/tool/util/subprocess.hpp"   // host_git_identity
+#include "agentty/util/home_dir.hpp"   // git_global_stamp
 #include "agentty/util/logx.hpp"   // AGT_LOG — the sealed-policy refusal
 
 #include <algorithm>
@@ -349,30 +350,94 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     return s;
 }
 
-// The host's global git identity, read once per process. Empty when the host
-// has none (identity set per repository, which the guest reads itself).
-[[nodiscard]] const std::string& host_git_identity() {
-    static const std::string identity = [] {
-        std::string out;
-        for (const char* key : {"user.name", "user.email"}) {
-            auto r = run_argv_s({"git", "config", "--global", "--includes", "--get", key},
-                                4096, std::chrono::seconds{5});
-            if (!r.started || r.timed_out || r.exit_code != 0) continue;
-            std::string v = r.output;
-            while (!v.empty() && (v.back() == '\n' || v.back() == '\r')) v.pop_back();
-            if (v.empty() || v.find_first_of("\n\"\\") != std::string::npos) continue;
-            out += std::string{"\t"} + (key[5] == 'n' ? "name" : "email") + " = \"" + v + "\"\n";
-        }
-        return out.empty() ? out : "[user]\n" + out;
-    }();
-    return identity;
+// The host's global git identity. Empty when the host has none (identity set
+// per repository, which the guest reads itself) or git is not installed.
+//
+// Cached against the size+mtime of the files git reads for --global, so the
+// cost is one stat per file per spawn, a `git config --global user.name ...`
+// on the host is picked up by the next command rather than the next restart,
+// and a missing git is asked once per change rather than once per command.
+// One git spawn reads both keys; the timeout is short because this runs on
+// the command's own spawn path. An [include] in the global file is followed
+// (--includes) but not stat-ed -- editing only an included file needs a
+// touch of the top-level one, which is the same rule git's own fsmonitor
+// users live with.
+[[nodiscard]] std::uint64_t git_global_stamp() {
+    std::vector<fs::path> files;
+    if (const char* g = std::getenv("GIT_CONFIG_GLOBAL"); g && *g) {
+        files.emplace_back(g);
+    } else {
+        const fs::path home = ::agentty::util::home_dir_or_empty();
+        if (!home.empty()) files.push_back(home / ".gitconfig");
+        if (const char* x = std::getenv("XDG_CONFIG_HOME"); x && *x)
+            files.push_back(fs::path{x} / "git" / "config");
+        else if (!home.empty())
+            files.push_back(home / ".config" / "git" / "config");
+    }
+    std::uint64_t h = 1469598103934665603ull;   // FNV-1a over (size, mtime)
+    const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    for (const auto& f : files) {
+        std::error_code ec;
+        const auto sz = fs::file_size(f, ec);
+        mix(ec ? ~0ull : static_cast<std::uint64_t>(sz));
+        const auto mt = fs::last_write_time(f, ec);
+        mix(ec ? 0 : static_cast<std::uint64_t>(mt.time_since_epoch().count()));
+    }
+    return h;
+}
+
+[[nodiscard]] std::string read_host_git_identity() {
+    auto r = run_argv_s({"git", "config", "--global", "--includes", "--get-regexp",
+                         "^user\\.(name|email)$"},
+                        4096, std::chrono::seconds{2});
+    // 1 = no match (no global identity): an answer, not an error.
+    if (!r.started || r.timed_out || r.exit_code != 0) return {};
+    std::string name, email;
+    std::string_view rest = r.output;
+    while (!rest.empty()) {
+        const auto nl = rest.find('\n');
+        std::string_view line = rest.substr(0, nl);
+        rest = nl == std::string_view::npos ? std::string_view{} : rest.substr(nl + 1);
+        while (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        const auto sp = line.find(' ');
+        if (sp == std::string_view::npos) continue;
+        const auto key = line.substr(0, sp);
+        const auto val = line.substr(sp + 1);
+        // Last one wins, as for git itself. A value that would need escaping
+        // in the file we write is dropped rather than half-quoted.
+        if (val.empty() || val.find_first_of("\"\\") != std::string_view::npos) continue;
+        if (key == "user.name") name = val;
+        else if (key == "user.email") email = val;
+    }
+    std::string out;
+    if (!name.empty())  out += "\tname = \"" + name + "\"\n";
+    if (!email.empty()) out += "\temail = \"" + email + "\"\n";
+    return out.empty() ? out : "[user]\n" + out;
+}
+
+[[nodiscard]] std::string host_git_identity() {
+    struct Cache {
+        bool          valid = false;
+        std::uint64_t stamp = 0;
+        std::string   identity;
+    };
+    // Read-mostly and shared by every spawning worker: a snapshot, as for the
+    // mask sweep. Two concurrent misses both ask git; the last store wins and
+    // both answers are right for their stamp.
+    static maya::snapshot<Cache> cache;
+    const std::uint64_t stamp = git_global_stamp();
+    if (auto cur = cache.load(); cur->valid && cur->stamp == stamp) return cur->identity;
+    Cache next{.valid = true, .stamp = stamp, .identity = read_host_git_identity()};
+    std::string id = next.identity;
+    cache.store(std::move(next));
+    return id;
 }
 
 // `<workspace>/.agentty/cache/git-identity`, holding only [user] name and
 // email, rewritten when it differs. Nullopt when the host has no global
 // identity or the file cannot be written.
 [[nodiscard]] std::optional<std::string> global_git_identity_file(const std::string& workspace) {
-    const std::string& body = host_git_identity();
+    const std::string body = host_git_identity();
     if (body.empty() || workspace.empty()) return std::nullopt;
     const fs::path file = fs::path{workspace} / ".agentty" / "cache" / "git-identity";
     std::error_code ec;

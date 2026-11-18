@@ -22,7 +22,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 - **Environment variables setting** (Settings → Sandbox): `toolchain`
   (default), `essential` or `host`, plus a **Custom variables** list. A token
   you export in your shell no longer reaches the agent's commands unless you
-  pick `host` or list it.
+  pick `host` or list it. `toolchain` still passes what builds need: compiler
+  and linker variables (`CC`, `CFLAGS`, `LD_LIBRARY_PATH`), an activated
+  `VIRTUAL_ENV` or conda env, `CMAKE_*`, `PKG_CONFIG*`, `npm_config_*`,
+  `PYTHON*` and CA bundles. Inside those families a secret-looking name
+  (`npm_config__authToken`, matched regardless of case) or a URL with a
+  password in its value (`PIP_INDEX_URL=https://user:pw@…`) is still dropped.
 - **What `.git/config` makes git run is protected too:** the `core.hooksPath`
   folder (`.husky`, `.githooks`) and the scripts named by `core.fsmonitor`,
   filters, `textconv`, `sshCommand` and `credential.helper`, for the shell and
@@ -30,7 +35,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   sandbox can, and reported where it can't.
 - **A global-only git identity works under `hardened` and `airgapped`.** Only
   `user.name` and `user.email` are handed over; a repo's own identity still
-  wins.
+  wins. A change to your global identity applies to the next command, without
+  a restart.
+- **A git `include.path` that does not exist yet is protected too.** git
+  skips a missing include, so creating one later was a way to add a
+  `hooksPath` without touching the protected config.
 
 ### Changed
 - **Upgrading changes what commands inherit.** A saved setup that matches a

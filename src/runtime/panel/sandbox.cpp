@@ -730,14 +730,24 @@ form::Field list_entry_number(std::string_view id, std::string label,
     return text(id, std::move(label), std::move(help), {});
 }
 
-// A variable name: what POSIX shells accept, plus the parentheses Windows
-// uses (PROGRAMFILES(X86)). Anything else could never match a real variable.
+// A portable env var name, `[A-Za-z_][A-Za-z0-9_]*`, optionally ending in
+// ONE parenthesised alphanumeric group: Windows names a few of its own that
+// way (PROGRAMFILES(X86), COMMONPROGRAMFILES(ARM)). `FOO()`, `A)(B` and
+// `X)` are typos, not names, and saving one would keep a row that matches
+// nothing.
 [[nodiscard]] static bool is_env_name(std::string_view v) noexcept {
-    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || v.front() == '(') return false;
-    for (char c : v)
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-              || (c >= '0' && c <= '9') || c == '_' || c == '(' || c == ')'))
-            return false;
+    const auto word = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+            || c == '_';
+    };
+    if (v.empty() || (v.front() >= '0' && v.front() <= '9') || !word(v.front())) return false;
+    std::size_t i = 0;
+    while (i < v.size() && word(v[i])) ++i;
+    if (i == v.size()) return true;
+    // The optional `(GROUP)` tail, and it must be the end of the name.
+    if (v[i] != '(' || v.back() != ')' || v.size() - i < 3) return false;
+    for (std::size_t j = i + 1; j + 1 < v.size(); ++j)
+        if (!word(v[j])) return false;
     return true;
 }
 

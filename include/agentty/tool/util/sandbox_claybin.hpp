@@ -30,10 +30,12 @@
 namespace agentty::tools::util::sandbox::claybin_backend {
 
 // Whether an env var from agentty's own environment reaches the sandboxed
-// child. Always drops desktop/session sockets and provider API keys; the rest
-// is sandbox_cfg::env_allowed for `env_scope` (a sandbox_cfg::EnvScope).
+// child. Always drops desktop/session sockets and provider API keys -- even a
+// name the user lists in env_keep, and even under EnvScope::Host -- then the
+// rest is sandbox_cfg::env_allowed for `env_scope` (a sandbox_cfg::EnvScope).
 [[nodiscard]] bool box_env_keeps(std::string_view key, int env_scope,
-                                 std::span<const std::string> keep) noexcept;
+                                 std::span<const std::string> keep,
+                                 std::string_view value = {}) noexcept;
 
 // What to build. Populated from the SHARED read-set constants in sandbox.cpp
 // rather than restated here -- see the note at the top of sandbox_claybin.cpp

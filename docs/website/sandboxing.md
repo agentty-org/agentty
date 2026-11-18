@@ -154,11 +154,12 @@ A secret in your shell's environment is one no file mask can see, so commands ge
 | Scope | Passes | Used by |
 | --- | --- | --- |
 | `essential` | a fixed list: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TZ`, `LC_*`, `TMPDIR`, the `XDG_*_HOME` dirs, and the variables your OS needs to start a process (`PATHEXT`, `SYSTEMROOT` and friends on Windows) | `hardened`, `airgapped` |
-| `toolchain` | `essential`, plus `JAVA_HOME`, Go's variables, Xcode and Homebrew on macOS, and anything starting `CARGO_`, `RUSTUP_`, `NVM_`, `PYENV_`, `RBENV_`, `ASDF_`, `BUN_`, `DENO_`, `DOTNET_` or `SDKMAN_`. A name in those families that looks secret (`CARGO_REGISTRY_TOKEN`) is still dropped | **the default**, `balanced` |
+| `toolchain` | `essential`, plus what builds read to find a compiler, a library, an activated environment or a trust store: `CC`, `CXX`, `CFLAGS`, `LDFLAGS`, `LD_LIBRARY_PATH`, `MAKEFLAGS`, `VIRTUAL_ENV`, `JAVA_HOME`, `GEM_HOME`, `SSL_CERT_FILE`, Go's variables, `CI`, `NO_COLOR`, MSVC's `INCLUDE`/`LIB` on Windows, Xcode and Homebrew on macOS; and whole families by prefix: `CARGO_`, `RUSTUP_`, `RUST*`, `PYTHON*`, `PIP_`, `UV_`, `POETRY_`, `CONDA_`, `NODE_`, `npm_config_`, `YARN_`, `CMAKE_`, `PKG_CONFIG*`, `CCACHE_`, `MAVEN_`, `GRADLE_`, `ANDROID_`, `NVM_`, `PYENV_`, `ASDF_`, `BUN_`, `DENO_`, `DOTNET_` and more. A name in a family that looks secret (`CARGO_REGISTRY_TOKEN`, `npm_config__authToken`, `CONAN_PASSWORD`, `*_KEY`) is still dropped, and so is any value with a password in a URL (`PIP_INDEX_URL=https://user:pw@host`) | **the default**, `balanced` |
 | `host` | everything except desktop and session sockets, and the model provider keys | `permissive` |
 
 - **Values pass as you have them.** `PATH` is never rewritten. Its folders the sandbox can't read simply miss.
-- **Custom variables** lists additional names to pass under `toolchain` and `essential`, such as `MKLROOT` or `ANDROID_HOME`. Adding to it keeps your preset's label.
+- **Custom variables** lists additional names to pass under `toolchain` and `essential`, such as `MKLROOT` or `GH_TOKEN`. A name you list passes whatever it is called and whatever its value. Adding to it keeps your preset's label.
+- **Some variables never pass**, under any scope and even if listed: the desktop and session sockets (`DISPLAY`, `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, tmux, kitty and compositor sockets) and every model provider key (`*_API_KEY`, `ANTHROPIC_AUTH_TOKEN`). Each is a way out of the sandbox or the key that pays for the agent. To push over ssh, use an https remote with a token instead.
 - **Changing the scope** makes the preset read `custom`. Pick `host` in Balanced if you want the agent to push over https with a token from your environment, and keep the rest of Balanced's walls.
 - The variables agentty itself sets for its tools (`TERM`, `PAGER`, `GIT_TERMINAL_PROMPT`, the proxy) reach the command under every scope.
 

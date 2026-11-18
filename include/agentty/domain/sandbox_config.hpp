@@ -132,10 +132,13 @@ enum class SyscallMode : std::uint8_t {
 // Variables the agent's tools need (TERM, PAGER, GIT_TERMINAL_PROMPT, the
 // proxy) are injected per call and reach the command under every scope.
 enum class EnvScope : std::uint8_t {
-    // Essential, plus named toolchain variables (GOPATH, JAVA_HOME) and the
-    // prefixes of the toolchains kHomeToolSubdirs makes readable (CARGO_*).
-    // A prefix admits names nobody listed, so names that look secret
-    // (CARGO_REGISTRY_TOKEN) are dropped inside one. The default.
+    // Essential, plus the variables builds read to find a compiler, a library,
+    // an activated environment or a trust store (CC, LDFLAGS, VIRTUAL_ENV,
+    // SSL_CERT_FILE) and whole toolchain families by prefix (CARGO_, PYTHON*,
+    // npm_config_, CMAKE_). A prefix admits names nobody listed, so a name
+    // that looks secret (CARGO_REGISTRY_TOKEN, npm_config__authToken) is
+    // dropped inside one, and so is any value carrying URL credentials
+    // (PIP_INDEX_URL=https://user:pw@host). The default.
     Toolchain,
     // A fixed list of names only: identity, locale, temp dirs, PATH, and the
     // OS variables a process needs to start. No prefix, no guessing. A name
@@ -157,9 +160,14 @@ enum class EnvScope : std::uint8_t {
 
 // Does a variable named `key` reach the command under `scope`? Compared as
 // given on POSIX and case-blind on Windows, where `Path` is PATH. A name in
-// `keep` passes under every scope.
+// `keep` passes under every scope. `value`, when given, lets Toolchain drop a
+// listed name whose value embeds credentials (env_value_has_credentials).
 [[nodiscard]] bool env_allowed(EnvScope scope, std::string_view key,
-                               std::span<const std::string> keep) noexcept;
+                               std::span<const std::string> keep,
+                               std::string_view value = {}) noexcept;
+
+// Does `value` carry a URL with a password in it (scheme://user:pw@host)?
+[[nodiscard]] bool env_value_has_credentials(std::string_view value) noexcept;
 
 // Paths that are NEVER exposed, whatever the scope says.
 //

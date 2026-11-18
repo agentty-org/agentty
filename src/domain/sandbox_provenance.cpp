@@ -443,38 +443,104 @@ constexpr std::string_view kEnvEssential[] = {
 };
 
 // Toolchain adds these names...
+//
+// The bar for a name here: a build or test run reads it to find a compiler,
+// a library, an activated environment or a trust store, and a missing one
+// FAILS that build (or worse, silently builds against the system copy). An
+// activated venv whose VIRTUAL_ENV vanishes inside the sandbox is the canonical
+// way an allowlist reads as "the sandbox broke my project".
 constexpr std::string_view kEnvToolchain[] = {
-    "JAVA_HOME",
+    // C/C++ toolchain selection and flags (make, cmake, autotools, cc-rs, cgo).
+    "CC", "CXX", "CPP", "LD", "AR", "AS", "NM", "RANLIB", "STRIP", "OBJCOPY",
+    "OBJDUMP", "FC", "F77", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
+    "LDLIBS", "FFLAGS", "ARFLAGS", "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS",
+    // Where the linker and the compiler look.
+    "LD_LIBRARY_PATH", "LIBRARY_PATH", "CPATH", "C_INCLUDE_PATH",
+    "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "SOURCE_DATE_EPOCH", "PKG_CONFIG",
+    "JAVA_HOME", "JDK_HOME", "JAVA_OPTS", "M2_HOME", "KOTLIN_HOME",
+    "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "PNPM_HOME", "GEM_HOME", "GEM_PATH",
+    "OPAMROOT", "OPAMSWITCH", "STACK_ROOT", "CABAL_DIR",
+    "BUNDLE_GEMFILE", "BUNDLE_PATH", "BUNDLE_WITHOUT", "BUNDLE_WITH",
+    "BUNDLE_DEPLOYMENT", "BUNDLE_JOBS", "BUNDLE_BIN", "BUNDLE_APP_CONFIG",
+    "NIX_PATH", "NIX_PROFILES", "NIX_SSL_CERT_FILE", "IN_NIX_SHELL",
     // Go's variables have no common prefix that excludes GOOGLE_*.
     "GOPATH", "GOROOT", "GOBIN", "GOCACHE", "GOMODCACHE", "GOFLAGS",
-    "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GOTOOLCHAIN", "GOENV",
+    "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GONOPROXY", "GOSUMDB", "GOINSECURE",
+    "GOTOOLCHAIN", "GOENV", "GOOS", "GOARCH", "GOAMD64", "GOARM", "GOWORK",
+    "GOEXPERIMENT", "GOTMPDIR", "GODEBUG",
+    // Trust stores: a corporate CA bundle missing is every https fetch failing.
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO", "GIT_SSL_CAPATH",
+    // Output shape. Test runners and linters key colour and width off these,
+    // and CI flips a good share of test suites into their non-interactive mode.
+    "COLORTERM", "NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE",
+    "COLUMNS", "LINES", "CI",
 #if defined(__APPLE__)
     // xcrun reads these.
-    "DEVELOPER_DIR", "SDKROOT",
+    "DEVELOPER_DIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
+    "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
     "HOMEBREW_PREFIX", "HOMEBREW_CELLAR", "HOMEBREW_REPOSITORY",
+#elif defined(_WIN32)
+    // MSVC's developer prompt: without these cl.exe finds no headers or libs.
+    "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCTOOLSINSTALLDIR",
+    "VSINSTALLDIR", "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "UCRTVERSION",
+    "UNIVERSALCRTSDKDIR", "VCPKG_ROOT",
 #endif
 };
 
-// ...and the prefixes of the toolchains whose dirs kHomeToolSubdirs makes
-// readable. A toolchain's variables are only useful where its files are.
+// ...and whole families. Prefix matches are where secrets hide (a registry
+// token is CARGO_REGISTRIES_<NAME>_TOKEN), so every one of these is also run
+// past kEnvSecretMarks below; an exact name above is not, because it was read.
 constexpr std::string_view kEnvToolchainPrefixes[] = {
+    // The version managers whose dirs kHomeToolSubdirs makes readable.
     "CARGO_", "RUSTUP_", "NVM_", "PYENV_", "RBENV_", "ASDF_",
-    "BUN_", "DENO_", "DOTNET_", "SDKMAN_",
+    "BUN_", "DENO_", "DOTNET_", "SDKMAN_", "VOLTA_", "FNM_", "GHCUP_",
+    // Language runtimes and their package managers.
+    "RUST",            // RUSTFLAGS, RUSTC_WRAPPER, RUST_BACKTRACE, RUST_LOG
+    "CGO_", "PYTHON",  // PYTHONPATH, PYTHONHOME, PYTHONUTF8, ...
+    "PIP_", "UV_", "POETRY_", "PIPX_", "CONDA_", "MAMBA_",
+    "NODE_", "npm_config_", "NPM_CONFIG_", "YARN_", "COREPACK_",
+    "MAVEN_", "GRADLE_", "ANDROID_", "NUGET_",
+    "RUBY", "PERL", "COMPOSER_", "MIX_", "HEX_", "OPAM", "JULIA_", "ZIG_",
+    // Build drivers and compiler caches.
+    "CMAKE_", "CTEST_", "MESON_", "NINJA_", "PKG_CONFIG", "CCACHE_",
+    "SCCACHE_", "DISTCC_", "CONAN_", "VCPKG_", "BAZEL_",
 };
 
 // Secret-shaped names that an allowed prefix would otherwise let through.
+// Matched case-blind on every OS: npm reads npm_config__authToken, so a
+// case-sensitive "AUTH" would wave the npm registry token straight through.
 constexpr std::string_view kEnvSecretMarks[] = {
-    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "CREDENTIAL", "AUTH",
+    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "API_KEY", "APIKEY",
+    "ACCESS_KEY", "PRIVATE_KEY", "CREDENTIAL", "AUTH", "COOKIE", "SESSION",
 };
+// ...and the same as a final word: CONAN_PASS, NUGET_KEY, GRADLE_..._PAT.
+constexpr std::string_view kEnvSecretSuffixes[] = {"_KEY", "_PAT", "_PASS", "_PWD"};
+
+[[nodiscard]] constexpr char ascii_up(char c) noexcept {
+    return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c;
+}
+
+[[nodiscard]] bool ieq(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (ascii_up(a[i]) != ascii_up(b[i])) return false;
+    return true;
+}
+
+[[nodiscard]] bool looks_secret(std::string_view key) noexcept {
+    for (auto mark : kEnvSecretMarks)
+        for (std::size_t i = 0; i + mark.size() <= key.size(); ++i)
+            if (ieq(key.substr(i, mark.size()), mark)) return true;
+    for (auto suf : kEnvSecretSuffixes)
+        if (key.size() > suf.size() && ieq(key.substr(key.size() - suf.size()), suf))
+            return true;
+    return false;
+}
 
 [[nodiscard]] bool env_name_eq(std::string_view a, std::string_view b) noexcept {
 #if defined(_WIN32)
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; };
-        if (up(a[i]) != up(b[i])) return false;
-    }
-    return true;
+    return ieq(a, b);
 #else
     return a == b;
 #endif
@@ -482,27 +548,54 @@ constexpr std::string_view kEnvSecretMarks[] = {
 
 }  // namespace
 
+bool env_value_has_credentials(std::string_view value) noexcept {
+    // scheme://userinfo@host. A password (user:pw@) is a credential under any
+    // scheme; a bare user is one under http(s), where it is how a token rides
+    // (https://ghp_xxx@github.com) -- but not under ssh, where `git@` is just
+    // the account name.
+    for (std::size_t at = value.find("://"); at != std::string_view::npos;
+         at = value.find("://", at + 3)) {
+        std::size_t s0 = at;
+        while (s0 > 0) {
+            const char c = value[s0 - 1];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                  || c == '+' || c == '-' || c == '.'))
+                break;
+            --s0;
+        }
+        const auto scheme = value.substr(s0, at - s0);   // "sparse+https", "git+ssh"
+        const auto start = at + 3;
+        const auto end = value.find_first_of("/?# \t,;", start);
+        const auto auth = value.substr(start, end == std::string_view::npos
+                                                  ? std::string_view::npos : end - start);
+        const auto amp = auth.rfind('@');
+        if (amp == std::string_view::npos || amp == 0) continue;
+        if (auth.substr(0, amp).find(':') != std::string_view::npos) return true;
+        const bool http = scheme.size() >= 4 &&
+            (ieq(scheme.substr(scheme.size() - 4), "http") ||
+             (scheme.size() >= 5 && ieq(scheme.substr(scheme.size() - 5), "https")));
+        if (http) return true;
+    }
+    return false;
+}
+
 bool env_allowed(EnvScope scope, std::string_view key,
-                 std::span<const std::string> keep) noexcept {
+                 std::span<const std::string> keep, std::string_view value) noexcept {
     if (scope == EnvScope::Host) return true;
     for (const auto& k : keep)
         if (env_name_eq(key, k)) return true;
     for (auto n : kEnvEssential)
         if (env_name_eq(key, n)) return true;
     if (scope == EnvScope::Essential) return false;
+    // PIP_INDEX_URL=https://user:token@pypi.corp/ is an ordinary-looking name
+    // carrying a credential; GOPROXY and npm's registry do the same.
+    if (env_value_has_credentials(value)) return false;
     for (auto n : kEnvToolchain)
         if (env_name_eq(key, n)) return true;
-    bool prefixed = false;
     for (auto pre : kEnvToolchainPrefixes)
-        if (key.size() > pre.size() && env_name_eq(key.substr(0, pre.size()), pre)) {
-            prefixed = true;
-            break;
-        }
-    if (!prefixed) return false;
-    for (auto mark : kEnvSecretMarks)
-        for (std::size_t i = 0; i + mark.size() <= key.size(); ++i)
-            if (env_name_eq(key.substr(i, mark.size()), mark)) return false;
-    return true;
+        if (key.size() > pre.size() && env_name_eq(key.substr(0, pre.size()), pre))
+            return !looks_secret(key);
+    return false;
 }
 
 Config apply_posture(const Config& base, Posture p) {
