@@ -373,48 +373,33 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
                            std::to_string(landlock_abi)
                      : std::string{"this host cannot filter network by port"});
 
-    form.fields.push_back(
-        list_row(kSbPorts, std::string{i18n::t("sandbox.ports")},
-                 std::string{i18n::t("sandbox.help.ports")},
-                 cfg.allow_ports.size(), "port"));
-    // Deliberately NOT locked when Access is not `ports`.
-    //
-    // It used to be, on the reasoning that a port list means nothing under
-    // `full` or `none`. True, and it made the row unreachable: lock_row makes
-    // activate() return Nothing, so Enter did not open the editor and there
-    // was no way to fill in ports at all. The user had to know to set Access
-    // first, from a row that told them to do it but would not let them act.
-    //
-    // So the row stays live and the EDITOR fixes the mode on commit: adding
-    // ports when Access is not `ports` switches it, because adding a port is
-    // an unambiguous statement of intent. The help line says so rather than
-    // leaving it to be discovered.
-    if (cfg.net_mode == sandbox_cfg::NetMode::Full)
-        form.fields.back().help =
-            "adding a port here switches Access to `ports` \xc2\xb7 "
-            "443 https \xc2\xb7 80 http \xc2\xb7 22 git-ssh";
-    else if (cfg.net_mode == sandbox_cfg::NetMode::None)
-        form.fields.back().help = "only used when Access is `ports`";
+    // Only where they mean something: ports under `ports`, hosts under
+    // `full` and `ports`. Changing Access rebuilds the form, so a row
+    // reappears the moment its mode is picked; the lists live in the config,
+    // so hiding a row loses nothing.
+    if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
+        form.fields.push_back(
+            list_row(kSbPorts, std::string{i18n::t("sandbox.ports")},
+                     std::string{i18n::t("sandbox.help.ports")},
+                     cfg.allow_ports.size(), "port"));
 
     // Allowed hosts: the name allowlist for Access = full, enforced by the
-    // sandbox proxy. Live in every mode for the same reason Ports is: a row
-    // you cannot open is a row nobody can fill in. The help line names what
-    // the list does IN THE CURRENT MODE, since that is what the user sees.
-    form.fields.push_back(
-        list_row(kSbHosts, std::string{i18n::t("sandbox.hosts")},
-                 std::string{i18n::t("sandbox.help.hosts")},
-                 cfg.allow_hosts.size(), "host"));
-    if (cfg.allow_hosts.empty())
-        form.fields.back().value = [] {
-            form::field::Pick p;
-            p.placeholder = "any public host \xc2\xb7 Enter to restrict";
-            return p;
-        }();
-    if (cfg.net_mode == sandbox_cfg::NetMode::None)
-        form.fields.back().help = "unused while Access is none \xc2\xb7 nothing is reachable";
-    else if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
-        form.fields.back().help = "unused while Access is ports \xc2\xb7 set Access to full "
-                                  "to filter by name";
+    // sandbox proxy. Shown under ports too, so a list carried over is visible.
+    if (cfg.net_mode != sandbox_cfg::NetMode::None) {
+        form.fields.push_back(
+            list_row(kSbHosts, std::string{i18n::t("sandbox.hosts")},
+                     std::string{i18n::t("sandbox.help.hosts")},
+                     cfg.allow_hosts.size(), "host"));
+        if (cfg.allow_hosts.empty())
+            form.fields.back().value = [] {
+                form::field::Pick p;
+                p.placeholder = "any public host \xc2\xb7 Enter to restrict";
+                return p;
+            }();
+        if (cfg.net_mode == sandbox_cfg::NetMode::Ports)
+            form.fields.back().help = "unused while Access is ports \xc2\xb7 set Access to full "
+                                      "to filter by name";
+    }
 
     // ── Syscalls ─────────────────────────────────────────────────────────
     form.fields.push_back(header("Syscalls"));
@@ -537,24 +522,20 @@ form::Form build_sandbox_form(const sandbox_cfg::Config& cfg,
         "that records it"));
     if (!claybin_live) lock_row(form, kSbFakeHost, why_locked);
 
-    // What a command inherits from agentty's environment. A wall against the
-    // tokens and keys people export in their shell rc, which no file mask sees.
+    // Which of the user's environment variables a command sees. A wall against
+    // the tokens people export in their shell rc, which no file mask sees.
     form.fields.push_back(choice(
-        kSbEnvScope, "Environment",
-        "what a command inherits from agentty's environment \xc2\xb7 the "
-        "variables the agent's tools need are set either way",
+        kSbEnvScope, "Environment variables",
+        "which of your variables a command can see",
         {"toolchain", "essential", "host"},
         static_cast<int>(cfg.env_scope),
-        {"essential + toolchain variables (GOPATH, CARGO_*) \xc2\xb7 names that "
-         "look secret are dropped even there",
-         "PATH, HOME, locale and temp dirs only \xc2\xb7 a fixed list, nothing "
-         "guessed \xc2\xb7 add others below",
-         "everything but session sockets and provider keys \xc2\xb7 a token you "
-         "export (GH_TOKEN) reaches the command"}));
+        {"basics + toolchains (CARGO_*, GOPATH) \xc2\xb7 tokens dropped",
+         "basics only \xc2\xb7 PATH, HOME, locale, temp",
+         "all of them \xc2\xb7 exported tokens included"}));
     if (!claybin_live) lock_row(form, kSbEnvScope, why_locked);
     form.fields.push_back(
-        list_row(kSbEnvKeep, "Also inherited",
-                 "variable names passed through unless the environment is host",
+        list_row(kSbEnvKeep, "Custom variables",
+                 "additional variable names \xc2\xb7 MKLROOT, ANDROID_HOME",
                  cfg.env_keep.size(), "name"));
     if (!claybin_live) lock_row(form, kSbEnvKeep, why_locked);
 
@@ -1304,7 +1285,7 @@ void annotate_sandbox_form(form::Form& f, const Preview& preview,
     }
 }
 
-void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
+void annotate_host_risks(form::Form& f, [[maybe_unused]] const sandbox_cfg::Config& cfg,
                          const HostFacts& facts) {
     auto row_of = [&](std::string_view id) -> form::Field* {
         for (auto& fld : f.fields)
@@ -1316,12 +1297,6 @@ void annotate_host_risks(form::Form& f, const sandbox_cfg::Config& cfg,
         if (auto* fld = row_of(id); fld && fld->error.empty())
             fld->error = std::move(msg);
     };
-
-    // A port list under Full does nothing. The audit found [22,53,80,443]
-    // set with Access at full and read it as an allowlist; it isn't one.
-    if (cfg.net_mode == sandbox_cfg::NetMode::Full && !cfg.allow_ports.empty())
-        warn(kSbPorts, "ignored while Access is full \xc2\xb7 every port is open "
-                       "\xc2\xb7 set Access to ports to use this list");
 
     // Workspace = $HOME: the write wall is the workspace, so every dotfile is
     // writable, including login files and ~/.local/bin.

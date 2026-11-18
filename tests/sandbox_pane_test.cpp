@@ -1484,32 +1484,39 @@ TEST_CASE("sandbox list: ^X cannot delete the add row") {
     CHECK(pn::read_sandbox_list(ed->pane) == want);
 }
 
-TEST_CASE("sandbox pane: the ports row opens even when Access is not `ports`") {
-    // It used to be LOCKED unless the mode was already `ports`, which made it
-    // unreachable: lock_row makes activate() return Nothing, so Enter did not
-    // open the editor and there was no way to fill in ports at all. The row
-    // told you to set Access first and would not let you act.
+TEST_CASE("sandbox pane: network list rows show only where Access uses them") {
+    // A row for a list the current mode ignores read as a setting that does
+    // something. Ports exist only under `ports`; hosts under `full` and
+    // `ports`; under `none` neither. The lists themselves are kept.
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
-    cfg.net_mode = sandbox_cfg::NetMode::Full;   // NOT ports
-    install(cfg);
+    cfg.allow_ports = {443};
+    cfg.allow_hosts = {"github.com"};
+    const auto rows = [&](sandbox_cfg::NetMode mode) {
+        cfg.net_mode = mode;
+        auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
+        return std::pair{row_of(form, pn::kSbPorts) >= 0, row_of(form, pn::kSbHosts) >= 0};
+    };
+    CHECK(rows(sandbox_cfg::NetMode::Full) == std::pair{false, true});
+    CHECK(rows(sandbox_cfg::NetMode::None) == std::pair{false, false});
+    if (facts_for(cfg).per_port_net)
+        CHECK(rows(sandbox_cfg::NetMode::Ports) == std::pair{true, true});
 
+    // Hidden is not dropped: reading the form back keeps both lists.
+    cfg.net_mode = sandbox_cfg::NetMode::None;
     auto form = pn::build_sandbox_form(cfg, facts_for(cfg));
-    const int p = row_of(form, pn::kSbPorts);
-    REQUIRE(p >= 0);
-    CHECK_FALSE(form.fields[static_cast<std::size_t>(p)].locked);
+    const auto back = pn::read_sandbox_form(form, cfg);
+    CHECK(back.allow_ports == cfg.allow_ports);
+    CHECK(back.allow_hosts == cfg.allow_hosts);
 }
 
-TEST_CASE("sandbox pane: adding a port switches Access to `ports`") {
-    // Adding a port is an unambiguous statement of intent, so it sets the mode
-    // rather than sitting inert under `full`. Otherwise the user fills in a
-    // port list that does nothing and nothing says why.
+TEST_CASE("sandbox pane: ports edited under `ports` are saved") {
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
-    cfg.net_mode = sandbox_cfg::NetMode::Full;
-    cfg.allow_ports.clear();
+    cfg.net_mode = sandbox_cfg::NetMode::Ports;
+    cfg.allow_ports = {443};
     install(cfg);
 
     Model m = opened();
@@ -1528,7 +1535,7 @@ TEST_CASE("sandbox pane: adding a port switches Access to `ports`") {
     const auto* o = m2.ui.panel.get<pn::Sandbox>();
     REQUIRE(o != nullptr);
     CHECK(o->pane.working.net_mode == sandbox_cfg::NetMode::Ports);
-    const std::vector<std::uint16_t> want{8080};
+    const std::vector<std::uint16_t> want{443, 8080};
     CHECK(o->pane.working.allow_ports == want);
 }
 
@@ -2659,7 +2666,6 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
         return form.fields[static_cast<std::size_t>(i)].error;
     };
 #if AGENTTY_TEST_SANDBOX_BACKEND
-    CHECK(err_of(pn::kSbPorts).find("ignored") != std::string::npos);
     CHECK(err_of(pn::kSbFsScope).find("home") != std::string::npos);
     CHECK(err_of(pn::kSbHandoff).find("cap") != std::string::npos);
 #else
@@ -2671,7 +2677,7 @@ TEST_CASE("sandbox pane: host risks the audit found are said on the row") {
     auto calm = facts_for(cfg);
     auto quiet = pn::build_sandbox_form(cfg, calm);
     pn::annotate_host_risks(quiet, cfg, calm);
-    for (auto id : {pn::kSbPorts, pn::kSbFsScope, pn::kSbHandoff}) {
+    for (auto id : {pn::kSbFsScope, pn::kSbHandoff}) {
         const int i = row_of(quiet, id);
         REQUIRE(i >= 0);
         CHECK(quiet.fields[static_cast<std::size_t>(i)].error.empty());
@@ -2743,6 +2749,8 @@ TEST_CASE("sandbox render: the pane paints the ACTIVE language") {
     sandbox_cfg::Config cfg;
     cfg.configured = true;
     cfg.backend = sandbox_cfg::LinuxBackend::Claybin;
+    // Allowed ports is only shown under `ports`, and its fallback is checked below.
+    cfg.net_mode = sandbox_cfg::NetMode::Ports;
     install(cfg);
 
     const auto paint = [&] {

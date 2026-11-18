@@ -418,9 +418,9 @@ Cmd sandbox_update(Model& m, msg::SandboxMsg sm) {
                         "credential files are masked whether listed or not";
             } else if (e.row_id == pn::kSbEnvKeep) {
                 src = &cfg.env_keep;
-                title = "Also inherited";
-                help  = "variable names a command inherits unless the environment "
-                        "is host \xc2\xb7 the value is passed as you have it";
+                title = "Custom variables";
+                help  = "additional variable names a command sees unless the "
+                        "environment is host \xc2\xb7 the value is passed as you have it";
             } else {
                 return Cmd::none();   // not a list row
             }
