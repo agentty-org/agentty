@@ -42,10 +42,13 @@ FileChange compute(const std::string& path,
     c.original_contents = before;
     c.new_contents = after;
 
-    // Views into `before`/`after`: copying every line into its own string was
-    // the largest cost of computing the hunks for a one-line edit.
-    const auto a = myers::detail::split_views(before);
-    const auto b = myers::detail::split_views(after);
+    // Views into `before`/`after`, and only the changed window (plus 3 lines
+    // of context): splitting both whole files was the largest cost of the
+    // hunks for a one-line edit. `off` maps window lines to file lines.
+    const auto win = myers::window(before, after, 3);
+    const auto& a = win.a;
+    const auto& b = win.b;
+    const int off = win.off;
     auto edits = compute_edits(a, b);
 
     const int ctx = 3;
@@ -96,17 +99,17 @@ FileChange compute(const std::string& path,
             const auto& e = edits[i2];
             if (e.k == Edit::Keep) {
                 flush_run();
-                if (old_start < 0) old_start = e.a_idx + 1;
-                if (new_start < 0) new_start = e.b_idx + 1;
+                if (old_start < 0) old_start = off + e.a_idx + 1;
+                if (new_start < 0) new_start = off + e.b_idx + 1;
                 old_len++; new_len++;
                 patch << " " << a[e.a_idx] << "\n";
             } else if (e.k == Edit::Del) {
-                if (old_start < 0) old_start = e.a_idx + 1;
+                if (old_start < 0) old_start = off + e.a_idx + 1;
                 old_len++;
                 del_buf += "-"; del_buf += a[e.a_idx]; del_buf += "\n";
                 removed++;
             } else {
-                if (new_start < 0) new_start = e.b_idx + 1;
+                if (new_start < 0) new_start = off + e.b_idx + 1;
                 new_len++;
                 ins_buf += "+"; ins_buf += b[e.b_idx]; ins_buf += "\n";
                 added++;

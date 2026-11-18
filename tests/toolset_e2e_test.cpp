@@ -29,6 +29,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "agentty/diff/diff.hpp"   // apply_accepted: hunks round-trip
 #include "agentty/tool/memory_store.hpp"
 #include "agentty/tool/mcp_tools_bridge.hpp"
 #include "agentty/tool/mcp_tools_backends.hpp"
@@ -251,6 +252,80 @@ int main() {
         check(body.find("BETA-EDITED") != std::string::npos,
               "edit: change landed on disk");
     }
+    // ── edit robustness through agentty's REAL disk layer (GatedFiles over
+    //    DiskFiles), not mcp-cpp's test double ────────────────────────────
+    {
+        const auto slurp = [](const fs::path& p) {
+            std::ifstream f(p, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
+        const auto spit = [](const fs::path& p, const std::string& s) {
+            std::ofstream f(p, std::ios::binary | std::ios::trunc); f << s;
+        };
+        const auto ed = [&](const fs::path& p, const std::string& o, const std::string& n) {
+            (void)run("read", {{"path", p.string()}});   // fresh, so no stale guard
+            return run("edit", {{"path", p.string()},
+                                {"edits", json::array({{{"old_text", o}, {"new_text", n}}})}});
+        };
+        const auto dir = root / "edit_robust";
+        fs::create_directories(dir);
+
+        // CRLF stays CRLF; BOM stays; no trailing newline is not invented.
+        spit(dir / "crlf.txt", "\xEF\xBB\xBFone\r\ntwo\r\nthree");
+        check(ed(dir / "crlf.txt", "two\nthree", "2\n3").has_value(), "edit robust: CRLF+BOM edit applies");
+        check(slurp(dir / "crlf.txt") == "\xEF\xBB\xBFone\r\n2\r\n3", "edit robust: CRLF, BOM and missing EOL kept");
+
+        // Mode survives the atomic rename.
+        spit(dir / "run.sh", "#!/bin/sh\necho hi\n");
+        fs::permissions(dir / "run.sh", fs::perms(0755));
+        check(ed(dir / "run.sh", "echo hi", "echo bye").has_value(), "edit robust: script edit applies");
+        check((fs::status(dir / "run.sh").permissions() & fs::perms(0777)) == fs::perms(0755),
+              "edit robust: file mode preserved");
+
+        // Read-only is refused and untouched.
+        spit(dir / "ro.txt", "locked\n");
+        fs::permissions(dir / "ro.txt", fs::perms(0444));
+        check(!ed(dir / "ro.txt", "locked", "open").has_value(), "edit robust: read-only file refused");
+        check(slurp(dir / "ro.txt") == "locked\n", "edit robust: read-only file untouched");
+        fs::permissions(dir / "ro.txt", fs::perms(0644));
+
+        // Hard links stay linked.
+        spit(dir / "h1.txt", "shared\n");
+        fs::create_hard_link(dir / "h1.txt", dir / "h2.txt");
+        check(ed(dir / "h1.txt", "shared", "both").has_value(), "edit robust: hard-linked edit applies");
+        check(slurp(dir / "h2.txt") == "both\n" && fs::hard_link_count(dir / "h1.txt") == 2,
+              "edit robust: hard link not split");
+
+        // Through a symlink: target edited, link kept.
+        spit(dir / "target.txt", "via link\n");
+        fs::create_symlink("target.txt", dir / "link.txt");
+        check(ed(dir / "link.txt", "via link", "edited").has_value(), "edit robust: symlink edit applies");
+        check(fs::is_symlink(dir / "link.txt") && slurp(dir / "target.txt") == "edited\n",
+              "edit robust: symlink kept, target edited");
+
+        // Diff-review hunks apply back to exactly the new content, on a big
+        // file with an edit in the middle (exercises the windowed diff).
+        std::string big;
+        for (int i = 0; i < 5000; ++i) big += "line " + std::to_string(i) + "\n";
+        spit(dir / "big.txt", big);
+        auto br = ed(dir / "big.txt", "line 2500\nline 2501", "LINE 2500\nNEW\nLINE 2501");
+        check(br && br->change && br->change->hunks.size() == 1, "edit robust: one hunk for one edit");
+        if (br && br->change) {
+            auto fc = *br->change;
+            for (auto& h : fc.hunks) h.status = Hunk::Status::Accepted;
+            check(diff::apply_accepted(fc) == slurp(dir / "big.txt"),
+                  "edit robust: accepted hunks rebuild the edited file exactly");
+            check(fc.hunks[0].old_start >= 2497 && fc.hunks[0].old_start <= 2501,
+                  "edit robust: hunk carries file-absolute line numbers");
+        }
+
+        // No temp files left anywhere.
+        int stray = 0;
+        for (auto& e : fs::directory_iterator(dir))
+            if (e.path().filename().string().find("-tmp-") != std::string::npos) ++stray;
+        check(stray == 0, "edit robust: no temp files left behind");
+    }
+
     // ── edit line locator is CORRECT and LIVE ─────────────────────────
     {
         // Known layout: the edited line is line 3.

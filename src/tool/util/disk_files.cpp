@@ -219,12 +219,49 @@ std::string write_file(const fs::path& p, std::string_view content) {
 #ifndef _WIN32
     mode_t target_mode = 0644;
     bool   had_mode    = false;
+    nlink_t links      = 1;
     {
         struct stat st{};
         if (::stat(real.c_str(), &st) == 0) {
             target_mode = st.st_mode & 07777;
             had_mode    = true;
+            links       = st.st_nlink;
         }
+    }
+    // A read-only file stays read-only. The rename below needs only a
+    // writable DIRECTORY, so without this check it replaced a 0444 file
+    // straight through its permission bit -- the one signal a user has for
+    // "don't touch this" (a vendored copy, a generated lockfile).
+    if (had_mode && ::access(real.c_str(), W_OK) != 0 && errno == EACCES)
+        return "'" + p.string() + "' is read-only (mode "
+             + std::to_string((target_mode >> 6) & 7) + std::to_string((target_mode >> 3) & 7)
+             + std::to_string(target_mode & 7)
+             + "); not modified. Make it writable first if the change is intended.";
+    // A file with more than one hard link is rewritten IN PLACE: renaming a
+    // new inode over one name would silently split it from the others, which
+    // keep the old content. That is what vim does for the same reason. Not
+    // atomic, so the data is synced before returning.
+    if (had_mode && links > 1) {
+        int fd = ::open(real.c_str(), O_WRONLY | O_TRUNC | O_CLOEXEC);
+        if (fd < 0)
+            return std::string("cannot open '") + p.string() + "' for writing: "
+                 + explain_errno(errno);
+        const char* d = content.data();
+        std::size_t left = content.size();
+        while (left > 0) {
+            const ssize_t n = ::write(fd, d, left);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) {
+                const int e = errno;
+                ::close(fd);
+                return "write to '" + p.string() + "' failed: " + explain_errno(e);
+            }
+            d += n;
+            left -= static_cast<std::size_t>(n);
+        }
+        (void)::fdatasync(fd);
+        ::close(fd);
+        return {};
     }
 #endif
 

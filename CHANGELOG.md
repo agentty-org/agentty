@@ -5,6 +5,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **`edit` never silently overwrites someone else's change.** If the file
+  is written by another process between edit's read and its write (a
+  formatter on save, your editor), the edit is refused and nothing is lost.
+- **`edit` and `write` keep read-only files read-only and hard links
+  linked.** The atomic rename replaced a `0444` file straight through its
+  permission bit, and split a hard-linked file from its other names.
 - **A long `shell` or `test` call is no longer killed at 330 s.** The
   no-progress watchdog now waits for the timeout the call asked for (plus
   slack), so `timeout: 600` or `timeout_seconds: 1800` runs to its own
@@ -21,6 +27,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   too, which only matched file names.
 
 ### Performance
+- **`edit` on large files is ~9x faster** (38 ms to 4 ms for a one-line
+  edit in a 1 MB, 30,000-line file; 0.4 ms on a typical 2,000-line file).
+  Edits splice in place, only the changed region is diffed, and the file is
+  diffed once instead of three times.
 - **`edit` is ~13x faster** (8 ms to 0.6 ms for a one-line edit in a
   2,000-line file): Myers diff instead of a full LCS table, no zero-filled
   multi-megabyte read buffer, and no redundant `fdatasync`/directory `fsync`

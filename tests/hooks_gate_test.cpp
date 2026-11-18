@@ -16,6 +16,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -318,6 +319,13 @@ void claude_code_protocol(const fs::path& sandbox, const fs::path& home) {
 #endif
 
 TEST_CASE("hooks_gate") {
+#ifndef _WIN32
+    // agentty's main() ignores SIGPIPE process-wide; a hook that exits
+    // before reading its stdin JSON (`true`, `exit 2`) otherwise kills THIS
+    // test binary when the write lands after the exit -- a load-dependent
+    // race that flaked it under `ctest -j12`. Match production.
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
     const fs::path sandbox =
         fs::temp_directory_path() / ("agentty_hooks_test_" +
                                      std::to_string(::getpid()));
