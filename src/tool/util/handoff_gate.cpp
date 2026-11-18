@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -258,9 +259,14 @@ constexpr std::string_view kSkipDirs[] = {
 // Everything a host tool actually RUNS from .git lives in one of these.
 constexpr std::string_view kGitWatch[] = {"hooks", "info"};
 
+// The files directly in a git dir that git reads as configuration. The rest
+// (HEAD, index, packed-refs, COMMIT_EDITMSG, ORIG_HEAD, ...) is state git
+// rewrites by renaming a lock file over it, which a read-only bind breaks.
+constexpr std::string_view kGitWatchFiles[] = {"config", "config.worktree"};
+
 // Is `p` inside a git dir, and if so is it a part we care about? `is_dir`
-// says whether p itself is a directory: a FILE directly in the git dir
-// (config, FETCH_HEAD) is watched, but a directory there (objects, logs) is
+// says whether p itself is a directory: a FILE directly in the git dir is
+// watched only if it is config, and a directory there (objects, logs) is
 // noise unless it is hooks/ or info/.
 //
 // A submodule's git dir lives at .git/modules/<name>[/modules/<name>...] and
@@ -276,8 +282,9 @@ constexpr std::string_view kGitWatch[] = {"hooks", "info"};
     }
     if (next == p.end()) return false;                    // the git dir itself
     if (*next == "modules") return false;                // leads to submodule git dirs
-    if (std::next(next) == p.end() && !is_dir) return false;   // a file in it
     const std::string seg = next->string();
+    if (std::next(next) == p.end() && !is_dir)                  // a file in it
+        return std::ranges::find(kGitWatchFiles, seg) == std::ranges::end(kGitWatchFiles);
     return std::ranges::find(kGitWatch, seg) == std::ranges::end(kGitWatch);
 }
 
@@ -410,6 +417,81 @@ ListingWalk::~ListingWalk() {
             }
             return m;
         }, std::move(fresh));
+}
+
+// What a git config makes git run from the worktree. A pinned .git/config
+// protects the pointer; these are the targets it points at.
+struct GitConfigTargets {
+    std::vector<fs::path> files;  // fsmonitor, filters, textconv, sshCommand, credential helper
+    std::vector<fs::path> dirs;   // core.hooksPath (husky, lefthook, .githooks)
+};
+
+// Files a pinned hook dir may hold before the rest go unrecorded. A hook dir
+// holds a handful; this only bounds a hooksPath aimed at a big directory.
+constexpr std::size_t kMaxPinnedDirFiles = 256;
+
+[[nodiscard]] std::string_view trim(std::string_view s) {
+    const auto b = s.find_first_not_of(" \t\r");
+    if (b == std::string_view::npos) return {};
+    return s.substr(b, s.find_last_not_of(" \t\r") - b + 1);
+}
+
+[[nodiscard]] std::string ascii_lower(std::string_view s) {
+    std::string out{s};
+    for (char& c : out)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return out;
+}
+
+// A raw value with quotes, escapes and a trailing comment removed. Covers the
+// git-config(1) syntax the keys below use; a quoted path with spaces is cut
+// at the space, so it is missed rather than misread.
+[[nodiscard]] std::string config_value(std::string_view raw) {
+    std::string out;
+    bool quoted = false;
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const char c = raw[i];
+        if (c == '\\' && i + 1 < raw.size()) { out += raw[++i]; continue; }
+        if (c == '"') { quoted = !quoted; continue; }
+        if (!quoted && (c == '#' || c == ';')) break;
+        out += c;
+    }
+    return out;
+}
+
+[[nodiscard]] GitConfigTargets git_config_targets(const fs::path& config) {
+    GitConfigTargets t;
+    std::ifstream in(config, std::ios::binary);
+    if (!in) return t;
+    std::string section;   // lower-case; the subsection (filter "lfs") is dropped
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::string_view l = trim(line);
+        if (l.empty() || l.front() == '#' || l.front() == ';') continue;
+        if (l.front() == '[') {
+            const std::string_view h = trim(l.substr(1, l.find(']') - 1));
+            section = ascii_lower(h.substr(0, h.find_first_of(" \t.\"")));
+            continue;
+        }
+        const auto eq = l.find('=');
+        if (eq == std::string_view::npos) continue;   // a bare key is a boolean
+        const std::string key = ascii_lower(trim(l.substr(0, eq)));
+        const bool dir = section == "core" && key == "hookspath";
+        const bool cmd = (section == "core" && (key == "fsmonitor" || key == "sshcommand"))
+            || (section == "filter" && (key == "clean" || key == "smudge" || key == "process"))
+            || (section == "diff" && key == "textconv")
+            || (section == "credential" && key == "helper");
+        if (!dir && !cmd) continue;
+        const std::string value = config_value(trim(l.substr(eq + 1)));
+        std::string_view v = trim(value);
+        if (cmd) {
+            if (!v.empty() && v.front() == '!') v = trim(v.substr(1));
+            v = v.substr(0, v.find_first_of(" \t"));   // the program, not its args
+        }
+        if (v.empty()) continue;
+        (dir ? t.dirs : t.files).emplace_back(std::string{v});
+    }
+    return t;
 }
 
 }  // namespace
@@ -588,6 +670,58 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
     }
 
     last_truncated().store(truncated);
+
+    // Targets named by each repo's .git/config, pinned like the config itself.
+    // A relative value resolves against the worktree, where git runs hooks and
+    // commands. Only existing paths strictly inside the workspace count, and
+    // they are re-rooted onto `base` so the spelling matches the sandbox's binds.
+    {
+        std::error_code wec;
+        const fs::path ws = fs::canonical(base, wec);
+        std::vector<fs::path> configs;
+        for (const auto& e : snap.entries) {
+            const fs::path p{e.path};
+            if (p.filename() == "config" && p.parent_path().filename() == ".git")
+                configs.push_back(p);
+        }
+        const auto in_workspace = [&](const fs::path& worktree, const fs::path& v)
+                -> std::optional<fs::path> {
+            std::error_code rec;
+            const fs::path real = fs::canonical(v.is_absolute() ? v : worktree / v, rec);
+            if (rec || wec || real == ws) return std::nullopt;
+            const fs::path rel = real.lexically_relative(ws);
+            if (rel.empty() || *rel.begin() == "..") return std::nullopt;
+            if (std::ranges::find(rel, fs::path{".git"}) != rel.end()) return std::nullopt;
+            return base / rel;
+        };
+        for (const auto& config : configs) {
+            const fs::path worktree = config.parent_path().parent_path();
+            const GitConfigTargets t = git_config_targets(config);
+            for (const auto& f : t.files) {
+                std::error_code fec;
+                if (auto p = in_workspace(worktree, f); p && fs::is_regular_file(*p, fec))
+                    record(p->string(), sandbox_cfg::TrustKind::GitConfig);
+            }
+            for (const auto& d : t.dirs) {
+                std::error_code dec;
+                const auto p = in_workspace(worktree, d);
+                if (!p || !fs::is_directory(*p, dec)) continue;
+                if (std::ranges::find(snap.pinned_dirs, p->string()) != snap.pinned_dirs.end())
+                    continue;
+                snap.pinned_dirs.push_back(p->string());
+                std::size_t n = 0;
+                fs::directory_iterator it{*p, fs::directory_options::skip_permission_denied, dec};
+                for (; !dec && it != fs::directory_iterator{} && n < kMaxPinnedDirFiles;
+                     it.increment(dec)) {
+                    std::error_code tec;
+                    if (it->is_regular_file(tec) && !tec) {
+                        record(it->path().string(), sandbox_cfg::TrustKind::GitConfig);
+                        ++n;
+                    }
+                }
+            }
+        }
+    }
     if (truncated)
         AGT_LOG(General, Warn, "handoff",
                 "trusted snapshot truncated at {} entries under {} -- a write "
@@ -658,6 +792,28 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
     for (const auto& e : before.entries) known.push_back(e.path);
     std::ranges::sort(known);
 
+    // A pinned hook dir: every new file is a hook, so no shape test applies.
+    for (const auto& dir : before.pinned_dirs) {
+        std::error_code dec;
+        fs::directory_iterator dit{dir, fs::directory_options::skip_permission_denied, dec};
+        for (; !dec && dit != fs::directory_iterator{}; dit.increment(dec)) {
+            std::error_code fec;
+            if (!dit->is_regular_file(fec) || fec) continue;
+            const std::string p = dit->path().string();
+            if (std::ranges::binary_search(known, p)) continue;
+            sandbox_cfg::TrustHandoff h;
+            h.kind = sandbox_cfg::TrustKind::GitConfig;
+            h.write.path = p;
+            h.write.command = std::string{tool};
+            h.write.at_ms = now_ms();
+            h.write.created = true;
+            remember(h);
+            ++recorded;
+            AGT_LOG(General, Warn, "handoff",
+                    "created a file in a git hook dir outside the gate: {}", p);
+        }
+    }
+
     for (const auto& dir : before.roots) {
         std::error_code dec;
         fs::directory_iterator dit{
@@ -669,7 +825,7 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
                 const std::string p = dit->path().string();
                 if (!std::ranges::binary_search(known, p)) {
                     sandbox_cfg::TrustKind kind{};
-                    if (sandbox_cfg::is_host_trusted(p, &kind)) {
+                    if (sandbox_cfg::is_host_trusted(p, &kind) && !git_noise(dit->path())) {
                         sandbox_cfg::TrustHandoff h;
                         h.kind = kind;
                         h.write.path = p;

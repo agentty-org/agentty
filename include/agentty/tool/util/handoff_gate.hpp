@@ -152,8 +152,13 @@ struct TrustedSnapshot {
     // case, not the lesser one.
     std::vector<std::string> roots;
 
+    // Workspace directories a git config names as its hook dir
+    // (core.hooksPath, e.g. .husky). Pinned read-only whole, and any new file
+    // in one is a handoff, whatever its name.
+    std::vector<std::string> pinned_dirs;
+
     [[nodiscard]] bool empty() const noexcept {
-        return entries.empty() && roots.empty();
+        return entries.empty() && roots.empty() && pinned_dirs.empty();
     }
 };
 

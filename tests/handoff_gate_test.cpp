@@ -95,6 +95,20 @@ TEST_CASE("handoff: an ordinary path is not a handoff under any policy") {
     CHECK(hg::handoff_feed().empty());
 }
 
+TEST_CASE("handoff: names that only look like git internals are ordinary") {
+    Fresh fresh;
+
+    // `hooks`, `config` and `HEAD` used to match anywhere, which made a React
+    // src/hooks/ dir and every file called config read-only for the agent.
+    for (auto path : {"/work/src/hooks/useThing.ts", "/work/deploy/config",
+                      "/work/fixtures/HEAD"}) {
+        INFO(path);
+        auto v = hg::check_with(path, "write", Policy::Refuse);
+        CHECK(v.allowed);
+        CHECK_FALSE(v.is_handoff);
+    }
+}
+
 TEST_CASE("handoff: refuse actually refuses, and says what to do instead") {
     Fresh fresh;
 

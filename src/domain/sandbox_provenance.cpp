@@ -62,13 +62,10 @@ constexpr std::array kRules{
 
     // ── git: fsmonitor + hooks + config (Cursor 3.0.0) ──────────────────
     //
-    // ".git" as a COMPONENT so a renamed git dir does not slip past, and the
-    // internals by basename because the directory can be called anything
-    // while `config` and `HEAD` cannot.
+    // ".git" as a COMPONENT covers the git dir at any depth, submodules
+    // included. Bare `config`, `HEAD` and `hooks` rules are gone: they matched
+    // src/hooks/ and any file named config, and pinned git's own state files.
     ShapeRule{".git", tag(TrustKind::GitConfig), ShapeMatch::Component},
-    ShapeRule{"config", tag(TrustKind::GitConfig), ShapeMatch::Basename},
-    ShapeRule{"HEAD", tag(TrustKind::GitConfig), ShapeMatch::Basename},
-    ShapeRule{"hooks", tag(TrustKind::GitConfig), ShapeMatch::Component},
 
     // ── interpreters and entry points: GHSA-p9g2-cr55-cw9c ──────────────
     //

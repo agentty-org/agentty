@@ -570,6 +570,14 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             }
             return false;
         };
+        // A core.hooksPath dir (.husky, .githooks) is bound whole, so a NEW
+        // hook cannot appear in it either; its files are skipped below.
+        std::error_code plec;
+        for (const auto& d : snap.pinned_dirs) {
+            if (!under_mask(d) && !fs::is_symlink(fs::symlink_status(d, plec))
+                && dirs.insert(d).second)
+                p.handoff_ro.push_back(d);
+        }
         for (const auto& e : snap.entries) {
             if (!e.existed) continue;
             if (under_mask(e.path)) continue;
@@ -578,6 +586,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             std::error_code lec;
             if (fs::is_symlink(fs::symlink_status(e.path, lec))) continue;
             const fs::path parent = fs::path{e.path}.parent_path();
+            if (dirs.contains(parent.string())) continue;
             const auto pname = parent.filename();
             if ((pname == "hooks" || pname == "info")
                 && parent.parent_path().filename() == ".git"
