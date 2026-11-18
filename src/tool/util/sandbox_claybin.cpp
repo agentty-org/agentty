@@ -1111,7 +1111,10 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         // No NO_PROXY for localhost: inside the box localhost IS the proxy,
         // and an exemption there would break the connection rather than open
         // a hole, because nothing else is listening in that namespace.
-        if (p.net_mode != 1 /* not None */) {
+        //
+        // Full only: under Ports the guest shares the host's network and no
+        // proxy exists, so these would point every tool at a dead port.
+        if (p.net_mode == 0 /* Full */) {
             const std::string addr = "http://127.0.0.1:" + std::to_string(kProxyPort);
             for (const char* k : {"http_proxy", "https_proxy", "HTTP_PROXY",
                                   "HTTPS_PROXY", "ALL_PROXY", "all_proxy"}) {
