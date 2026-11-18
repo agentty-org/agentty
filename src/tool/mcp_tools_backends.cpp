@@ -1099,6 +1099,24 @@ std::string summarize_call(const ToolUse& tc) {
 // echoes. Resolves the OLDEST still-pending line for this call (two identical
 // calls in one turn resolve in order); appends a fresh line if none is pending.
 constexpr std::string_view kPendingGlyph = "\xe2\x97\x8b ";   // "○ "
+// The subagent's tool calls as structured children (nested cards in the
+// parent's Agent card), settled at the same moment as their feed line so the
+// two never disagree. Outputs are capped: the card shows a few lines, and the
+// whole list crosses to the UI thread on every update.
+constexpr std::size_t kChildOutputCap = 4096;
+void settle_child(std::vector<ToolUse::Child>* children, const ToolUse& tc, bool ok,
+                  std::string_view output, long long ms) {
+    if (!children) return;
+    for (auto& c : *children)
+        if (c.id == tc.id.value && c.state == ToolUse::Child::State::Running) {
+            c.state = ok ? ToolUse::Child::State::Done : ToolUse::Child::State::Failed;
+            c.args  = tc.args;   // hooks may have rewritten them
+            c.output = std::string{output.substr(0, kChildOutputCap)};
+            c.ms = ms;
+            return;
+        }
+}
+
 void settle_feed_line(std::string& log, const ToolUse& tc, std::string_view glyph,
                       std::string_view tail) {
     const std::string summary = summarize_call(tc);
@@ -1199,7 +1217,8 @@ provider::StreamResult run_one_completion(Thread& thread,
                               bool* cutoff_window_full = nullptr,
                               int max_turns = subagent::kMaxTurns,
                               std::chrono::seconds wall = std::chrono::minutes(15),
-                              bool no_tools = false) {
+                              bool no_tools = false,
+                              std::vector<ToolUse::Child>* children = nullptr) {
     // Provider-agnostic request — the generic shape every transport accepts.
     // fresh_auth_header refreshes the ANTHROPIC OAuth token from disk; on any
     // other backend it would CLOBBER the provider's key with Anthropic
@@ -1641,6 +1660,13 @@ provider::StreamResult run_one_completion(Thread& thread,
                         log += "\n  ";
                         log += kPendingGlyph;
                         log += summarize_call(*tc);
+                        if (children) {
+                            ToolUse::Child c;
+                            c.id = tc->id.value;
+                            c.name = tc->name.value;
+                            c.args = tc->args;
+                            children->push_back(std::move(c));
+                        }
                         pump(/*force=*/true);
                     }
                 } else if constexpr (std::same_as<T, StreamFinished>) {
@@ -1979,7 +2005,26 @@ public:
         const auto run_started = std::chrono::steady_clock::now();
         CallContext live = ctx;
         live.cap.set(ctx.cap.get());
-        live.progress = [&, parent = ctx.progress](std::string_view feed) {
+        // The structured twin of the feed: one Child per tool call, sent
+        // with every progress update so the card can draw real nested cards.
+        std::vector<ToolUse::Child> children;
+        live.progress = [&, parent = ctx.progress, publish = ctx.children](std::string_view feed) {
+            if (publish) {
+                // The card draws only the newest few; older calls just count
+                // toward "⋯ N earlier". Ship them as bare stubs so a long run
+                // doesn't copy megabytes of old output on every update.
+                constexpr std::size_t kFullKids = 8;
+                std::vector<ToolUse::Child> out;
+                out.reserve(children.size());
+                const std::size_t full_from =
+                    children.size() > kFullKids ? children.size() - kFullKids : 0;
+                for (std::size_t i = 0; i < children.size(); ++i) {
+                    const auto& c = children[i];
+                    if (i >= full_from) { out.push_back(c); continue; }
+                    out.push_back(ToolUse::Child{c.id, c.name, nlohmann::json{}, c.state, {}, c.ms});
+                }
+                publish(std::move(out));
+            }
             if (!parent) return;
             int calls = 0;
             const std::size_t first_new = stats ? stats->history.size() : 0;
@@ -2064,7 +2109,8 @@ public:
             provider::StreamResult stream_result =
                 run_one_completion(thread, cfg, type, log, live, &run_reg, stats, &cutoff_window_full,
                                    max_turns,
-                                   std::chrono::duration_cast<std::chrono::seconds>(max_wall_clock));
+                                   std::chrono::duration_cast<std::chrono::seconds>(max_wall_clock),
+                                   /*no_tools=*/false, &children);
 
             if (!stream_result.ok()) {
                 const std::string err = stream_result.error.value_or("stream failed");
@@ -2255,6 +2301,7 @@ public:
                             "tool args failed to parse \xe2\x80\x94 re-emit the call "
                             "with complete, valid JSON arguments"};
                         settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 bad arguments");
+                        settle_child(&children, tc, false, "bad arguments", 0);
                         live.emit(log);
                         // A parse failure still counts as a tool ROUND-TRIP:
                         // the model sees the error tool_result and can
@@ -2271,6 +2318,7 @@ public:
                         tc.status = ToolUse::Failed{now, now,
                             "tool '" + tc.name.value + "' is not available in this run"};
                         settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 not allowed in this run");
+                        settle_child(&children, tc, false, "not allowed in this run", 0);
                         live.emit(log);
                         emit_tool_event(tc.name.value, 0, false, "not allowed in this run",
                                         tc.args.dump());
@@ -2295,6 +2343,7 @@ public:
                                   "answer in this run" + (pre.reason.empty() ? "" : ": " + pre.reason);
                             tc.status = ToolUse::Failed{now, now, why};
                             settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 blocked by hook");
+                            settle_child(&children, tc, false, why, 0);
                             live.emit(log);
                             emit_tool_event(tc.name.value, 0, false, "blocked by hook", tc.args.dump());
                             if (pre.stop) hook_stopped = true;
@@ -2396,6 +2445,7 @@ public:
                             res->text, kSubagentToolBudget);
                         tc.status = ToolUse::Done{now, now, std::move(capped)};
                         settle_feed_line(log, tc, "\xe2\x9c\x93", feed_duration(t_ms));
+                        settle_child(&children, tc, true, tc.output(), t_ms);
                         // Identical SUCCEEDING call 6× → also stuck.
                         std::string ok_key = tc.name.value + '\0'
                             + (tc.args.is_null() ? std::string{} : tc.args.dump());
@@ -2407,6 +2457,7 @@ public:
                     } else {
                         tc.status = ToolUse::Failed{now, now, res.error().render()};
                         settle_feed_line(log, tc, "\xe2\x9c\x97", feed_reason(res.error().render()));
+                        settle_child(&children, tc, false, res.error().render(), t_ms);
                         // Identical failing call 3× → the loop is stuck.
                         std::string key = tc.name.value + '\0'
                             + (tc.args.is_null() ? std::string{} : tc.args.dump());

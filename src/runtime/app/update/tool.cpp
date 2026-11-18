@@ -668,6 +668,18 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             return Cmd::none();
         },
 
+        // ── A subagent's own tool calls, for its nested cards ─────────────
+        // The whole list each time (it is small and bounded at the source),
+        // so there is no append state to keep consistent. Kept through the
+        // settle: the terminal ToolExecOutput doesn't touch `children`.
+        [&](ToolExecChildren& e) -> Cmd {
+            with_exec_tool(m, e.id, e.exec_seq, [&](ToolUse& tc) {
+                if (!tc.is_running()) return;
+                tc.children = std::move(e.children);
+                if (auto* r = std::get_if<ToolUse::Running>(&tc.status)) r->last_progress_at = m.now;
+            });
+            return Cmd::none();
+        },
         // ── Per-tool wall-clock watchdog ──────────────────────────────────
         [&](ToolTimeoutCheck& e) -> Cmd {
             bool flipped = false;

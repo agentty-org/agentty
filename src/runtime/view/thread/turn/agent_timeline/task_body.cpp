@@ -162,6 +162,26 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         // flight", and inserting a placeholder row here can shift content
         // that is already in native scrollback (tool_timeline_adapter_test).
         if (feed.empty()) return true;
+        // With nested cards (the runner sent structured children), they ARE
+        // the activity: the body keeps only the status row and what the agent
+        // is saying right now (the feed's "▸ ..." line), not a text echo of
+        // every call.
+        if (!tc.children.empty()) {
+            std::string said;
+            if (auto p = feed.rfind("\xe2\x96\xb8 "); p != std::string_view::npos) {
+                std::string_view s = feed.substr(p);
+                s = s.substr(0, s.find('\n'));
+                said = "  " + std::string{s};
+            }
+            if (status.empty() && said.empty()) return true;
+            out.kind = Kind::CodeBlock;
+            out.text = status + (status.empty() || said.empty() ? "" : "\n") + said;
+            out.text_color = text_primary;
+            out.colorize = true;
+            out.show_all = true;
+            out.is_streaming = true;
+            return true;
+        }
         // Pre-sliced: status row + the newest feed lines, shown verbatim
         // (CodeBlock + show_all) so the widget's own tail can't scroll the
         // status row away. colorize paints ✓ / ✗, paths and numbers.

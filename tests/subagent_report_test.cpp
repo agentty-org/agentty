@@ -405,6 +405,41 @@ int main() {
         fs::remove_all("w_tree");
     }
 
+    // ── X. Structured children: the runner reports each tool call as a ──
+    //    real child (id, name, args, state, output) for nested cards.
+    {
+        install_scripted_stream([](int turn, const provider::Request&,
+                                   const provider::EventSink& sink) {
+            if (turn == 0) {
+                emit_tool_call(sink, "x0", "grep", json{{"pattern", "zzz_absent_x0"}});
+                emit_tool_call(sink, "x1", "read", json{{"path", "/definitely/not/here.txt"}});
+                emit_finish(sink, StopReason::ToolUse);
+                return;
+            }
+            emit_text(sink, "done");
+            emit_finish(sink, StopReason::EndTurn);
+        });
+        auto lists = std::make_shared<std::vector<std::vector<ToolUse::Child>>>();
+        tools::CallContext ctx;
+        ctx.progress = [](std::string_view) {};
+        ctx.children = [lists](std::vector<ToolUse::Child> k) { lists->push_back(std::move(k)); };
+        (void)run_task("two calls", ctx);
+        check(!lists->empty(), "X: children are published while the run works");
+        bool saw_running = false;
+        for (const auto& l : *lists)
+            for (const auto& c : l) saw_running |= c.state == ToolUse::Child::State::Running;
+        check(saw_running, "X: a child is published as Running before it settles");
+        const auto& last = lists->back();
+        check(last.size() == 2 && last[0].id == "x0" && last[0].name == "grep"
+                  && last[1].name == "read",
+              "X: one child per call, in order, with name and id");
+        check(last.size() == 2 && last[0].state == ToolUse::Child::State::Done
+                  && last[1].state == ToolUse::Child::State::Failed && !last[1].output.empty(),
+              "X: children settle to Done / Failed with their output");
+        check(last.size() == 2 && last[0].args.value("pattern", "") == "zzz_absent_x0",
+              "X: children carry their args (the nested card's header)");
+    }
+
     // ── B. Writes prose at the end: clean final report. ─────────────────
     // Explore for a couple of turns, then on turn 3 stop calling tools and
     // write the real answer. The runner must return exactly that prose.

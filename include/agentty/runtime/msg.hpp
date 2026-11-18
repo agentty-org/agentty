@@ -475,6 +475,13 @@ struct ToolExecProgress {
     std::string snapshot;
     std::uint64_t exec_seq = 0;   // see ToolExecOutput::exec_seq
 };
+// A subagent's tool calls so far (the whole list, newest last), for the
+// nested cards inside its Agent card. Sent alongside ToolExecProgress.
+struct ToolExecChildren {
+    ToolCallId id;
+    std::vector<ToolUse::Child> children;
+    std::uint64_t exec_seq = 0;
+};
 // Wall-clock watchdog for tool execution. Scheduled by kick_pending_tools
 // via Cmd::after when a non-subprocess tool transitions to Running. If the
 // tool has reached a terminal state by the time the check fires, this is
@@ -1492,7 +1499,7 @@ using StreamMsg = std::variant<
     StreamBufferedWait, CancelStream, RetryStream, ProactiveContextReady>;
 
 using ToolMsg = std::variant<
-    ToolExecOutput, ToolExecProgress, ToolTimeoutCheck, PreToolHooksDone,
+    ToolExecOutput, ToolExecProgress, ToolExecChildren, ToolTimeoutCheck, PreToolHooksDone,
     PermissionApprove, PermissionReject, PermissionApproveAlways>;
 
 // The tool-output viewer PANEL's messages — split from ToolMsg so the

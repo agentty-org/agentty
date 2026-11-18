@@ -123,6 +123,49 @@ TEST_CASE("thread blobs: large tool output round-trips") {
     persistence::delete_thread(::agentty::IoAccess::grant(), agtest::cap(), ThreadId{"blobtool"});
 }
 
+TEST_CASE("thread: a subagent's nested tool calls round-trip") {
+    Message asst;
+    asst.role = Role::Assistant;
+    ToolUse tc;
+    tc.id   = ToolCallId{"task_1"};
+    tc.name = ToolName{"task"};
+    ToolUse::Done done;
+    done.output = "report";
+    tc.status = std::move(done);
+    using Child = ToolUse::Child;
+    tc.children.push_back(Child{"c0", "grep", nlohmann::json{{"pattern", "foo"}},
+                                Child::State::Done, "a.cpp:1: foo", 12});
+    tc.children.push_back(Child{"c1", "read", nlohmann::json{{"path", "/nope"}},
+                                Child::State::Failed, "no such file", 3});
+    // Saved mid-run: must not come back spinning forever.
+    tc.children.push_back(Child{"c2", "shell", nlohmann::json{{"command", "ls"}},
+                                Child::State::Running, "", 0});
+    asst.tool_calls.push_back(std::move(tc));
+
+    Thread t{ThreadId{"subkids"}, "subagent kids", {asst}, {}, {}};
+    persistence::save_thread(::agentty::IoAccess::grant(), agtest::cap(), t);
+    persistence::flush_pending_saves(::agentty::IoAccess::grant(), agtest::cap());
+
+    auto loaded = load_t(ThreadId{"subkids"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->messages.size() == 1u);
+    REQUIRE(loaded->messages[0].tool_calls.size() == 1u);
+    const auto& kids = loaded->messages[0].tool_calls[0].children;
+    REQUIRE(kids.size() == 3u);
+    CHECK(kids[0].id == "c0");
+    CHECK(kids[0].name == "grep");
+    CHECK(kids[0].args.value("pattern", "") == "foo");
+    CHECK(kids[0].state == Child::State::Done);
+    CHECK(kids[0].output == "a.cpp:1: foo");
+    CHECK(kids[0].ms == 12);
+    CHECK(kids[1].state == Child::State::Failed);
+    CHECK(kids[1].output == "no such file");
+    CHECK_MESSAGE(kids[2].state == Child::State::Failed,
+                  "a child persisted while running reloads as settled");
+
+    persistence::delete_thread(::agentty::IoAccess::grant(), agtest::cap(), ThreadId{"subkids"});
+}
+
 TEST_CASE("thread blobs: identical payloads share one file") {
     // Content addressing means the same screenshot pasted twice — or the
     // same turn retried — costs one blob, not N.

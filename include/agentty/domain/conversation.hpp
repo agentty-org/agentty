@@ -212,6 +212,22 @@ struct ToolUse {
     };
     using Status = std::variant<Pending, Approved, Running, Done, Failed, Rejected>;
 
+    // A `task` (subagent) call's OWN tool calls, newest last, so the card can
+    // draw them as real nested tool cards instead of a text log. A plain value
+    // (not a ToolUse) on purpose: it crosses threads in a Msg, persists with
+    // the thread, and stays small -- the subagent's outputs are capped here
+    // the same way its own transcript caps them. Empty for every other tool.
+    struct Child {
+        enum class State : std::uint8_t { Running, Done, Failed };
+        std::string    id;
+        std::string    name;
+        nlohmann::json args;
+        State          state = State::Running;
+        std::string    output;     // capped; empty while running
+        std::int64_t   ms = 0;     // duration once settled
+    };
+    std::vector<Child> children;
+
     ToolCallId     id;
     ToolName       name;
     nlohmann::json args;

@@ -180,6 +180,9 @@ struct CallContext {
     // A subagent run finished; here is its transcript (an editor can keep it
     // as a session of its own). Empty: dropped.
     std::function<void(const ::agentty::Thread&)> on_subagent_done;
+    // A subagent's tool calls so far, whole list each time, for nested tool
+    // cards in its Agent card. Empty: nobody draws them.
+    std::function<void(std::vector<::agentty::ToolUse::Child>)> children;
 
     void emit(std::string_view snapshot) const { if (progress) progress(snapshot); }
     [[nodiscard]] bool cancelled() const noexcept {

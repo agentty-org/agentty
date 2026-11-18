@@ -395,6 +395,23 @@ json message_to_json(const Message& m) {
                 t["exec_ms"] = std::chrono::duration_cast<
                     std::chrono::milliseconds>(done - *began).count();
         }
+        // A subagent's own tool calls, so a reopened thread still draws its
+        // nested cards. Outputs are already capped by the runner.
+        if (!tc.children.empty()) {
+            json kids = json::array();
+            for (const auto& c : tc.children) {
+                json k;
+                k["id"] = c.id;
+                k["name"] = c.name;
+                k["args"] = c.args;
+                k["state"] = c.state == ToolUse::Child::State::Done ? "done"
+                           : c.state == ToolUse::Child::State::Failed ? "failed" : "running";
+                if (!c.output.empty()) k["output"] = tools::util::to_valid_utf8(c.output);
+                if (c.ms > 0) k["ms"] = c.ms;
+                kids.push_back(std::move(k));
+            }
+            t["children"] = std::move(kids);
+        }
         tcs.push_back(std::move(t));
     }
     j["tool_calls"] = std::move(tcs);
@@ -851,6 +868,21 @@ std::expected<Message, DeserializeError> message_from_json(const json& j) {
                                                     static_cast<std::uint64_t>(0)));
             if (!status) return std::unexpected(std::move(status).error());
             tc.status = std::move(*status);
+            if (auto ck = t.find("children"); ck != t.end() && ck->is_array())
+                for (const auto& k : *ck) {
+                    if (!k.is_object()) continue;
+                    ToolUse::Child c;
+                    c.id = k.value("id", std::string{});
+                    c.name = k.value("name", std::string{});
+                    if (auto a = k.find("args"); a != k.end()) c.args = *a;
+                    const auto st = k.value("state", std::string{"done"});
+                    // A child persisted mid-run can't still be running after
+                    // a reload: show it as failed rather than spinning forever.
+                    c.state = st == "done" ? ToolUse::Child::State::Done : ToolUse::Child::State::Failed;
+                    c.output = k.value("output", std::string{});
+                    c.ms = k.value("ms", static_cast<std::int64_t>(0));
+                    tc.children.push_back(std::move(c));
+                }
             m.tool_calls.push_back(std::move(tc));
         }
     }

@@ -1625,6 +1625,10 @@ Cmd run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args,
                 sink.send(Msg{ToolExecProgress{
                     id, std::string{tools::util::progress_tail(snapshot)}, exec_seq}});
             };
+            // A subagent's own tool calls, for its nested cards.
+            ctx.children = [sink, id, exec_seq](std::vector<ToolUse::Child> kids) {
+                sink.send(Msg{ToolExecChildren{id, std::move(kids), exec_seq}});
+            };
             // Cancelled on EITHER the turn's cancel token (user pressed
             // escape) or jaal's stop_token (the app is shutting down). The
             // second half used to be missing — this parameter was unnamed, so

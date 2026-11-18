@@ -336,6 +336,50 @@ void render_agents(int cols) {
     }
 
     // Settled: clean success, budget-exhausted partial, provider failure.
+    // ── Nested: the subagent's own calls as real tool cards ────────────
+    {
+        using C = ToolUse::Child;
+        auto kid = [](std::string id, std::string name, json args, C::State st,
+                      std::string out, std::int64_t ms) {
+            return C{std::move(id), std::move(name), std::move(args), st, std::move(out), ms};
+        };
+        const std::string grep_out =
+            "src/tools/fs_edit.cpp:48:void minimal_splice(std::string& buf,\n"
+            "src/tools/fs_edit.cpp:661:            minimal_splice(buf, fm.pos, fm.len, repl);\n";
+        const std::string edit_out =
+            "Edited src/tools/fs_edit.cpp (3+ 2- at line 88):\n\n```diff\n--- a/src/tools/fs_edit.cpp\n+++ b/src/tools/fs_edit.cpp\n"
+            "@@ -86,4 +86,5 @@\n     std::string_view matched{buf.data() + region_pos, region_len};\n"
+            "-    std::size_t pre = 0;\n+    std::size_t pre = 0;   // common prefix\n+    const auto cap = repl.size();\n     const std::size_t maxpre = std::min(matched.size(), repl.size());\n```";
+        ToolUse t = running(task("n1", "coder", "Make edit splice in place"), 72,
+            "\xe2\x97\x86 coder \xc2\xb7 turn 7/80 \xc2\xb7 5 tools \xc2\xb7 1m 12s\n"
+            "  \xe2\x9c\x93 grep  minimal_splice\n  \xe2\x96\xb8 Build is green; running the edit tests next.");
+        t.children = {
+            kid("c1", "grep", json{{"pattern", "minimal_splice"}}, C::State::Done, grep_out, 140),
+            kid("c2", "read", json{{"path", "src/tools/fs_edit.cpp"}, {"offset", 40}, {"limit", 30}}, C::State::Done,
+                "    48\tvoid minimal_splice(std::string& buf,\n    49\t                    std::size_t region_pos,\n    50\t                    std::size_t region_len,\n", 2),
+            kid("c3", "edit", json{{"path", "src/tools/fs_edit.cpp"},
+                                   {"edits", json::array({{{"old_text", "std::size_t pre = 0;"},
+                                                           {"new_text", "std::size_t pre = 0;   // common prefix\n    const auto cap = repl.size();"}}})}},
+                C::State::Done, edit_out, 4),
+            kid("c4", "shell", json{{"command", "cmake --build /tmp/mcp-build"}}, C::State::Failed,
+                "[subprocess failed] fs_edit.cpp:88:16: error: 'repl' was not declared in this scope\n[exit code 1]", 9100),
+            kid("c5", "shell", json{{"command", "ctest --test-dir /tmp/mcp-build -R edit"}}, C::State::Running, "", 0),
+        };
+        scene("agent \xc2\xb7 nested (running)", "make edit splice in place", {std::move(t)});
+
+        ToolUse d = task("n2", "explorer", "Map the gate");
+        d.status = ToolUse::Done{now - seconds{40}, now,
+            "Subagent report (explorer, 4 turns):\n\n**Outcome:** the gate checks shapes first, then resolved paths.\n"
+            "- `handoff_gate.cpp:127` resolves symlinks\n- `handoff_gate.cpp:741` git-config targets"};
+        d.children = {
+            kid("d1", "grep", json{{"pattern", "is_git_config_target"}}, C::State::Done,
+                "src/tool/util/handoff_gate.cpp:741:bool is_git_config_target(const fs::path& path) {\n", 90),
+            kid("d2", "read", json{{"path", "src/tool/util/handoff_gate.cpp"}, {"symbol", "check_with"}}, C::State::Done,
+                "   101\tVerdict check_with(std::string_view path, std::string_view tool,\n   102\t                   sandbox_cfg::HandoffPolicy policy) {\n", 3),
+        };
+        scene("agent \xc2\xb7 nested (done)", "map the gate", {std::move(d)});
+    }
+
     {
         ToolUse ok = task("s1", "coder", "Add a glob test");
         ok.status = ToolUse::Done{now - seconds{8}, now,
