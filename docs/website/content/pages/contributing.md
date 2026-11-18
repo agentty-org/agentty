@@ -12,9 +12,9 @@ File issues on [GitHub](https://github.com/agentty-org/agentty/issues). For a re
 
 ## Setting up
 
-1. Fork and clone with submodules: `git clone --recursive`.
-2. Build: `cmake -B build && cmake --build build -j`.
-3. Run the tests with `-DAGENTTY_BUILD_TESTS=ON` (needs GCC or stock Clang, not AppleClang).
+1. Fork and clone. Configure fetches the submodules itself (`git clone --recursive` also works).
+2. Build: `scripts/build.sh`. This configures the debug preset (tests on), builds at `-j12`, and locks `build/` so a second build waits instead of corrupting the tree. Plain CMake: `cmake --preset debug && cmake --build build -j 12`.
+3. Run the tests: `cd build && ctest`. They need GCC or stock Clang, not AppleClang. Standalone suites show as *Not Run* until you build `agentty_standalone_tests`.
 
 See [Building from Source](/docs/building) for toolchain requirements.
 

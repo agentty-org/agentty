@@ -5,7 +5,7 @@ panel *should* look like; this doc says *what to do, in what order,
 to get there*. It's written for an engineer (or future me) who:
 
 1. Has read at least the README and `01_zed_anatomy.md`
-2. Can build agentty (`cmake --build build`) and run it locally
+2. Can build agentty (`scripts/build.sh`, which runs at `-j12`) and run it locally
 3. Knows where the source files live (or can find them in a few
    minutes)
 
@@ -70,7 +70,7 @@ identical.
 
 **You're done when**:
 - [ ] No file outside `tokens.hpp` constructs `Color::rgb(...)` directly
-- [ ] `cmake --build build` succeeds
+- [ ] `scripts/build.sh` succeeds
 - [ ] `git diff` shows only color literal swaps
 - [ ] Visual diff vs `master`: byte-identical render
 

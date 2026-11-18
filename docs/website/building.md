@@ -6,11 +6,11 @@ nav_order: 60
 slug: building
 ---
 
-To build agentty, clone it and use a CMake preset:
+To build agentty, clone it and run the build script:
 
 ```bash
-git clone --recursive https://github.com/agentty-org/agentty.git && cd agentty
-cmake --preset release && cmake --build build -j
+git clone https://github.com/agentty-org/agentty.git && cd agentty
+scripts/build.sh --preset release          # configure + build at -j12
 ```
 
 Then run it:
@@ -19,7 +19,10 @@ Then run it:
 ./build/agentty
 ```
 
-You need a C++26 compiler. See [Requirements](#requirements).
+You need a C++26 compiler. See [Requirements](#requirements). Configure
+fetches any missing submodules itself, so `--recursive` is optional. See
+[Parallelism and the build lock](#parallelism-and-the-build-lock) for what
+`scripts/build.sh` adds over a bare `cmake --build build -j 12`.
 
 :::tip Use the presets, not a hand-rolled `-B build`
 `cmake -B build` **ignores `CMakePresets.json`**. It gives you Release + LTO +
@@ -35,10 +38,12 @@ Ninja, Debug, ccache and lld, with no LTO. A rebuild after an edit drops from
 ~36 seconds to under two:
 
 ```bash
-cmake --preset debug                           # once
-cmake --build build --target agentty -j 12     # after each edit
+scripts/build.sh -- --target agentty       # once (configures the debug preset), then after each edit
 ./build/agentty
 ```
+
+The plain-CMake equivalent is `cmake --preset debug` once, then
+`cmake --build build --target agentty -j 12`.
 
 Pass `--target agentty`. Without it the build also makes every example,
 benchmark and submodule tool: 19.6 s versus 0.65 s for agentty alone.
@@ -69,8 +74,8 @@ Tests live in one consolidated binary plus a handful of standalone ones. Build
 and run only what your change touches:
 
 ```bash
-cmake --build build --target agentty_tests -j 12   # ~1.3 s incremental
-./build/agentty_tests -tc="*framing*"              # ~0.16 s
+scripts/build.sh -- --target agentty_tests   # ~1.3 s incremental
+./build/agentty_tests -tc="*framing*"        # ~0.16 s
 ```
 
 `-tc` takes a doctest pattern and matches on test-case *names*, so
@@ -78,9 +83,13 @@ cmake --build build --target agentty_tests -j 12   # ~1.3 s incremental
 matches nothing reports `0 passed` and still exits 0 — check the case count.
 
 A few suites are separate executables (they need their own process to set
-environment before anything initialises). Run those through ctest by name:
+environment before anything initialises). They are folded into
+`agentty_standalone_tests` (plus a few raw targets like
+`mcp_connection_race_test`) and are not part of the default build, so ctest
+reports them as **Not Run** until you build them. Build, then run by name:
 
 ```bash
+scripts/build.sh -- --target agentty_standalone_tests
 cd build && ctest -R "logx"      # logx_test, logx_redaction_test, logx_format_test
 ```
 
@@ -126,7 +135,44 @@ Every preset builds into the **same** `build/` tree. Switching preset
 reconfigures it in place, so you don't keep a second multi-gigabyte copy.
 Switching back is cheap because ccache still holds the objects. To keep two
 configurations at once, override the directory:
-`cmake --preset debug -B build-other`.
+`scripts/build.sh --preset debug -B build-other` (or
+`cmake --preset debug -B build-other`).
+
+### Parallelism and the build lock
+
+Build with **`-j 12`**. `scripts/build.sh` passes it by default; set
+`AGENTTY_BUILD_JOBS=N` or pass your own `-- -jN` to change it.
+
+`-j` caps the total number of jobs. Configure also sizes two Ninja pools from
+your RAM as well as your cores, and those cap each kind of job:
+
+| Pool | Size | Override |
+|---|---|---|
+| `agentty_compile` | `min(cores, usable RAM / 3 GiB)` | `-DAGENTTY_COMPILE_JOBS=N` |
+| `agentty_link` | `min(compile, usable RAM / 3 GiB)`; 8 GiB per link for Release (LTO); 1 on MinGW | `-DAGENTTY_LINK_JOBS=N` |
+
+"Usable RAM" is total RAM minus max(4 GiB, RAM/8), left for the desktop and
+anything else running. Configure prints the result, e.g.
+`agentty: job pools — 12 compile / 9 link (12 threads, 27824 MiB RAM budgeted)`.
+A maya-heavy translation unit peaks around 2.2 GB in `cc1plus`, so an
+unbounded `-j` on a 32 GB machine fills RAM and thrashes swap. If the pools
+come out below 12 on a machine that can take it, pin them with
+`cmake --preset debug -DAGENTTY_COMPILE_JOBS=12`. `0` (the default) means
+auto, recomputed on every configure.
+
+`scripts/build.sh` also takes an exclusive lock on `build/.agentty-build.lock`.
+A second build of the same tree (another terminal, an IDE, another agent
+session) prints `another build holds … — waiting` and runs when the first
+finishes. Two ninjas in one tree tear `.ninja_log` / `.ninja_deps`. The
+symptom is `ninja: warning: premature end of file; recovering` followed by the
+same objects recompiling on every run. The script detects a torn log and runs
+`ninja -t recompact` before building. To fix it by hand:
+
+```bash
+ninja -C build -t recompact
+```
+
+A bare `cmake --build build -j 12` still gets the pools, but not the lock.
 
 ## Requirements
 
@@ -144,8 +190,7 @@ macOS, use `g++` or stock LLVM `clang++`, not Xcode's bundled toolchain.
 ### Standalone (static) build
 
 ```bash
-cmake --preset standalone   # sets AGENTTY_STANDALONE=ON
-cmake --build build -j
+scripts/build.sh --preset standalone   # sets AGENTTY_STANDALONE=ON, builds at -j12
 ```
 
 This statically links OpenSSL, nghttp2, libstdc++ and libgcc when their `.a`
@@ -174,11 +219,11 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DAGENTTY_USE_MIMALLOC=ON
 # Profile-guided optimization (two phases). Phase 1 builds an instrumented
 # binary and runs a scripted PTY workload over the hot paths; phase 2
 # rebuilds using the collected counters.
-cmake -B build-pgogen -DCMAKE_BUILD_TYPE=Release -DAGENTTY_PGO=generate
-cmake --build build-pgogen -j$(nproc) --target agentty
+cmake -B build-pgogen -G Ninja -DCMAKE_BUILD_TYPE=Release -DAGENTTY_PGO=generate
+scripts/build.sh -B build-pgogen -- --target agentty
 scripts/pgo-train.sh build-pgogen/agentty
-cmake -B build-pgouse -DCMAKE_BUILD_TYPE=Release -DAGENTTY_PGO=use
-cmake --build build-pgouse -j$(nproc) --target agentty
+cmake -B build-pgouse -G Ninja -DCMAKE_BUILD_TYPE=Release -DAGENTTY_PGO=use
+scripts/build.sh -B build-pgouse -- --target agentty
 ```
 
 See [Performance](/docs/performance) for what each buys you.

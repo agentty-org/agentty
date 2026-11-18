@@ -481,6 +481,18 @@ input, or timer tick. Two host-side optimizations keep it cheap under load:
   (or `./resync.sh`). The pull refuses to touch a submodule that has unstaged
   changes, staged-uncommitted work, or local commits not on origin, and uses
   `merge --ff-only`, so it never discards local work.
+- **Missing submodules are fetched, never moved.** In a git checkout,
+  configure runs `git submodule update --init --recursive` for any submodule
+  that isn't checked out yet (`AGENTTY_AUTO_INIT_SUBMODULES`, default ON). It
+  only fills empty submodules at their pinned commits, so it never fights
+  the no-auto-pull rule above.
+- **The build is bounded by RAM and serialized per tree.** With Ninja,
+  configure creates the `agentty_compile` / `agentty_link` job pools from
+  cores and usable RAM (override with `AGENTTY_COMPILE_JOBS` /
+  `AGENTTY_LINK_JOBS`). Submodules are added after this, so they use the same
+  pools. `scripts/build.sh` (default `-j12`) holds an exclusive lock on the
+  build tree and recompacts ninja logs that an interrupted build tore. See
+  [Building](website/building.md#parallelism-and-the-build-lock).
 
 ---
 

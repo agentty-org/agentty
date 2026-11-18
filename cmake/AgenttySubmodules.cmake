@@ -12,6 +12,47 @@
 # overrides off it) and resolves the checkout under AGENTTY_THIRD_PARTY_DIR.
 set(AGENTTY_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
+# ── Submodule auto-init ─────────────────────────────────────────────────────
+# A plain `git clone` (no --recursive) leaves every third_party/ dir empty and
+# configure used to die on the first add_subdirectory(). In a git checkout we
+# now fetch the PINNED commits ourselves: `submodule update --init` only fills
+# submodules that aren't checked out yet and never moves one that is, so local
+# submodule work is untouched. Release tarballs (no .git) skip this. Opt out
+# with -DAGENTTY_AUTO_INIT_SUBMODULES=OFF (offline / hermetic builds).
+option(AGENTTY_AUTO_INIT_SUBMODULES
+       "Fetch missing git submodules (pinned commits) at configure time" ON)
+if(AGENTTY_AUTO_INIT_SUBMODULES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git"
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.gitmodules")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.gitmodules" _agentty_sm_lines
+         REGEX "^[ \t]*path[ \t]*=")
+    set(_agentty_sm_missing "")
+    foreach(_l IN LISTS _agentty_sm_lines)
+        string(REGEX REPLACE "^[ \t]*path[ \t]*=[ \t]*" "" _p "${_l}")
+        string(STRIP "${_p}" _p)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_p}/CMakeLists.txt")
+            list(APPEND _agentty_sm_missing "${_p}")
+        endif()
+    endforeach()
+    if(_agentty_sm_missing)
+        find_package(Git QUIET)
+        if(GIT_FOUND)
+            list(JOIN _agentty_sm_missing ", " _agentty_sm_pretty)
+            message(STATUS "agentty: fetching missing submodules: ${_agentty_sm_pretty}")
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" submodule update --init --recursive
+                        --jobs 8 -- ${_agentty_sm_missing}
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                RESULT_VARIABLE _agentty_sm_rc)
+            if(NOT _agentty_sm_rc EQUAL 0)
+                message(WARNING
+                    "agentty: `git submodule update --init --recursive` failed "
+                    "(exit ${_agentty_sm_rc}). Offline? Run it by hand once you "
+                    "have network, then re-run cmake.")
+            endif()
+        endif()
+    endif()
+endif()
+
 # ── Submodule auto-pull ────────────────────────────────────────────────────
 # When AGENTTY_AUTO_PULL_SUBMODULES is ON, every in-tree submodule is synced
 # to the tip of its tracking branch on each build before its library target

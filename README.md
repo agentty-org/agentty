@@ -240,9 +240,11 @@ curl -fsSL https://agentty.org/install.sh | sh -s -- --build
 Needs a C++26 toolchain (GCC 14+, a recent Clang, or MSVC).
 
 ```bash
-git clone --recursive https://github.com/agentty-org/agentty.git
-cd agentty && cmake -B build && cmake --build build -j
+git clone https://github.com/agentty-org/agentty.git
+cd agentty && scripts/build.sh            # debug preset, -j12; or: cmake --preset debug && cmake --build build -j 12
 ```
+
+Configure fetches missing submodules itself. `scripts/build.sh` builds at `-j12` by default (`AGENTTY_BUILD_JOBS=N` changes it), and Ninja pools sized from your RAM as well as your cores keep a full build from swapping your machine to death. The script also locks the build tree (a second build waits instead of corrupting the first) and repairs ninja logs left torn by an interrupted build. Use `-DAGENTTY_COMPILE_JOBS=N` / `-DAGENTTY_LINK_JOBS=N` to resize the pools.
 
 Editing the code? `cmake --preset debug` rebuilds in about 1.7 s after a one-line change (no LTO).
 [Building ↗](https://agentty.org/docs/building/#the-development-loop)

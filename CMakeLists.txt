@@ -8,14 +8,74 @@ project(agentty
 # extracted toolchain/standalone/hardening includes) live under cmake/.
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-# GNU ld on MinGW loads every object's full symbol table into memory; the
-# test binaries link the whole tree, and four at once exhausted a 63 GB box
-# ("could not read symbols: memory exhausted"). Compiles stay fully
-# parallel; links take turns. Override with -DAGENTTY_LINK_JOBS=N.
-if(MINGW AND CMAKE_GENERATOR MATCHES "Ninja")
-    set(AGENTTY_LINK_JOBS 1 CACHE STRING "Concurrent link jobs (Ninja pool)")
-    set_property(GLOBAL APPEND PROPERTY JOB_POOLS agentty_link=${AGENTTY_LINK_JOBS})
-    set(CMAKE_JOB_POOL_LINK agentty_link)
+# ── Memory-aware Ninja job pools ─────────────────────────────────────────────
+# Ninja's default -j is cores+2, but a maya-heavy TU peaks at ~2.2 GB RSS in
+# cc1plus. -j12 on a 31 GB / 12-thread Linux box filled RAM and thrashed swap
+# (load 32). Size the pools by RAM as well as cores, so a bare
+# `cmake --build build` can't OOM the machine:
+#   compile = min(cores, RAM / AGENTTY_COMPILE_MEM_MB)
+#   link    = min(compile, RAM / AGENTTY_LINK_MEM_MB)  (LTO links are huge)
+# Pools are set BEFORE any add_subdirectory, so maya/mcp-cpp/etc. obey them
+# too. Override with -DAGENTTY_COMPILE_JOBS=N / -DAGENTTY_LINK_JOBS=N. An
+# explicit `-jN` still caps the total, but no pool ever goes above its size.
+# GNU ld on MinGW loads every object's full symbol table into memory; four
+# test links at once exhausted a 63 GB box ("could not read symbols: memory
+# exhausted"), so on MinGW links run one at a time.
+if(CMAKE_GENERATOR MATCHES "Ninja")
+    cmake_host_system_information(RESULT _agentty_mem_mb QUERY TOTAL_PHYSICAL_MEMORY)
+    cmake_host_system_information(RESULT _agentty_cores  QUERY NUMBER_OF_LOGICAL_CORES)
+    # Keep max(4 GiB, RAM/8) for the desktop, browser, other builds: on a
+    # dev box the compiler never has the whole machine to itself.
+    math(EXPR _agentty_reserve_mb "${_agentty_mem_mb} / 8")
+    if(_agentty_reserve_mb LESS 4096)
+        set(_agentty_reserve_mb 4096)
+    endif()
+    math(EXPR _agentty_mem_mb "${_agentty_mem_mb} - ${_agentty_reserve_mb}")
+    if(_agentty_mem_mb LESS 1024)
+        set(_agentty_mem_mb 1024)
+    endif()
+    set(AGENTTY_COMPILE_MEM_MB 3072 CACHE STRING "RAM budget per compile job (MiB) for pool sizing")
+    if(MINGW)
+        set(_agentty_link_mb 1000000)        # effectively: one link at a time
+    elseif(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        set(_agentty_link_mb 8192)           # ThinLTO backends fan out per link (empty ⇒ Release later)
+    else()
+        set(_agentty_link_mb 3072)
+    endif()
+    set(AGENTTY_LINK_MEM_MB ${_agentty_link_mb} CACHE STRING "RAM budget per link job (MiB) for pool sizing")
+
+    math(EXPR _agentty_cj "${_agentty_mem_mb} / ${AGENTTY_COMPILE_MEM_MB}")
+    if(_agentty_cj GREATER _agentty_cores)
+        set(_agentty_cj ${_agentty_cores})
+    endif()
+    if(_agentty_cj LESS 1)
+        set(_agentty_cj 1)
+    endif()
+    math(EXPR _agentty_lj "${_agentty_mem_mb} / ${AGENTTY_LINK_MEM_MB}")
+    if(_agentty_lj GREATER _agentty_cj)
+        set(_agentty_lj ${_agentty_cj})
+    endif()
+    if(_agentty_lj LESS 1)
+        set(_agentty_lj 1)
+    endif()
+
+    # 0 = auto, re-derived on every configure so a moved build tree or a
+    # RAM upgrade is picked up; any other value is taken as given.
+    set(AGENTTY_COMPILE_JOBS 0 CACHE STRING "Concurrent compile jobs (Ninja pool; 0 = auto from RAM/cores)")
+    set(AGENTTY_LINK_JOBS    0 CACHE STRING "Concurrent link jobs (Ninja pool; 0 = auto from RAM)")
+    if(AGENTTY_COMPILE_JOBS GREATER 0)
+        set(_agentty_cj ${AGENTTY_COMPILE_JOBS})
+    endif()
+    if(AGENTTY_LINK_JOBS GREATER 0)
+        set(_agentty_lj ${AGENTTY_LINK_JOBS})
+    endif()
+
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS
+        agentty_compile=${_agentty_cj} agentty_link=${_agentty_lj})
+    set(CMAKE_JOB_POOL_COMPILE agentty_compile)
+    set(CMAKE_JOB_POOL_LINK    agentty_link)
+    message(STATUS "agentty: job pools — ${_agentty_cj} compile / ${_agentty_lj} link "
+                   "(${_agentty_cores} threads, ${_agentty_mem_mb} MiB RAM budgeted)")
 endif()
 
 # No C++ modules anywhere in the tree. With scanning on, every target gets

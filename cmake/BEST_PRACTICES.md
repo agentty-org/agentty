@@ -224,7 +224,9 @@ SHIPPING toolchain, not merely on “a” toolchain.
 
 Added `CMakePresets.json` (schema v6): named configure/build/test presets that
 replace the `-D` flag soup with `cmake --preset dev|release|ci|sanitizer|
-standalone|pch`. Each pins its own `build/<preset>` dir + generator + option
+standalone|pch`. Every preset now shares ONE tree, `build/`, and switching
+presets reconfigures it in place (use `-B build-other` to keep two). Each
+preset pins the generator + option
 set; buildPresets bind targets (e.g. `ci` → `all;tests_gating`) and testPresets
 bind ctest filters (e.g. `ci` excludes the `perf` label, `sanitizer` includes
 the `sanitizer` label) so a contributor reproduces any CI/dev config in one
@@ -260,3 +262,36 @@ Deeper note: `doctest_discover_tests` runs the exe at BUILD time (POST_BUILD),
 so ANY startup crash breaks the build, not just the test run. A newer doctest
 with `DISCOVERY_MODE PRE_TEST` would defer that to test time; the vendored
 version predates it, so no-LTO-on-tests is the robust fix here.
+
+
+## 11. Memory-bounded parallelism + one build per tree
+
+Symptom: a fresh `-j12` debug build on a 12-thread / 31 GB Linux box filled
+RAM and swap (load average 32), and later restarts recompiled the same ~130
+objects every time with `ninja: warning: premature end of file; recovering`.
+
+Root causes:
+1. **Per-TU memory, not core count, is the limit.** A maya-heavy TU peaks
+   around 2.2 GB in `cc1plus`, so cores+2 jobs needs more RAM than the box has.
+2. **Two ninjas in one tree.** Several agent sessions were building `build/`
+   at once. Each ninja appends to `.ninja_log` / `.ninja_deps`, and the
+   interleaved writes tore them. Ninja truncates the file at the tear on load,
+   but the tear stays on disk, so it forgets the records every time and
+   rebuilds.
+
+Fix:
+- `CMakeLists.txt` creates the `agentty_compile` / `agentty_link` Ninja
+  pools before any `add_subdirectory`, sized
+  `min(cores, (RAM − max(4 GiB, RAM/8)) / AGENTTY_COMPILE_MEM_MB)`. The
+  default is 3 GiB per compile; links get 3 GiB, or 8 GiB for Release/LTO.
+  MinGW links serially. `AGENTTY_COMPILE_JOBS` / `AGENTTY_LINK_JOBS` override
+  them (0 = auto).
+- `scripts/build.sh` is the blessed entry point. It runs `-j12` by default
+  (`AGENTTY_BUILD_JOBS`), takes `flock` on `build/.agentty-build.lock` (an
+  mkdir lock on macOS), and runs `ninja -t recompact` when it finds a torn
+  log. `resync.sh` builds through it.
+- Configure auto-inits missing submodules (`AGENTTY_AUTO_INIT_SUBMODULES`), so
+  a non-recursive clone no longer fails at the first `add_subdirectory`.
+
+Result: the same full build peaks at ~20 GB with no new swapping, and a no-op
+rebuild runs in 0 s.
