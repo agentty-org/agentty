@@ -95,6 +95,7 @@ namespace {
         case P::Sandbox:    return Msg{OpenSandbox{h.row}};
         case P::WebSearch:  return Msg{OpenWebSearch{h.row}};
         case P::Paste:      return Msg{OpenPasteSettings{h.row}};
+        case P::General:    break;   // handled in place by the caller
     }
     return Msg{OpenRag{h.row}};
 }
@@ -110,6 +111,20 @@ std::vector<se::ListOpen::Hit> settings_search_index(const Model& m) {
     se::index_form(out, sandbox_form_for_search(m),    P::Sandbox);
     se::index_form(out, web_search_form_for_search(m), P::WebSearch);
     se::index_form(out, paste_form_for_search(m), P::Paste);
+    // The hub's own rows (#133), from the same items_for the hub renders.
+    // Door rows (Appearance, Sandbox, ...) stay in: finding a pane by its
+    // own name is useful, and they rank alongside that pane's fields.
+    const auto rows = se::items_for(m, se::Category::General);
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const auto& r = rows[static_cast<std::size_t>(i)];
+        if (r.action == se::Action::None) continue;
+        se::ListOpen::Hit h;
+        h.label = r.primary;
+        h.help  = r.secondary;
+        h.pane  = P::General;
+        h.item  = i;
+        out.push_back(std::move(h));
+    }
     return out;
 }
 
@@ -255,6 +270,16 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
                     return Cmd::none();
                 const auto& h = o->index_rows[static_cast<std::size_t>(
                     hits[static_cast<std::size_t>(o->index)])];
+                if (h.pane == se::ListOpen::Pane::General) {
+                    // A hub row: a fresh hub, cursor on that row, pushed
+                    // over the search so Esc returns to it (query intact),
+                    // like every other hit. Nothing fires until Enter.
+                    pn::SettingsList hub{{se::Category::General, h.item}};
+                    hub.index_rows = settings_search_index(m);
+                    m.ui.panel.push(std::move(hub));
+                    m.ui.settings_list_scroll.y = 0;
+                    return Cmd::none();
+                }
                 return reenter(m, open_hit(h));
             }
             auto rows = se::items_for(m, o->concern);

@@ -281,6 +281,15 @@ TEST_CASE("settings search: every indexed row exists in the pane it names") {
     for (const auto& h : rows) {
         Model m = app::update(Model{}, Msg{OpenSettingsList{settings::Category::General}}).first;
         using P = settings::ListOpen::Pane;
+        if (h.pane == P::General) {
+            // A hub row: the index points at the row the hub draws.
+            const auto hub = settings::items_for(m, settings::Category::General);
+            REQUIRE(h.item >= 0);
+            REQUIRE(h.item < static_cast<int>(hub.size()));
+            CHECK_MESSAGE(hub[static_cast<std::size_t>(h.item)].primary == h.label,
+                          "General / " << h.label);
+            continue;
+        }
         Msg open = h.pane == P::Rag        ? Msg{OpenRag{h.row}}
                  : h.pane == P::Smart      ? Msg{OpenSmartMode{h.row}}
                  : h.pane == P::Appearance ? Msg{OpenAppearance{h.row}}

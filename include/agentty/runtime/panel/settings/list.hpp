@@ -48,12 +48,14 @@ struct ListOpen {
     // delete a hand-tuned mcp.json entry with no undo.
     std::string confirm_remove;
     // Settings hub only: typed search across every setting. Empty = the
-    // normal hub rows. `index_rows` holds one row per setting, taken from each
-    // pane's own form when the hub opens, so search never lists a setting
-    // twice or misses one a pane gained.
+    // normal hub rows. `index_rows` is built (settings_search_index) when
+    // the hub opens, from the SAME sources the
+    // UI renders: each form pane's own form builder, plus the General hub's
+    // own rows from items_for(General). Nothing is listed by hand, so a row
+    // or field added to any of those is searchable automatically.
     std::string query;
-    // Which form pane a search hit lives in.
-    enum class Pane : std::uint8_t { Rag, Smart, Appearance, Sandbox, WebSearch, Paste };
+    // Where a search hit lives: a form pane, or the General hub itself.
+    enum class Pane : std::uint8_t { Rag, Smart, Appearance, Sandbox, WebSearch, Paste, General };
     struct Hit {
         std::string label;      // the row's label, as the pane shows it
         std::string help;
@@ -61,6 +63,7 @@ struct ListOpen {
         std::string section;    // the header it sits under, if any
         Pane        pane = Pane::Rag;
         std::string row;        // the row id the pane opens on
+        int         item = -1;  // Pane::General: index into items_for(General)
     };
     std::vector<Hit> index_rows;
 };

@@ -543,6 +543,7 @@ const char* pane_label(ListOpen::Pane p) noexcept {
         case ListOpen::Pane::Sandbox:    return "Sandbox";
         case ListOpen::Pane::WebSearch:  return "Web Search";
         case ListOpen::Pane::Paste:      return "Paste";
+        case ListOpen::Pane::General:    return "General";
     }
     return "";
 }
