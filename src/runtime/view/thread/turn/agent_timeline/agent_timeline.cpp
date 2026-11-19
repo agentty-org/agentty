@@ -506,16 +506,7 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             kids->reserve(n - from);
             const auto t0 = tc.started_at();
             for (std::size_t k = from; k < n; ++k) {
-                const auto& c = tc.children[k];
-                ToolUse kt;
-                kt.id   = ToolCallId{c.id};
-                kt.name = ToolName{c.name};
-                kt.args = c.args;
-                const auto fin = t0 + std::chrono::milliseconds{c.ms};
-                using S = ToolUse::Child::State;
-                if (c.state == S::Done)        kt.status = ToolUse::Done{t0, fin, c.output};
-                else if (c.state == S::Failed) kt.status = ToolUse::Failed{t0, fin, c.output};
-                else { ToolUse::Running r; r.started_at = t0; kt.status = std::move(r); }
+                const ToolUse kt = child_as_tool_use(tc.children[k], t0);
                 kids->push_back({
                     .name = tool_display_name(kt.name.value),
                     .detail = tool_timeline_detail(kt),  // already carries a failure's reason

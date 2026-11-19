@@ -976,6 +976,20 @@ static std::string change_stat(std::string_view out) {
     return {};
 }
 
+ToolUse child_as_tool_use(const ToolUse::Child& c,
+                          std::chrono::steady_clock::time_point t0) {
+    ToolUse kt;
+    kt.id   = ToolCallId{c.id};
+    kt.name = ToolName{c.name};
+    kt.args = c.args;
+    const auto fin = t0 + std::chrono::milliseconds{c.ms};
+    using S = ToolUse::Child::State;
+    if (c.state == S::Done)        kt.status = ToolUse::Done{t0, fin, c.output};
+    else if (c.state == S::Failed) kt.status = ToolUse::Failed{t0, fin, c.output};
+    else { ToolUse::Running r; r.started_at = t0; kt.status = std::move(r); }
+    return kt;
+}
+
 std::string tool_timeline_detail(const ToolUse& tc) {
     std::string detail = tool_timeline_detail_base(tc);
     const auto& n = tc.name.value;

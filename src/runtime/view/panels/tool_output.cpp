@@ -547,7 +547,189 @@ Element tool_output_panel(const Model& m) {
         };
         cache.reveal_row0 = cache.rows.size();
 
-        if (structured) {
+        // A subagent (`task`) reads as what it did, then what it found: every
+        // call it made, one row each, then its report as prose -- headings,
+        // bold, `code` and bullets drawn, not printed as markdown. A search
+        // falls through to the plain numbered view so hits can be marked.
+        const bool task_view = e.call.name.value == "task" && o->query.empty()
+                               && !e.thinking && (!e.call.children.empty() || !e.is_live);
+
+        if (task_view) {
+            using S = ToolUse::Child::State;
+            const auto& kids = e.call.children;
+            if (!kids.empty()) {
+                int bad = 0;
+                for (const auto& c : kids) bad += c.state == S::Failed;
+                std::string head = std::to_string(kids.size()) + (kids.size() == 1 ? " call" : " calls");
+                if (bad > 0) head += "  \xc2\xb7  " + std::to_string(bad) + " failed";
+                cache.rows.push_back(text(head, fg_dim(muted)) | height(1) | overflow(Overflow::Hidden));
+                const auto t0 = e.call.started_at();
+                for (const auto& c : kids) {
+                    const ToolUse kt = child_as_tool_use(c, t0);
+                    const bool failed = c.state == S::Failed;
+                    const char* icon = c.state == S::Done ? "\xe2\x9c\x93 "     // ✓
+                                     : failed ? "\xe2\x9c\x97 "                  // ✗
+                                              : "\xe2\x97\x8b ";                 // ○
+                    const Color ic = c.state == S::Done ? Color{success}
+                                   : failed ? Color{danger} : Color{muted};
+                    std::string dur;
+                    if (c.ms >= 1000)
+                        dur = std::format("  {:.1f}s", static_cast<double>(c.ms) / 1000.0);
+                    else if (c.ms > 0)
+                        dur = std::format("  {}ms", c.ms);
+                    cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                        text(icon, fg_bold(ic)),
+                        text(tool_display_name(c.name), fg_bold(tool_category_color(c.name))),
+                        text("  "),
+                        text(tool_timeline_detail(kt), failed ? fg_of(danger) : fg_dim(fg))
+                            | clip | grow(1.0f) | shrink(1.0f),
+                        text(dur, fg_dim(muted))
+                    ).build() | height(1) | overflow(Overflow::Hidden));
+                }
+            }
+
+            if (!e.is_live && !shown.empty()) {
+                if (!kids.empty()) cache.rows.push_back(sep);
+                const Style prose  = e.failed ? fg_of(danger) : fg_of(fg);
+                const Style strong = fg_bold(fg);
+                const Style head_st = fg_bold(tool_hue);
+                const Style code_st = fg_of(accent);
+                const Style mark_st = fg_dim(tool_hue);
+                const int text_w = std::max(10, pane_w - 3);
+                // `s` into plain text + one style per byte: **bold** and
+                // `code` are drawn, their delimiters dropped. A lone `**`
+                // (`docs/**`) is content and stays.
+                auto inline_md = [&](std::string_view s, Style base, std::string& plain,
+                                     std::vector<Style>& st) {
+                    for (std::size_t i = 0; i < s.size();) {
+                        if (s[i] == '`') {
+                            const auto close = s.find('`', i + 1);
+                            if (close != std::string_view::npos && close > i + 1) {
+                                for (auto k = i + 1; k < close; ++k) { plain += s[k]; st.push_back(code_st); }
+                                i = close + 1;
+                                continue;
+                            }
+                        }
+                        if (s.compare(i, 2, "**") == 0) {
+                            const auto close = s.find("**", i + 2);
+                            if (close != std::string_view::npos && close > i + 2
+                                && s[i + 2] != ' ' && s[close - 1] != ' ') {
+                                for (auto k = i + 2; k < close; ++k)
+                                    if (s[k] != '`') { plain += s[k]; st.push_back(strong); }
+                                i = close + 2;
+                                continue;
+                            }
+                        }
+                        plain += s[i++];
+                        st.push_back(base);
+                    }
+                };
+                // One source line -> wrapped rows under the rail, with a
+                // hanging indent so a bullet's continuation lines up.
+                auto emit = [&](const std::string& lead, Style lead_st,
+                                const std::string& plain, const std::vector<Style>& st, Style base) {
+                    const int lead_w = string_width(lead);
+                    bool first = true;
+                    for (auto v : wrap_rows(plain, std::max(4, text_w - lead_w))) {
+                        const auto off = static_cast<std::size_t>(v.data() - plain.data());
+                        std::vector<maya::StyledRun> runs;
+                        for (std::size_t k = 0; k < v.size();) {
+                            std::size_t j = k + 1;
+                            while (j < v.size() && st[off + j] == st[off + k]) ++j;
+                            runs.push_back({k, j - k, st[off + k]});
+                            k = j;
+                        }
+                        cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                            text("\xe2\x94\x83 ", fg_dim(tool_hue)),   // ┃
+                            text(first ? lead : std::string(static_cast<std::size_t>(lead_w), ' '), lead_st),
+                            Element{maya::TextElement{
+                                .content = std::string{v},
+                                .style   = base,
+                                .wrap    = maya::TextWrap::TruncateEnd,
+                                .runs    = std::move(runs),
+                            }} | grow(1.0f) | shrink(1.0f)
+                        ).build() | height(1) | overflow(Overflow::Hidden));
+                        first = false;
+                    }
+                };
+                // A blank line is drawn only once more text follows it, so
+                // the report never starts or ends on an empty rail row.
+                bool in_code = false, any = false, pending_blank = false;
+                auto flush_blank = [&] {
+                    if (pending_blank && any)
+                        cache.rows.push_back(text("\xe2\x94\x83", fg_dim(tool_hue))
+                                             | height(1) | overflow(Overflow::Hidden));
+                    pending_blank = false;
+                    any = true;
+                };
+                for (std::size_t p = 0; p <= shown.size();) {
+                    auto nl = shown.find('\n', p);
+                    if (nl == std::string::npos) nl = shown.size();
+                    std::string_view ln{shown.data() + p, nl - p};
+                    p = nl + 1;
+                    while (!ln.empty() && (ln.back() == '\r' || ln.back() == ' ')) ln.remove_suffix(1);
+                    // The runner's own header lines: the card header says it.
+                    if (ln.starts_with("Subagent report (") || ln.starts_with("tools: ")) {
+                        if (nl == shown.size()) break;
+                        continue;
+                    }
+                    std::string_view t = ln;
+                    while (!t.empty() && t.front() == ' ') t.remove_prefix(1);
+                    const std::size_t indent = ln.size() - t.size();
+                    if (t.starts_with("```")) {
+                        in_code = !in_code;
+                    } else if (in_code) {
+                        flush_blank();
+                        std::string plain{ln};
+                        std::vector<Style> st(plain.size(), code_st);
+                        emit("  ", code_st, plain, st, code_st);
+                    } else if (t.empty()) {
+                        pending_blank = true;
+                    } else if (t.starts_with('|') && t.find_first_not_of("|-: ") == std::string_view::npos) {
+                        // table separator row: drop
+                    } else {
+                        std::string lead(indent, ' ');
+                        Style base = prose;
+                        std::string_view body = t;
+                        std::string table;
+                        if (body.starts_with('#')) {
+                            while (body.starts_with('#')) body.remove_prefix(1);
+                            while (body.starts_with(' ')) body.remove_prefix(1);
+                            base = head_st;
+                        } else if (body.starts_with("- ") || body.starts_with("* ")) {
+                            lead += "\xe2\x80\xa2 ";   // •
+                            body.remove_prefix(2);
+                        } else if (std::size_t d = 0;
+                                   [&] { while (d < body.size() && body[d] >= '0' && body[d] <= '9') ++d;
+                                         return d > 0 && d + 1 < body.size()
+                                             && (body[d] == '.' || body[d] == ')') && body[d + 1] == ' '; }()) {
+                            lead += std::string{body.substr(0, d + 2)};
+                            body.remove_prefix(d + 2);
+                        } else if (body.starts_with('|')) {
+                            // "| a | b |" -> "a · b"
+                            for (std::size_t i = 1; i < body.size();) {
+                                const auto j = body.find('|', i);
+                                std::string_view cell = body.substr(i, (j == std::string_view::npos ? body.size() : j) - i);
+                                while (!cell.empty() && cell.front() == ' ') cell.remove_prefix(1);
+                                while (!cell.empty() && cell.back() == ' ') cell.remove_suffix(1);
+                                if (!cell.empty()) { if (!table.empty()) table += " \xc2\xb7 "; table += cell; }
+                                if (j == std::string_view::npos) break;
+                                i = j + 1;
+                            }
+                            body = table;
+                        }
+                        std::string plain;
+                        std::vector<Style> st;
+                        plain.reserve(body.size());
+                        st.reserve(body.size());
+                        inline_md(body, base, plain, st);
+                        flush_blank();
+                        emit(lead, mark_st, plain, st, base);
+                    }
+                    if (nl == shown.size()) break;
+                }
+            }
+        } else if (structured) {
             bp.show_all   = true;       // the full output, no "⋯ N more"
             bp.tail_only  = e.is_live;  // live: newest at the bottom
             bp.show_streaming_placeholder = false;

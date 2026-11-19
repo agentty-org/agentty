@@ -2011,9 +2011,23 @@ public:
         live.progress = [&, parent = ctx.progress, publish = ctx.children](std::string_view feed) {
             if (publish) {
                 // The card draws only the newest few; older calls just count
-                // toward "⋯ N earlier". Ship them as bare stubs so a long run
-                // doesn't copy megabytes of old output on every update.
+                // toward "⋯ N earlier", and ^O lists them one row each. Ship
+                // them without output and with only their short args (path,
+                // pattern, command -- what the row names), so a long run
+                // doesn't copy megabytes of old output or file bodies on
+                // every update.
                 constexpr std::size_t kFullKids = 8;
+                auto slim = [](const nlohmann::json& a) {
+                    if (!a.is_object()) return nlohmann::json{};
+                    nlohmann::json s = nlohmann::json::object();
+                    for (auto it = a.begin(); it != a.end(); ++it) {
+                        const auto& v = it.value();
+                        if (v.is_string() ? v.get_ref<const std::string&>().size() <= 256
+                                          : (v.is_number() || v.is_boolean()))
+                            s[it.key()] = v;
+                    }
+                    return s;
+                };
                 std::vector<ToolUse::Child> out;
                 out.reserve(children.size());
                 const std::size_t full_from =
@@ -2021,7 +2035,7 @@ public:
                 for (std::size_t i = 0; i < children.size(); ++i) {
                     const auto& c = children[i];
                     if (i >= full_from) { out.push_back(c); continue; }
-                    out.push_back(ToolUse::Child{c.id, c.name, nlohmann::json{}, c.state, {}, c.ms});
+                    out.push_back(ToolUse::Child{c.id, c.name, slim(c.args), c.state, {}, c.ms});
                 }
                 publish(std::move(out));
             }

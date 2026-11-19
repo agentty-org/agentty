@@ -674,6 +674,52 @@ static void render_viewer(int cols, const std::vector<std::string>& want,
     }
 }
 
+// ^O on a subagent: the calls it made, then its report as prose.
+static void render_viewer_agent(int cols) {
+    namespace pn = agentty::ui::panel;
+    using namespace std::chrono;
+    using C = ToolUse::Child;
+    const auto now = steady_clock::now();
+    ToolUse t;
+    t.id   = ToolCallId{"va1"};
+    t.name = ToolName{"task"};
+    t.args = json{{"agent_type", "explorer"},
+                  {"display_description", "Demo: how the agent card stays a fixed height"},
+                  {"prompt", "x"}};
+    t.status = ToolUse::Done{now - seconds{17}, now,
+        "Subagent report (explorer, 4 turns):\n\n"
+        "**Outcome:** a subagent's Agent card shows at most the last 5 nested calls, one row each.\n\n"
+        "## Details\n"
+        "- **Calls shown:** the cap is 5 (`agent_timeline.cpp:501`). A dim `⋯ N earlier` row sits above them, and this "
+        "line is long enough that it has to wrap onto a second row in the reader.\n"
+        "- **Persistence:** `children` is saved and restored in `persistence.cpp:398-415`.\n"
+        "  - nested bullet keeps its indent\n"
+        "1. First numbered step\n2. Second numbered step\n\n"
+        "| File | Purpose |\n|---|---|\n| exec.cpp | command execution |\n\n"
+        "```\nconstexpr std::size_t cap = 5;\n```\n"};
+    t.children = {
+        C{"k1", "grep", json{{"pattern", "children_hidden"}}, C::State::Done, "a.hpp:1: x\n", 80},
+        C{"k2", "glob", json{{"pattern", "*agent_timeline*"}}, C::State::Done, "a\nb\n", 12},
+        C{"k3", "read", json{{"path", "src/io/persistence.cpp"}, {"start_line", 390}, {"end_line", 420}},
+          C::State::Done, "x", 3},
+        C{"k4", "shell", json{{"command", "git log --oneline -3"}}, C::State::Failed,
+          "tool 'shell' is not available in this run", 0},
+    };
+    Model m;
+    Message a; a.role = Role::Assistant;
+    a.tool_calls.push_back(std::move(t));
+    m.d.current.messages.push_back(std::move(a));
+    setenv("LINES", "40", 1);
+    setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+    auto entries = app::detail::collect_viewer_entries(m);
+    if (entries.empty()) { std::puts("no entries"); return; }
+    m.ui.panel.descend(pn::ToolOutput{{std::move(entries), 0, false}});
+    auto* o = m.ui.panel.get<pn::ToolOutput>();
+    o->viewing = true;
+    m.ui.tool_viewer_scroll.y = 0;
+    emit_element("tool output \xc2\xb7 agent", ui::tool_output_panel(m), cols);
+}
+
 int main(int argc, char** argv) {
     // The view reads loop_bound<T> caches (the tool-body and settled-panel
     // memos in agent_timeline.cpp), which only the kernel's loop thread may
@@ -744,6 +790,7 @@ int main(int argc, char** argv) {
         else if (a == "--welcome") { render_welcome(cols); return 0; }
         else if (a == "--panels") { render_panels(cols); return 0; }
         else if (a == "--agents") { render_agents(cols); return 0; }
+        else if (a == "--viewer-agent") { render_viewer_agent(cols); return 0; }
         else if (a == "--viewer") {
             std::vector<std::string> w; std::string k;
             for (int j = i + 1; j < argc; ++j) {

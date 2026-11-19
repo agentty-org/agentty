@@ -512,6 +512,10 @@ struct ToolUse {
         mix(progress_text().size());
         mix(args_streaming.size());
         mix(static_cast<std::uint64_t>(status.index()));
+        // A subagent's nested calls (empty for every other tool): a call
+        // landing or settling must invalidate a cached card / reader body.
+        mix(children.size());
+        for (const auto& c : children) mix(static_cast<std::uint64_t>(c.state) + 1);
         return k;
     }
 };

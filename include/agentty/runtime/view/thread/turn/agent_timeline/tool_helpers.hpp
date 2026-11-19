@@ -20,5 +20,10 @@ namespace agentty::ui {
 [[nodiscard]] std::string_view        tool_category_label(const std::string& name);
 [[nodiscard]] maya::AgentEventStatus  tool_event_status(const ToolUse& tc);
 [[nodiscard]] std::string             tool_timeline_detail(const ToolUse& tc);
+// A subagent's tool call as a throwaway ToolUse, so it goes through the
+// same name/detail/status builders as a top-level call. `t0` anchors its
+// timestamps (only the duration is known).
+[[nodiscard]] ToolUse                 child_as_tool_use(const ToolUse::Child& c,
+                                                        std::chrono::steady_clock::time_point t0);
 
 } // namespace agentty::ui

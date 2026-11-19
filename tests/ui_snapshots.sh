@@ -30,6 +30,7 @@ prose|--prose
 welcome|--welcome
 panels|--panels
 agents|--agents
+viewer-agent|--viewer-agent
 native|--kind typical edit grep
 '
 fail=0
