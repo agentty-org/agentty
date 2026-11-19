@@ -175,7 +175,7 @@ Element tool_output_panel(const Model& m) {
         const int list_term_rows = panel_terminal_rows();
         const bool compact_list = list_term_rows < 6;
         // The fit loop at the end shrinks this to what the terminal has.
-        cfg.viewport_h = std::clamp(static_cast<int>(o->entries.size()), 1, kViewportH);
+        cfg.viewport_h = std::clamp(static_cast<int>(o->entries.size()), 1, panel_viewport_h());
 
         // Badge column width: longest display name across the entries,
         // so every detail line starts at the same column and the badge
@@ -330,8 +330,11 @@ Element tool_output_panel(const Model& m) {
     // shared picker's four-row viewport floor.
     const int body_term_rows = panel_terminal_rows();
     const bool compact_body = body_term_rows < 6;   // the fit loop handles the rest
-    // Start from the whole terminal; the fit loop below takes the chrome off.
-    cfg.viewport_h = std::max(1, body_term_rows);
+    // The same height every other panel uses (Settings → Appearance →
+    // Density: compact / normal / roomy), not the whole terminal. A long
+    // output scrolls inside it like any list. The fit loop below still
+    // shrinks it for a short terminal.
+    cfg.viewport_h = std::max(1, std::min(body_term_rows, panel_viewport_h()));
 
     // Header: tool name, what it ran on, and how it went. The status never
     // clips; the detail gives way first. Thinking has no "ran on": its

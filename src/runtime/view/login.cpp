@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "agentty/domain/ui_live.hpp"   // panel_rows(): Density
 #include "agentty/provider/registry.hpp"
 #include "agentty/provider/selection.hpp"
 #include "agentty/runtime/login.hpp"
@@ -475,7 +476,7 @@ Element panel_account_list(const login::AccountList& s,
     // Scroll like every list panel: many accounts on one provider must
     // window inside the modal, not grow it past the terminal edge.
     cfg.scroll     = scroll;
-    cfg.viewport_h = 14;
+    cfg.viewport_h = agentty::ui_prefs::panel_rows();   // Density, like every panel
     const int n = static_cast<int>(s.rows.size());
     cfg.selected  = std::min(s.cursor, n);   // last item = add-new
 
