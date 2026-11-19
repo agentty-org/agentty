@@ -56,6 +56,30 @@ TEST_CASE("thinking clock: starts at the block, stops when the turn ends") {
     CHECK(m2.d.current.messages.back().reasoning_ms == 2000);
 }
 
+TEST_CASE("ACP: prose after a tool card continues in a new message, not the finished one") {
+    A::Model m;
+    m.d.selection.kind = A::provider::Kind::ExternalAcp;
+    m.d.selection.acp_agent_id = "devin";
+    m.s.phase = A::phase::Streaming{};
+    A::Message a; a.role = A::Role::Assistant;
+    m.d.current.messages.push_back(std::move(a));
+    m = apply(std::move(m), A::StreamTextDelta{"Let me read it."});
+    m = apply(std::move(m), A::StreamToolUseStart{A::ToolCallId{"t1"}, A::ToolName{"Read File"}});
+    m = apply(std::move(m), A::StreamToolUseEnd{A::ToolCallId{"t1"}});
+    for (const char* d : {"# agentty\n\n", "**An agent", " harness** for", " your terminal."})
+        m = apply(std::move(m), A::StreamTextDelta{d});
+    // A late update for the card above still finds it.
+    m = apply(std::move(m), A::StreamObservedToolResult{A::ToolCallId{"t1"}, false, "file body"});
+    const auto& msgs = m.d.current.messages;
+    REQUIRE(msgs.size() == 2u);
+    CHECK(msgs[0].text == "Let me read it.");
+    CHECK(msgs[0].tool_calls.size() == 1u);
+    CHECK(msgs[0].tool_calls[0].output() == "file body");
+    CHECK(msgs[1].tool_calls.empty());
+    const std::string body = msgs[1].text + msgs[1].streaming_text + msgs[1].pending_stream;
+    CHECK(body == "# agentty\n\n**An agent harness** for your terminal.");
+}
+
 TEST_CASE("tool stream snapshot") {
     {
         auto decoded = A::http::test::decode_chunked({

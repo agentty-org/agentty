@@ -1238,7 +1238,19 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return nullptr;
         auto& calls = m.d.current.messages.back().tool_calls;
         auto it = std::ranges::find(calls, id, &ToolUse::id);
-        return it != calls.end() ? &*it : nullptr;
+        if (it != calls.end()) return &*it;
+        // A delegated (ACP) agent's run spans several assistant messages
+        // (prose after a card starts a new one), and its updates can arrive
+        // for a card already above. Its ids are unique per session, so walk
+        // back through this run's assistant messages.
+        if (m.d.selection.kind != provider::Kind::ExternalAcp) return nullptr;
+        auto& msgs = m.d.current.messages;
+        for (std::size_t i = msgs.size() - 1; i-- > m.ui.frozen_through;) {
+            if (msgs[i].role != Role::Assistant) break;
+            auto& cs = msgs[i].tool_calls;
+            if (auto j = std::ranges::find(cs, id, &ToolUse::id); j != cs.end()) return &*j;
+        }
+        return nullptr;
     };
 
     return std::visit(overload{
@@ -1347,6 +1359,33 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     else m.s.compaction_buffer.append(e.text, 0, room);
                 }
                 return Cmd::none();
+            }
+            if (!m.d.current.messages.empty()
+                && m.d.current.messages.back().role == Role::Assistant
+                && m.d.selection.kind == provider::Kind::ExternalAcp
+                && !m.d.current.messages.back().tool_calls.empty()) {
+                // A delegated agent streams prose, tool calls and more prose
+                // in ONE stream (native providers start a new message per
+                // tool round). Prose after a card must not land in the same
+                // message: its markdown widget was finished when the card
+                // appeared, and every later delta committed as its own
+                // paragraph -- one fragment per line. Close this message and
+                // continue in a fresh one, the same shape a native tool
+                // round produces, so the view handles it like any other.
+                auto& prev = m.d.current.messages.back();
+                if (!prev.pending_stream.empty()) {
+                    prev.streaming_text += prev.pending_stream;
+                    prev.pending_stream.clear();
+                }
+                if (!prev.streaming_text.empty()) {
+                    if (prev.text.empty()) prev.text = std::move(prev.streaming_text);
+                    else                   prev.text += std::move(prev.streaming_text);
+                    std::string{}.swap(prev.streaming_text);
+                }
+                Message next;
+                next.role = Role::Assistant;
+                next.timestamp = prev.timestamp;
+                m.d.current.messages.push_back(std::move(next));
             }
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
