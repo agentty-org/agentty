@@ -4,6 +4,40 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.60] - 2026-11-19
+
+### Added
+- **ACP agents are first-class.** Devin, Claude Code, Codex, Gemini and
+  OpenCode over ACP now sign in with the agent's own method (or say "run
+  `devin auth login`"), fill the model picker with the agent's models (kept
+  across ^Tab and reopened threads), and ask permission with the same y/a/n
+  card agentty's own tools use. ACP CLIs found on PATH show in the provider
+  picker as "installed - Enter to set up", so no hand-written
+  `acp-agents.json` is needed. The agent's stderr stays off the TUI
+  (`AGENTTY_ACP_STDERR=1` shows it).
+- **A subagent's answer types out live** under its calls in the Agent card.
+- **Open a subagent's call in ^O**: Tab / Shift+Tab pick a nested call, Enter
+  opens its output.
+- **Panel height has four steps**: compact 10, normal 14 (default), roomy 20,
+  tall 28 rows. The ^O / ^U reader and the accounts list follow it too.
+
+### Fixed
+- **ACP: an agent's prose and reasoning after a tool card** no longer render
+  one fragment per line above the card; they continue below it.
+- **ACP: agents' shell commands run.** A whole shell line sent to
+  `terminal/create` (`ls -la | head -3`) was quoted as one program name.
+- **ACP: the model picker works before the first turn**, and sending never
+  blocks on "no model selected" for an agent with its own default.
+- **Esc on a running subagent settles its nested calls**, and a cancelled
+  call shows ⊘ instead of a red ✗.
+- **Subagent card polish**: "starting…" instead of a guessed role, a
+  "⋯ N more lines · ^O to read" hint on long reports, a clock-first
+  progress row, and fixed-width rows in narrow terminals.
+- **^U / ^O no longer lag on long reasoning.** A streaming thinking block is
+  extended instead of rebuilt each frame (about 25x faster).
+- **^O / ^U: a long entry opened after a short one** no longer keeps the
+  short one's height.
+
 ## [0.9.59] - 2026-11-19
 
 ### Added
