@@ -206,12 +206,13 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
     b.header(std::string{i18n::t("appearance.layout")});
     {
         static constexpr std::array kDens = {
-            up::Density::Compact, up::Density::Normal, up::Density::Roomy,
+            up::Density::Compact, up::Density::Normal, up::Density::Roomy, up::Density::Tall,
         };
-        static constexpr std::array<const char*, 3> kDensBlurbs = {
+        static constexpr std::array<const char*, 4> kDensBlurbs = {
             "10 rows \xc2\xb7 for a short terminal",
             "14 rows \xc2\xb7 the shared default",
-            "22 rows \xc2\xb7 fewer panels scroll",
+            "20 rows \xc2\xb7 fewer panels scroll",
+            "28 rows \xc2\xb7 for a tall terminal",
         };
         enum_choice(b, kApDensity, "Panel height", kDens, p.density,
                     "how tall a panel's body may get", kDensBlurbs);

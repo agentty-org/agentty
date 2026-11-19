@@ -3026,8 +3026,14 @@ store::Settings load_settings_from_disk() {
                 using V = std::remove_cvref_t<decltype(dst)>;
                 try {
                     if constexpr (std::is_enum_v<V>) {
-                        if (u[k].is_number_integer())
+                        if (u[k].is_number_integer()) {
                             dst = static_cast<V>(u[k].get<int>());
+                            // A step a newer build added: fall back to the
+                            // nearest one this build knows.
+                            if constexpr (std::is_same_v<V, ui_prefs::Density>)
+                                if (static_cast<int>(dst) > static_cast<int>(ui_prefs::Density::Tall))
+                                    dst = ui_prefs::Density::Tall;
+                        }
                     } else {
                         dst = u[k].get<V>();
                     }

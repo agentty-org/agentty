@@ -113,6 +113,8 @@ TEST_CASE("appearance: adjusting in place wraps") {
     m = press(std::move(m), ui::panel::kApDensity, form::keys::Action{form::keys::Intent::AdjustUp});
     CHECK(m.d.ui().density == ui_prefs::Density::Roomy);
     m = press(std::move(m), ui::panel::kApDensity, form::keys::Action{form::keys::Intent::AdjustUp});
+    CHECK(m.d.ui().density == ui_prefs::Density::Tall);
+    m = press(std::move(m), ui::panel::kApDensity, form::keys::Action{form::keys::Intent::AdjustUp});
     CHECK(m.d.ui().density == ui_prefs::Density::Compact);
     m = press(std::move(m), ui::panel::kApDensity, form::keys::Action{form::keys::Intent::AdjustUp});
     CHECK(m.d.ui().density == ui_prefs::Density::Normal);   // wrapped
@@ -350,7 +352,10 @@ TEST_CASE("appearance: publishing a pref reaches its consumers") {
     CHECK(ui_prefs::panel_rows() == 10);
     p.density = ui_prefs::Density::Roomy;
     ui_prefs::publish(p);
-    CHECK(ui_prefs::panel_rows() == 22);
+    CHECK(ui_prefs::panel_rows() == 20);
+    p.density = ui_prefs::Density::Tall;
+    ui_prefs::publish(p);
+    CHECK(ui_prefs::panel_rows() == 28);
 
     // Motion is two questions, not one: whether anything moves at all, and
     // whether the DECORATIVE layer moves. Reduced keeps the progressive

@@ -61,13 +61,18 @@ enum class Polarity : std::uint8_t { Auto, Dark, Light };
 // On a tall one that is needlessly cramped — several stats tabs scroll for
 // want of six rows — so this raises the ceiling. It is a MAXIMUM: the panel
 // still clamps to what the terminal actually has.
-enum class Density : std::uint8_t { Compact, Normal, Roomy };
+//
+// Four steps. The bottom stays where it was (compact still fits a short
+// terminal); the range grows upward. Append-only: the value is stored as
+// its integer, so a new step goes LAST and old configs keep their meaning.
+enum class Density : std::uint8_t { Compact, Normal, Roomy, Tall };
 
 [[nodiscard]] constexpr int viewport_rows(Density d) noexcept {
     switch (d) {
         case Density::Compact: return 10;
         case Density::Normal:  return 14;
-        case Density::Roomy:   return 22;
+        case Density::Roomy:   return 20;
+        case Density::Tall:    return 28;
     }
     return 14;
 }
@@ -188,6 +193,7 @@ struct Prefs {
         case Density::Compact: return "compact";
         case Density::Normal:  return "normal";
         case Density::Roomy:   return "roomy";
+        case Density::Tall:    return "tall";
     }
     return "?";
 }

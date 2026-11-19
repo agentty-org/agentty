@@ -131,7 +131,7 @@ inline constexpr int kPickerChromeRows = 7;
     // border sits strictly below the viewport top with the base behind it.
     const int avail = term_rows - kPickerChromeRows - 1;
     // The ceiling is the user's DENSITY, not the compiled-in kViewportH:
-    // compact 10 / normal 14 / roomy 22. It stays a ceiling — a roomy
+    // compact 10 / normal 14 / roomy 20 / tall 28. It stays a ceiling — a tall
     // setting on a 20-row terminal still yields what the terminal has, so
     // the pref can never push a panel off-screen. Floor of 4 list rows
     // keeps the picker usable on a tiny term (it scrolls).

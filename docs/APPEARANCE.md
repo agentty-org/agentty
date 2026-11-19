@@ -325,11 +325,11 @@ See §6 for the browser's design.
 
 | Row | Values | Drives |
 |---|---|---|
-| Density | compact 10 / normal 14 / roomy 22 | `panel_viewport_h()` ceiling |
+| Density | compact 10 / normal 14 / roomy 20 / tall 28 | `panel_viewport_h()` ceiling |
 | Prose width | 0–200, 0 = no cap | Width cap on assistant body text |
 | Compact turns | on / off | Inter-turn seam, 3 rows → 1 |
 
-**Density is a ceiling, not a height.** A roomy setting on a 20-row
+**Density is a ceiling, not a height.** A tall setting on a 20-row
 terminal still yields what the terminal has; the pref can never push a
 panel off-screen.
 

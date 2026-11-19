@@ -116,7 +116,7 @@ Text is shown at a steady pace, so a reply that arrives in big chunks still type
 | Scheme | `native` + 615 built-ins, in a fuzzy browser |
 | Colors | auto / truecolor / 256 / 16 / mono |
 | Background | auto / dark / light |
-| Density | compact / normal / roomy |
+| Density | compact (10 rows) / normal (14) / roomy (20) / tall (28): how tall panels get |
 | Prose width | 0–200 columns (0 = no cap) |
 | Compact turns | on / off |
 | Thread preview | on / off: the card above the [[Ctrl+J]] list showing the highlighted thread |
