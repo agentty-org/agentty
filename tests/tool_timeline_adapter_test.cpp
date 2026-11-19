@@ -884,6 +884,29 @@ TEST_CASE("tool output viewer: never taller than the terminal") {
         }
 }
 
+TEST_CASE("tool output viewer: a long entry after a short one isn't stuck at its height") {
+    auto entry = [](int lines) {
+        A::tool_output::Entry e;
+        e.name = "shell"; e.title = "Shell"; e.detail = "ls";
+        for (int i = 0; i < lines; ++i) e.output += "line " + std::to_string(i) + "\n";
+        e.call = make_tool("shell", A::ToolUse::Done{{}, {}, e.output}, {{"command", "ls"}});
+        return e;
+    };
+    A::Model m;
+    m.ui.panel.descend(A::ui::panel::ToolOutput{{{entry(1), entry(42)}, 0, true}});
+    setenv("LINES", "40", 1);
+    setenv("COLUMNS", "100", 1);
+    const int short_h = maya::measure_element(U::tool_output_panel(m), 96).height.value;
+    m.ui.panel.get<A::ui::panel::ToolOutput>()->index = 1;   // → to the long one
+    const int long_h = maya::measure_element(U::tool_output_panel(m), 96).height.value;
+    check(long_h > short_h + 5, "the 42-line entry gets real rows, not the 1-line entry's fit ("
+          + std::to_string(short_h) + " vs " + std::to_string(long_h) + ")");
+    // And back: the short one shrinks to its content again.
+    m.ui.panel.get<A::ui::panel::ToolOutput>()->index = 0;
+    check(maya::measure_element(U::tool_output_panel(m), 96).height.value == short_h,
+          "stepping back gives the short entry its own height");
+}
+
 TEST_CASE("tool output viewer: list keeps the status whole") {
     A::tool_output::Entry e;
     e.name = "shell";

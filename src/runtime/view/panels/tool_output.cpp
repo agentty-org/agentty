@@ -1201,20 +1201,25 @@ Element tool_output_panel(const Model& m) {
     // Never more viewport than there is output, so each fit pass removes rows
     // that are really there.
     //
-    // Start from what fit last frame. Scrolling a long body re-runs this every
-    // keypress, and the first guess (the panel's nominal viewport) is always
-    // ~10 rows too tall for the chrome -- so every frame built and measured
-    // the whole panel twice. The chrome doesn't change while you scroll, so
-    // last frame's answer is right the first time; the loop below still
-    // corrects it if anything did change.
-    struct FitMemo { int term_rows = -1, term_cols = -1, nominal = -1, vh = -1; bool hints = true, header = true, tight = false; };
+    // Start from what fit last frame -- for THIS entry at this size. Scrolling
+    // re-runs this every keypress, and the nominal viewport is always a few
+    // rows too tall for the chrome, so every frame built and measured the
+    // panel twice. Keyed on the entry and its starting height: reusing a
+    // short entry's tiny fit for a long one left the pane stuck at 1-2 rows
+    // ("it never changes height when I move"). And a memo that fits with
+    // room to spare is dropped and re-fit from the top.
+    struct FitMemo { int term_rows = -1, term_cols = -1, start = -1, index = -1, vh = -1;
+                     bool thinking = false, hints = true, header = true, tight = false; };
     static FitMemo fit;   // UI thread only, like the body cache
-    int  vh = std::clamp(base.viewport_h, 1, std::max(1, total_rows));
+    const int start_vh = std::clamp(base.viewport_h, 1, std::max(1, total_rows));
+    int  vh = start_vh;
     bool hints = true, header = true, tight = false;
-    if (fit.term_rows == body_term_rows && fit.term_cols == cols && fit.nominal == base.viewport_h
-        && fit.vh > 0) {
-        vh = std::clamp(fit.vh, 1, std::max(1, total_rows));
+    bool from_memo = false;
+    if (fit.term_rows == body_term_rows && fit.term_cols == cols && fit.start == start_vh
+        && fit.index == cur && fit.thinking == o->thinking_only && fit.vh > 0) {
+        vh = std::min(fit.vh, start_vh);
         hints = fit.hints; header = fit.header; tight = fit.tight;
+        from_memo = true;
     }
     Element out;
     for (int pass = 0; pass < 8; ++pass) {
@@ -1223,9 +1228,17 @@ Element tool_output_panel(const Model& m) {
         out = Panel{std::move(c)}.build();
         const int h = maya::measure_element(out, cols).height.value;
         if (h <= budget) {
-            fit = {body_term_rows, cols, base.viewport_h, vh, hints, header, tight};
+            // Fits, but smaller than it could be: the memo was stale.
+            if (from_memo && h < budget
+                && (vh < start_vh || !hints || !header || tight)) {
+                from_memo = false;
+                vh = start_vh; hints = true; header = true; tight = false;
+                continue;
+            }
+            fit = {body_term_rows, cols, start_vh, cur, vh, o->thinking_only, hints, header, tight};
             break;
         }
+        from_memo = false;
         const int over = h - budget;
         // Keep at least 3 rows of output while there's chrome left to drop.
         if (vh > 3)          vh = std::max(3, vh - over);
