@@ -551,6 +551,10 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             .hash_id         = event_hash_id,
             .children        = std::move(kids_sp),
             .children_hidden = kids_hidden,
+            // What a running subagent is writing, under its calls: the
+            // outcome types out live instead of landing in one go.
+            .trailer         = tc.name.value == "task" ? task_trailer(tc)
+                                                       : std::vector<std::string>{},
         });
     }
 

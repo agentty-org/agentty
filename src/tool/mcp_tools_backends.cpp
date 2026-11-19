@@ -2053,7 +2053,34 @@ public:
                 + (secs >= 60 ? std::to_string(secs / 60) + "m " : std::string{})
                 + std::to_string(secs % 60) + "s";
             head += '\n';
-            head += feed;
+            // Everything the agent has written this run (earlier turns'
+            // narration + the turn streaming now), after a U+E01E marker. It
+            // only ever grows, so the card can show its newest lines live
+            // -- the outcome types out instead of appearing all at once --
+            // without the window ever shrinking. The current turn's text
+            // arrives in `feed` as a trailing "  ▸ " section; lift it out.
+            constexpr std::string_view kSaid = "\n  \xe2\x96\xb8 ";
+            std::string_view log_part = feed, now_said;
+            if (const auto p = feed.find(kSaid); p != std::string_view::npos) {
+                log_part = feed.substr(0, p);
+                now_said = feed.substr(p + kSaid.size());
+            }
+            head += log_part;
+            std::string said;
+            for (std::size_t i = first_new; i < thread.messages.size(); ++i) {
+                const auto& msg = thread.messages[i];
+                if (msg.role != Role::Assistant || msg.text.empty()) continue;
+                if (!said.empty()) said += '\n';
+                said += msg.text;
+            }
+            if (!now_said.empty()) {
+                if (!said.empty()) said += '\n';
+                said += now_said;
+            }
+            if (!said.empty()) {
+                head += "\n\xee\x80\x9e";
+                head += util::progress_tail(said, 8 * 1024);
+            }
             parent(head);
         };
 

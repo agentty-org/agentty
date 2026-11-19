@@ -67,5 +67,9 @@ private:
 // progress row: "▰▱…  1m 12s · turn 7/80 · 9 tools". Empty if it isn't one.
 // The ^O reader shows the same row for a running agent.
 [[nodiscard]] std::string task_status_row(std::string_view first_line);
+// A running subagent's newest lines of text (what it's writing now, up to
+// 3, oldest first), drawn under its nested calls. Empty when it isn't
+// writing, or has no nested calls (then they're in the body).
+[[nodiscard]] std::vector<std::string> task_trailer(const ToolUse& tc);
 
 } // namespace agentty::ui

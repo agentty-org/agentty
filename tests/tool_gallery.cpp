@@ -734,6 +734,107 @@ static void render_viewer_agent(int cols) {
     emit_element("tool output \xc2\xb7 agent \xc2\xb7 call opened", ui::tool_output_panel(m), cols);
 }
 
+// --bench-thinking: open ^U on a big reasoning block and time what one
+// scroll frame costs (panel build + render), at several offsets.
+static void bench_thinking(int cols) {
+    namespace pn = agentty::ui::panel;
+    using clk = std::chrono::steady_clock;
+    Model m;
+    Message u; u.role = Role::User; u.text = "think";
+    m.d.current.messages.push_back(std::move(u));
+    Message a; a.role = Role::Assistant;
+    std::string th;
+    for (int i = 0; th.size() < 200'000; ++i)
+        th += "Paragraph " + std::to_string(i) + ": **I should** check `the thing` and then consider "
+              "whether the approach generalises, because a long reasoning block wraps across many "
+              "rows in the reader and every one of them costs something to build.\n\n";
+    a.thinking = th;
+    a.text = "done";
+    m.d.current.messages.push_back(std::move(a));
+    setenv("LINES", "50", 1);
+    setenv("COLUMNS", std::to_string(cols).c_str(), 1);
+    auto entries = app::detail::collect_thinking_entries(m);
+    if (entries.empty()) { std::puts("no thinking entries"); return; }
+    {
+        tool_output::Open open{std::move(entries), 0, true};
+        open.thinking_only = true;
+        m.ui.panel.descend(pn::ToolOutput{std::move(open)});
+    }
+    auto frame = [&](int y) {
+        m.ui.tool_viewer_scroll.y = y;
+        const auto t0 = clk::now();
+        maya::Element el = ui::tool_output_panel(m);
+        const auto t1 = clk::now();
+        maya::StylePool pool;
+        maya::Canvas canvas(cols, 50, &pool);
+        canvas.clear();
+        maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+        const auto t2 = clk::now();
+        return std::pair{std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                         std::chrono::duration<double, std::milli>(t2 - t1).count()};
+    };
+    auto [b0, r0] = frame(0);
+    std::printf("first frame: build %.1f ms  render %.1f ms  (thinking %zu KB)\n", b0, r0, th.size() / 1024);
+    double bmax = 0, rmax = 0, bsum = 0, rsum = 0; int n = 0;
+    for (int y = 0; y < 3000; y += 37) {
+        auto [b, rr] = frame(y);
+        bmax = std::max(bmax, b); rmax = std::max(rmax, rr); bsum += b; rsum += rr; ++n;
+    }
+    std::printf("scroll frames: n=%d  build avg %.2f max %.2f ms   render avg %.2f max %.2f ms\n",
+                n, bsum / n, bmax, rsum / n, rmax);
+    // Still streaming: each delta grows the block. Every one used to
+    // invalidate the cache and rebuild every row.
+    {
+        auto* o = m.ui.panel.get<pn::ToolOutput>();
+        double gsum = 0, gmax = 0; int gn = 0;
+        for (int k = 0; k < 40; ++k) {
+            o->entries[0].output += "more streamed thinking words ";
+            o->entries[0].streaming = true;
+            auto [b, rr] = frame(500);
+            gsum += b; gmax = std::max(gmax, b); ++gn;
+        }
+        std::printf("streaming frames: n=%d  build avg %.2f max %.2f ms\n", gn, gsum / gn, gmax);
+        // Same picture either way: render the grown block incrementally,
+        // then force a full rebuild (new entry vector) and compare cells.
+        auto snap = [&]() {
+            m.ui.tool_viewer_scroll.y = 1000000;   // bottom: the rebuilt tail
+            maya::Element el = ui::tool_output_panel(m);
+            maya::StylePool pool;
+            maya::Canvas canvas(cols, 50, &pool);
+            canvas.clear();
+            maya::render_tree(el, canvas, pool, maya::theme::live(), true);
+            std::string out;
+            for (int yy = 0; yy < 50; ++yy) {
+                for (int xx = 0; xx < cols; ++xx) {
+                    const char32_t ch = canvas.get(xx, yy).character;
+                    out += ch < 128 ? static_cast<char>(ch) : '#';
+                }
+                out += '\n';
+            }
+            return out;
+        };
+        o->entries[0].output += "\n\nA brand new paragraph that arrived last.\n**Bold beat**\n";
+        o->entries[0].streaming = false;
+        m.env.reveal = false;   // compare the rows, not where the typewriter is
+        const std::string inc = snap();
+        o->entries = std::vector<tool_output::Entry>(o->entries);   // new data(): full rebuild
+        const std::string full = snap();
+        std::printf("incremental == full rebuild: %s\n", inc == full ? "yes" : "NO");
+        if (inc != full) {
+            std::size_t a = 0, b = 0;
+            for (int line = 0; a < inc.size() && b < full.size(); ++line) {
+                auto ea = inc.find('\n', a), eb = full.find('\n', b);
+                if (inc.substr(a, ea - a) != full.substr(b, eb - b)) {
+                    std::printf("  row %d\n  inc : %s\n  full: %s\n", line,
+                                inc.substr(a, ea - a).c_str(), full.substr(b, eb - b).c_str());
+                    break;
+                }
+                a = ea + 1; b = eb + 1;
+            }
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     // The view reads loop_bound<T> caches (the tool-body and settled-panel
     // memos in agent_timeline.cpp), which only the kernel's loop thread may
@@ -805,6 +906,7 @@ int main(int argc, char** argv) {
         else if (a == "--panels") { render_panels(cols); return 0; }
         else if (a == "--agents") { render_agents(cols); return 0; }
         else if (a == "--viewer-agent") { render_viewer_agent(cols); return 0; }
+        else if (a == "--bench-thinking") { bench_thinking(cols); return 0; }
         else if (a == "--viewer") {
             std::vector<std::string> w; std::string k;
             for (int j = i + 1; j < argc; ++j) {

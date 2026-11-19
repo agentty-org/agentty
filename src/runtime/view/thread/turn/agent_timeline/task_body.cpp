@@ -170,15 +170,39 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
             feed = nl == std::string_view::npos ? std::string_view{} : feed.substr(nl + 1);
         }
         while (!feed.empty() && feed.front() == '\n') feed.remove_prefix(1);
+        // What the agent has written so far (the runner sends it after a
+        // U+E01E marker; it only grows). Split it off the activity log.
+        std::string_view said;
+        if (const auto p = feed.find("\n\xee\x80\x9e"); p != std::string_view::npos) {
+            said = feed.substr(p + 4);
+            feed = feed.substr(0, p);
+        } else if (feed.starts_with("\xee\x80\x9e")) {
+            said = feed.substr(3);
+            feed = {};
+        }
+        // Its newest lines, cleaned for a card row. A fixed count once
+        // reached, so while text streams the card grows to it and then only
+        // scrolls -- the outcome types out live instead of landing at once.
+        constexpr std::size_t kSaidRows = 3;
+        std::vector<std::string> said_rows;
+        for (std::size_t end = said.size(); end > 0 && said_rows.size() < kSaidRows;) {
+            const auto nl = said.rfind('\n', end - 1);
+            const std::size_t beg = nl == std::string_view::npos ? 0 : nl + 1;
+            std::string ln = clean_report_line(said.substr(beg, end - beg));
+            if (ln != kDropLine && ln.find_first_not_of(' ') != std::string::npos)
+                said_rows.insert(said_rows.begin(), "  \xe2\x96\xb8 " + ln);   // ▸
+            if (nl == std::string_view::npos) break;
+            end = nl;
+        }
+        std::string said_text;
+        for (const auto& r : said_rows) { said_text += '\n'; said_text += r; }
         // Nothing has happened yet: zero rows. The header spinner says "in
         // flight", and inserting a placeholder row here can shift content
         // that is already in native scrollback (tool_timeline_adapter_test).
-        if (feed.empty()) return true;
+        if (feed.empty() && said_text.empty()) return true;
         // With nested rows (the runner sent structured children), they ARE
-        // the activity: the body keeps only the one-line status row. Nothing
-        // that comes and goes -- a row that appears and vanishes between
-        // updates makes the whole live card, and the composer under it,
-        // bounce up and down.
+        // the activity: the body is the one-line status row; what the agent
+        // is writing goes UNDER the calls (agent_timeline: task_trailer).
         if (!tc.children.empty()) {
             if (status.empty()) return true;
             out.kind = Kind::CodeBlock;
@@ -193,8 +217,12 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
         // (CodeBlock + show_all) so the widget's own tail can't scroll the
         // status row away. colorize paints ✓ / ✗, paths and numbers.
         out.kind = Kind::CodeBlock;
-        const std::size_t rows = status.empty() ? kTaskLiveRows : kTaskLiveRows - 1;
-        out.text = (status.empty() ? std::string{} : status + "\n") + tail_window(feed, rows);
+        const std::size_t rows = (status.empty() ? kTaskLiveRows : kTaskLiveRows - 1)
+                               - std::min(said_rows.size(), kTaskLiveRows - 2);
+        std::string text = (status.empty() ? std::string{} : status + "\n") + tail_window(feed, rows)
+                         + said_text;
+        if (!text.empty() && text.front() == '\n') text.erase(0, 1);
+        out.text = std::move(text);
         out.text_color = text_primary;
         out.colorize = true;
         out.show_all = true;
@@ -278,5 +306,25 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
 namespace agentty::ui {
 std::string task_status_row(std::string_view first_line) {
     return detail::status_row(first_line);
+}
+
+std::vector<std::string> task_trailer(const ToolUse& tc) {
+    std::vector<std::string> rows;
+    if (!tc.is_running() || tc.children.empty()) return rows;
+    const std::string_view feed = tc.progress_text();
+    std::string_view said;
+    if (const auto p = feed.find("\n\xee\x80\x9e"); p != std::string_view::npos) said = feed.substr(p + 4);
+    else if (feed.starts_with("\xee\x80\x9e")) said = feed.substr(3);
+    constexpr std::size_t kRows = 3;
+    for (std::size_t end = said.size(); end > 0 && rows.size() < kRows;) {
+        const auto nl = said.rfind('\n', end - 1);
+        const std::size_t beg = nl == std::string_view::npos ? 0 : nl + 1;
+        std::string ln = detail::clean_report_line(said.substr(beg, end - beg));
+        while (!ln.empty() && ln.front() == ' ') ln.erase(0, 1);
+        if (ln != detail::kDropLine && !ln.empty()) rows.insert(rows.begin(), std::move(ln));
+        if (nl == std::string_view::npos) break;
+        end = nl;
+    }
+    return rows;
 }
 } // namespace agentty::ui

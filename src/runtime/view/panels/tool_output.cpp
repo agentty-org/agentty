@@ -416,6 +416,14 @@ Element tool_output_panel(const Model& m) {
         std::vector<std::size_t> row_cp_begin, row_cp_len;
         std::size_t   total_cp    = 0;
         std::size_t   reveal_row0 = 0;   // first body row (after the $ command)
+        // Thinking, built incrementally while it streams: the source seen
+        // last build, and a resume point at its last complete line (bytes
+        // into `shown`, rows and reveal spans kept, counters at that point).
+        std::size_t   thinking_src_len  = 0;
+        std::string   thinking_src_head;
+        std::size_t   thinking_shown_cut = 0, thinking_keep_rows = 0, thinking_keep_cp_rows = 0;
+        std::size_t   thinking_lines = 0, thinking_cut_cp = 0;
+        std::size_t   words_base = 0, words_cut = 0;
     };
     static BodyCache cache;   // UI thread only, like the other pickers' statics
 
@@ -428,11 +436,30 @@ Element tool_output_panel(const Model& m) {
     const auto call_key     = e.call.compute_render_key();
     std::string child_open_key;
     for (const auto& id : o->child_open) { child_open_key += id; child_open_key += '\x1f'; }
-    if (cache.entries_key != entries_key || cache.index != cur
+    // A thinking block that only GREW since last frame (it's still
+    // streaming): keep every row up to the last complete line and rebuild
+    // just the tail. Rebuilding all of a 200 KB block per delta was ~60 ms a
+    // frame, which is what made scrolling a live ^U feel stuck.
+    const bool grew_only = e.thinking && cache.entries_key == entries_key && cache.index == cur
+        && cache.width == pane_w && cache.query == o->query && o->query.empty()
+        && cache.thinking_src_len > 0 && e.output.size() > cache.thinking_src_len
+        && cache.thinking_keep_rows <= cache.rows.size()
+        && cache.thinking_keep_rows > cache.reveal_row0
+        && std::string_view{e.output}.substr(0, cache.thinking_src_len) == cache.thinking_src_head;
+    if (grew_only) {
+        cache.rows.resize(cache.thinking_keep_rows);
+        cache.row_cp_begin.resize(std::min(cache.row_cp_begin.size(), cache.thinking_keep_cp_rows));
+        cache.row_cp_len.resize(std::min(cache.row_cp_len.size(), cache.thinking_keep_cp_rows));
+        cache.bytes_key = bytes_key;
+        cache.bytes_len = e.output.size();
+        cache.call_key  = call_key;
+    }
+    if (grew_only || cache.entries_key != entries_key || cache.index != cur
         || cache.bytes_key != bytes_key || cache.bytes_len != e.output.size()
         || cache.call_key != call_key || cache.width != pane_w
         || cache.query != o->query
         || cache.child_cursor != o->child_cursor || cache.child_open_key != child_open_key) {
+      if (!grew_only) {
         cache.child_cursor   = o->child_cursor;
         cache.child_open_key = std::move(child_open_key);
         cache.entries_key = entries_key;
@@ -450,6 +477,10 @@ Element tool_output_panel(const Model& m) {
         cache.row_cp_begin.clear();
         cache.row_cp_len.clear();
         cache.total_cp  = 0;
+        cache.thinking_src_len = 0;
+        cache.thinking_shown_cut = cache.thinking_keep_rows = cache.thinking_keep_cp_rows = 0;
+        cache.thinking_lines = cache.thinking_cut_cp = 0;
+      }
 
         const Style hit_st = Style{}.with_fg(Color::slot(ThemeSlot::Background))
                                     .with_bg(Color::slot(ThemeSlot::Warning)).with_bold();
@@ -553,7 +584,7 @@ Element tool_output_panel(const Model& m) {
             cache.row_cp_begin.push_back(cp_at(p));
             cache.row_cp_len.push_back(0);
         };
-        cache.reveal_row0 = cache.rows.size();
+        if (!grew_only) cache.reveal_row0 = cache.rows.size();
 
         // A subagent (`task`) reads as what it did, then what it found: every
         // call it made, one row each, then its report as prose -- headings,
@@ -805,7 +836,7 @@ Element tool_output_panel(const Model& m) {
                                      | overflow(Overflow::Hidden));
             }
         } else if (e.thinking && !shown.empty()) {
-            cache.reveal_row0 = cache.rows.size();
+            if (!grew_only) cache.reveal_row0 = cache.rows.size();
             // Prose, the way the transcript draws it: the brand rail, word
             // wrap, no line numbers. Headings and lines that are all bold
             // (the model's "beats") stand out; a bare `**` is dropped.
@@ -813,7 +844,17 @@ Element tool_output_panel(const Model& m) {
             const Style prose = fg_of(fg);
             const Style beat  = fg_bold(role_brand);
             std::size_t lines = 0;
-            for (std::size_t p = 0; p <= shown.size();) {
+            // Resume after the rows kept from last frame (grew_only): skip
+            // to the first byte not yet built, carrying the counters. The
+            // reveal's codepoint walk restarts from the same byte.
+            std::size_t start = 0;
+            if (grew_only && cache.thinking_shown_cut <= shown.size()) {
+                start = cache.thinking_shown_cut;
+                lines = cache.thinking_lines;
+                walk_byte = start;
+                walk_cp   = cache.thinking_cut_cp;
+            }
+            for (std::size_t p = start; p <= shown.size();) {
                 auto nl = shown.find('\n', p);
                 if (nl == std::string::npos) nl = shown.size();
                 std::string_view ln{shown.data() + p, nl - p};
@@ -847,16 +888,39 @@ Element tool_output_panel(const Model& m) {
                 }
                 if (nl == shown.size()) break;
                 p = nl + 1;
+                // Every row so far ends on a complete line: a safe resume
+                // point for when the block grows.
+                cache.thinking_shown_cut   = p;
+                cache.thinking_keep_rows   = cache.rows.size();
+                cache.thinking_keep_cp_rows = cache.row_cp_begin.size();
+                cache.thinking_lines       = lines;
+                cache.thinking_cut_cp      = cp_at(shown.data() + p);
             }
             cache.plain     = true;
             cache.out_lines = static_cast<int>(lines);
             cache.total_cp  = cp_at(shown.data() + shown.size());
-            bool in = false;
-            for (const char ch : shown) {
-                const bool sp = ch == ' ' || ch == '\n' || ch == '\t';
-                if (!sp && !in) ++cache.words;
-                in = !sp;
-            }
+            // Words: [0, words_cut) counted once and kept; the tail after the
+            // last complete line recounted each build (it's short).
+            auto count_words = [&](std::size_t from, std::size_t to) {
+                std::size_t w = 0; bool in = false;
+                for (std::size_t i = from; i < to; ++i) {
+                    const char ch = shown[i];
+                    const bool sp = ch == ' ' || ch == '\n' || ch == '\t';
+                    if (!sp && !in) ++w;
+                    in = !sp;
+                }
+                return w;
+            };
+            const std::size_t cut = std::min(cache.thinking_shown_cut, shown.size());
+            if (!grew_only || cache.words_cut > cut) { cache.words_base = 0; cache.words_cut = 0; }
+            // Every complete line ends in '\n', so a word never straddles
+            // words_cut and the two counts simply add.
+            cache.words_base += count_words(cache.words_cut, cut);
+            cache.words_cut   = cut;
+            cache.words       = cache.words_base + count_words(cut, shown.size());
+            // Remember what this build saw, for the grew-only check.
+            cache.thinking_src_len  = e.output.size();
+            cache.thinking_src_head = e.output;
         } else if (!shown.empty()) {
             cache.plain = true;
             const Color pipe_hue = e.failed ? danger : tool_hue;
@@ -1133,15 +1197,32 @@ Element tool_output_panel(const Model& m) {
     const int cols   = std::max(10, panel_terminal_cols() - 4);
     // Never more viewport than there is output, so each fit pass removes rows
     // that are really there.
+    //
+    // Start from what fit last frame. Scrolling a long body re-runs this every
+    // keypress, and the first guess (the panel's nominal viewport) is always
+    // ~10 rows too tall for the chrome -- so every frame built and measured
+    // the whole panel twice. The chrome doesn't change while you scroll, so
+    // last frame's answer is right the first time; the loop below still
+    // corrects it if anything did change.
+    struct FitMemo { int term_rows = -1, term_cols = -1, nominal = -1, vh = -1; bool hints = true, header = true, tight = false; };
+    static FitMemo fit;   // UI thread only, like the body cache
     int  vh = std::clamp(base.viewport_h, 1, std::max(1, total_rows));
     bool hints = true, header = true, tight = false;
+    if (fit.term_rows == body_term_rows && fit.term_cols == cols && fit.nominal == base.viewport_h
+        && fit.vh > 0) {
+        vh = std::clamp(fit.vh, 1, std::max(1, total_rows));
+        hints = fit.hints; header = fit.header; tight = fit.tight;
+    }
     Element out;
     for (int pass = 0; pass < 8; ++pass) {
         auto c = assemble(vh, hints, header);
         c.tight = tight;
         out = Panel{std::move(c)}.build();
         const int h = maya::measure_element(out, cols).height.value;
-        if (h <= budget) break;
+        if (h <= budget) {
+            fit = {body_term_rows, cols, base.viewport_h, vh, hints, header, tight};
+            break;
+        }
         const int over = h - budget;
         // Keep at least 3 rows of output while there's chrome left to drop.
         if (vh > 3)          vh = std::max(3, vh - over);
