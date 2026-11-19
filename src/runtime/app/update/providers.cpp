@@ -198,6 +198,15 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             p->index = 0;
             return Cmd::none();
         },
+        [&](AcpAgentAdded& e) -> Cmd {
+            if (!e.error.empty())
+                return set_status_toast(m, "couldn't set up " + e.label + ": " + e.error,
+                                        std::chrono::seconds{8});
+            // Saved; the config cache sees the new mtime, so parse_selection
+            // now routes the id to the agent. Switch exactly as a configured
+            // row does (opens the model picker when the agent offers models).
+            return commit_provider_switch(m, e.id, e.label);
+        },
         [&](ProvidersToggleAll) -> Cmd {
             auto* p = m.ui.panel.get<pn::Providers>();
             if (!p) return Cmd::none();
@@ -342,7 +351,14 @@ Cmd providers_update(Model& m, msg::ProvidersMsg pm) {
             }
 
             // An external ACP agent row: agentty drives the agent subprocess,
-            // which does its OWN auth — no key resolution here.
+            // which does its OWN auth — no key resolution here. A discovered
+            // (installed, not configured) agent is written to acp-agents.json
+            // first, off the UI thread; AcpAgentAdded then switches to it.
+            if (const auto* acp_row = chosen.acp_row(); acp_row && acp_row->discovered) {
+                m.s.status = "setting up " + acp_row->label + "\xe2\x80\xa6";
+                m.s.status_until = m.now + std::chrono::seconds{5};
+                return cmd::add_acp_agent(acp_row->agent, acp_row->label);
+            }
             if (const provider::AcpAgentSpec* agent = chosen.acp()) {
                 return commit_provider_switch(m, agent->id, agent->id);
             }

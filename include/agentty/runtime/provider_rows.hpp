@@ -36,8 +36,16 @@ namespace agentty::ui {
 struct ProviderRow {
     // A built-in registry provider (anthropic, chatgpt, kimi, groq, …).
     struct Preset { const provider::ProviderPreset* preset; };
-    // A configured external ACP agent subprocess row.
-    struct Acp { provider::AcpAgentSpec agent; };
+    // A configured external ACP agent subprocess row. `discovered`: a known
+    // agent found on PATH but not configured yet -- an offer; Enter writes
+    // its acp-agents.json entry, then switches to it. `label`/`blurb` are
+    // the friendly names for an offer (a configured row shows its id).
+    struct Acp {
+        provider::AcpAgentSpec agent;
+        bool        discovered = false;
+        std::string label;
+        std::string blurb;
+    };
     // A saved custom OpenAI-compatible host (a Settings.provider_keys spec that
     // is not a built-in preset), switchable without re-entering its key.
     struct CustomHost { std::string spec; };
@@ -61,6 +69,7 @@ struct ProviderRow {
         if (auto* a = std::get_if<Acp>(&kind)) return &a->agent;
         return nullptr;
     }
+    [[nodiscard]] const Acp* acp_row() const { return std::get_if<Acp>(&kind); }
     [[nodiscard]] const std::string* custom_host() const {
         if (auto* c = std::get_if<CustomHost>(&kind)) return &c->spec;
         return nullptr;
@@ -209,6 +218,12 @@ struct ProviderRow {
             rows.push_back({ProviderRow::Acp{std::move(agent)}});
     }
 
+    // Agents installed here but not set up: one keypress from usable.
+    if (query.empty())
+        for (auto& d : provider::discover_acp_agents())
+            rows.push_back({ProviderRow::Acp{std::move(d.spec), true, std::move(d.label),
+                                             std::move(d.blurb)}});
+
     // The plain "Custom host…" sentinel is always reachable — unless it is
     // already sitting at the top as a concrete offer.
     if (!offer_host)
@@ -338,6 +353,23 @@ struct SectionedProviderRows {
         for (auto& agent : provider::enumerate_acp_agents())
             emit({ProviderRow::Acp{std::move(agent)}},
                  ProviderSection::Yours, false, false);
+
+    // Agents installed here but not set up: one keypress from usable. Shown
+    // when browsing, and when the query names them ("devin", "claude").
+    for (auto& d : provider::discover_acp_agents()) {
+        if (!query.empty()) {
+            auto low = [](std::string s) {
+                for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return s;
+            };
+            const std::string q = low(std::string{query});
+            if (low(d.label).find(q) == std::string::npos
+                && low(d.spec.id).find(q) == std::string::npos)
+                continue;
+        }
+        emit({ProviderRow::Acp{std::move(d.spec), true, std::move(d.label), std::move(d.blurb)}},
+             ProviderSection::More, true, false);
+    }
 
     // NOT CONFIGURED: offers, each one action away from being usable.
     for (const auto* p : rest) emit({ProviderRow::Preset{p}},

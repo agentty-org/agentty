@@ -1254,6 +1254,17 @@ struct PendingPermission {
     // The command will run inside the OS sandbox. The prompt says so, since
     // approving it doesn't widen what it can reach.
     bool sandboxed = false;
+
+    // Set when the question is a delegated agent's (external ACP
+    // request_permission), not one of agentty's own tools: y / a / n answer
+    // with the agent's matching option instead of releasing a host tool.
+    struct AgentAsk {
+        std::string ask_id;
+        std::string title;   // the agent's words
+        std::string kind;    // read | edit | execute | fetch | ... | other
+        std::string allow_once, allow_always, reject_once;   // option ids, may be empty
+    };
+    std::optional<AgentAsk> agent;
 };
 
 } // namespace agentty

@@ -25,6 +25,8 @@
 #include "agentty/provider/kimi/kimi_oauth.hpp"
 #include "agentty/provider/prompt_policy.hpp"
 #include "agentty/provider/selection.hpp"
+#include "agentty/provider/acp_agents.hpp"   // add_acp_agent
+#include "agentty/provider/dispatch.hpp"     // acp_agent_hooks
 #include "agentty/provider/credentials.hpp"
 #include "agentty/provider/openai/transport.hpp"
 #include "agentty/util/logx.hpp"
@@ -1310,6 +1312,9 @@ Cmd launch_stream(Model& m) {
                 || (orchestrate && turn_profile.effort == Effort::None));
         req.reasoning_off = routed_caps.reasoning_off;
         req.session_key   = std::move(session_key);
+        // Someone is watching this turn: a delegated agent's permission
+        // questions go to them (AcpPermissionAsk). Compaction is mechanical.
+        req.interactive_asks = !compacting;
 
         // Capability gate: withhold tools ONLY on an explicit declaration of
         // non-support (Ollama's /api/show probe, a provider catalog that says
@@ -2767,6 +2772,23 @@ Cmd probe_model_window(const Model& m, std::string model_id) {
         // The selection comes from the Model; the credential is resolved for
         // it on the worker (a reducer can't read the store).
         std::move(model_id), sel, detail::active_provider_id(m));
+}
+
+Cmd answer_acp_permission(std::string ask_id, std::string option_id) {
+    // The reply writes to the agent's pipe: never on the UI thread.
+    return cmd::io_task([](Io, const maya::unlocked& cap, maya::Sink<Msg>, std::stop_token,
+                           std::string ask, std::string option) {
+        if (const auto hooks = provider::acp_agent_hooks(); hooks->answer)
+            hooks->answer(cap, ask, option);
+    }, std::move(ask_id), std::move(option_id));
+}
+
+Cmd add_acp_agent(provider::AcpAgentSpec spec, std::string label) {
+    return cmd::io_task([](Io io, const maya::unlocked&, maya::Sink<Msg> out, std::stop_token,
+                           provider::AcpAgentSpec spec, std::string label) {
+        std::string err = provider::add_acp_agent(io, spec);
+        out.send(Msg{AcpAgentAdded{spec.id, std::move(label), std::move(err)}});
+    }, std::move(spec), std::move(label));
 }
 
 Cmd fetch_models_for(std::string spec) {

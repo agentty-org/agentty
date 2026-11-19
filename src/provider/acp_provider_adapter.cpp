@@ -3,6 +3,7 @@
 
 #include "agentty/provider/acp_provider_adapter.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,7 @@
 #include "agentty/provider/stream_epilogue.hpp"        // StreamResult
 #include "agentty/runtime/msg.hpp"                   // Stream* Msgs
 #include "agentty/tool/util/fs_helpers.hpp"          // workspace_root (for cwd)
+#include "agentty/util/logx.hpp"
 
 namespace agentty::provider {
 
@@ -65,6 +67,41 @@ std::shared_ptr<LiveAgent> cached(const std::string& agent_id) {
     return it == map->end() ? nullptr : it->second;
 }
 
+// Questions put to the user, by ask id, until answered. The reply function
+// is the backend's (it answers the agent's deferred request once); the entry
+// is dropped on answer, and a turn that ends first answers it Cancelled on
+// the backend side, so a late answer here just finds the entry gone.
+using AskMap = std::unordered_map<std::string, TurnSink::PermissionReply>;
+maya::guarded<AskMap>& g_asks() {
+    static maya::guarded<AskMap> s;
+    return s;
+}
+
+std::string tool_kind_name(a::ToolKind k) {
+    switch (k) {
+        case a::ToolKind::Read:       return "read";
+        case a::ToolKind::Edit:       return "edit";
+        case a::ToolKind::Delete:     return "delete";
+        case a::ToolKind::Move:       return "move";
+        case a::ToolKind::Search:     return "search";
+        case a::ToolKind::Execute:    return "execute";
+        case a::ToolKind::Think:      return "think";
+        case a::ToolKind::Fetch:      return "fetch";
+        case a::ToolKind::SwitchMode: return "switch_mode";
+        case a::ToolKind::Other:      break;
+    }
+    return "other";
+}
+std::string option_kind_name(a::PermissionOptionKind k) {
+    switch (k) {
+        case a::PermissionOptionKind::AllowOnce:    return "allow_once";
+        case a::PermissionOptionKind::AllowAlways:  return "allow_always";
+        case a::PermissionOptionKind::RejectOnce:   return "reject_once";
+        case a::PermissionOptionKind::RejectAlways: return "reject_always";
+    }
+    return "reject_once";
+}
+
 // Extract the plain text of a ContentBlock (text + text-resource arms only;
 // other arms contribute nothing to a streamed delta).
 std::string block_text(const a::ContentBlock& b) {
@@ -105,6 +142,7 @@ std::shared_ptr<LiveAgent> acquire(const maya::unlocked& cap, const std::string&
     }
 
     ExternalAcpOptions opts;
+    opts.agent_command = spec->command;
     opts.cwd           = spec->cwd.empty()
                        ? tools::util::workspace_root().string()
                        : spec->cwd;
@@ -144,6 +182,7 @@ std::shared_ptr<LiveAgent> acquire(const maya::unlocked& cap, const std::string&
         return nullptr;
     }
     live->backend->connect(*live->agent.connection);
+    live->backend->set_auth_methods(live->agent.auth_methods);
 
     // Another thread may have raced us; keep the first winner.
     for (;;) {
@@ -159,6 +198,22 @@ std::shared_ptr<LiveAgent> acquire(const maya::unlocked& cap, const std::string&
 
 } // namespace
 
+namespace {
+// The selectable values of a select option, grouped or not, as (value, label).
+std::vector<std::pair<std::string, std::string>> option_values(const a::ConfigOption& o) {
+    std::vector<std::pair<std::string, std::string>> out;
+    a::match(o.options,
+        [&](const a::CSO_Ungrouped& u) {
+            for (const auto& v : u.items) out.emplace_back(v.value, v.name);
+        },
+        [&](const a::CSO_Grouped& g) {
+            for (const auto& grp : g.items)
+                for (const auto& v : grp.options) out.emplace_back(v.value, v.name);
+        });
+    return out;
+}
+} // namespace
+
 StreamResult stream_external_acp(const maya::unlocked& cap, const std::string& agent_id, Request req, EventSink sink) {
     sink(StreamStarted{});
 
@@ -168,6 +223,24 @@ StreamResult stream_external_acp(const maya::unlocked& cap, const std::string& a
         StreamError e; e.message = err;
         sink(std::move(e));
         return StreamResult::failed(err.empty() ? "ACP agent spawn failed" : err);
+    }
+
+    // The model the user picked for this thread, when the agent offers that
+    // choice and isn't already on it: switch the agent first. One place for
+    // every way a model gets picked (picker, ^Tab, a reopened thread), and
+    // a no-op when the agent has no model option or the id isn't one of its
+    // values (a thread from another provider).
+    if (!req.model.empty()) {
+        if (const auto opt = live->backend->model_option();
+            opt && opt->currentValue != req.model) {
+            bool offered = false;
+            for (const auto& [value, label] : option_values(*opt))
+                if (value == req.model) { offered = true; break; }
+            if (offered)
+                if (auto e = live->backend->set_config_option(cap, opt->id, req.model))
+                    AGT_LOG(Wire, Warn, "acp.set_model", "agent={} model={} err={}",
+                            agent_id, req.model, *e);
+        }
     }
 
     // Translate ACP's snapshot-based, agent-owned tool lifecycle into visible
@@ -267,6 +340,46 @@ StreamResult stream_external_acp(const maya::unlocked& cap, const std::string& a
     auto cancel = std::make_shared<http::CancelToken>();
     req.cancel  = cancel;   // the runtime trips this on Esc (see below)
 
+    // Someone is watching: the agent's permission questions go to them. Each
+    // becomes an AcpPermissionAsk on the sink; the user's answer comes back
+    // through answer_acp_permission() with the same ask id.
+    std::vector<std::string> my_asks;   // this turn's, dropped when it ends
+    // This turn's identity for its ask ids: the cancel token is a fresh
+    // allocation per turn and lives until the turn returns.
+    const std::string turn_tag = std::to_string(reinterpret_cast<std::uintptr_t>(cancel.get()));
+    if (req.interactive_asks) {
+        tsink.ask = [&sink, &my_asks, turn_tag](const maya::unlocked& c, const a::RequestPermissionParams& p,
+                                      TurnSink::PermissionReply reply) -> bool {
+            AcpPermissionAsk ask;
+            // Unique while open: the agent's call id is, and this turn's own
+            // count separates two asks about the same call.
+            ask.ask_id  = "acp-ask-" + turn_tag + "-" + p.toolCall.toolCallId.value + "-"
+                        + std::to_string(my_asks.size());
+            ask.tool_id = ToolCallId{p.toolCall.toolCallId.value};
+            ask.title   = p.toolCall.title ? *p.toolCall.title : std::string{};
+            ask.kind    = p.toolCall.kind ? tool_kind_name(*p.toolCall.kind) : std::string{"other"};
+            for (const auto& o : p.options)
+                ask.options.push_back({o.optionId, o.name, option_kind_name(o.kind)});
+            if (ask.options.empty()) return false;   // nothing to choose: policy decides
+            g_asks().with(c, [](AskMap& m, std::string id, TurnSink::PermissionReply r) {
+                m[std::move(id)] = std::move(r);
+            }, ask.ask_id, std::move(reply));
+            my_asks.push_back(ask.ask_id);
+            sink(std::move(ask));
+            return true;
+        };
+    }
+    struct AskCleanup {
+        const maya::unlocked& cap;
+        std::vector<std::string>& ids;
+        ~AskCleanup() {
+            if (ids.empty()) return;
+            g_asks().with(cap, [](AskMap& m, std::vector<std::string> gone) {
+                for (const auto& id : gone) m.erase(id);
+            }, ids);
+        }
+    } ask_cleanup{cap, my_asks};
+
     // ACP's per-round TurnResult (acp_backend.hpp) is the ADJACENT layer's
     // outcome; fold it onto the shared provider StreamResult so the ACP arm
     // reports through the same value type as the native transports.
@@ -311,6 +424,65 @@ void release_acp_agents(const maya::unlocked&) noexcept {
     // unless a turn is still running), bounded even for a wedged agent.
     auto drained = g_cache().take();
     (void)drained;
+}
+
+void answer_acp_permission(const maya::unlocked& cap, const std::string& ask_id,
+                           const std::string& option_id) {
+    TurnSink::PermissionReply reply = g_asks().with(cap, [](AskMap& m, std::string id) {
+        TurnSink::PermissionReply r;
+        if (auto it = m.find(id); it != m.end()) {
+            r = std::move(it->second);
+            m.erase(it);
+        }
+        return r;
+    }, ask_id);
+    if (!reply) return;   // already settled (the turn ended)
+    if (option_id.empty()) {
+        reply(cap, a::PO_Cancelled{});
+        return;
+    }
+    a::PO_Selected sel;
+    sel.optionId = option_id;
+    reply(cap, sel);
+}
+
+std::vector<ModelInfo> list_acp_agent_models(const maya::unlocked& cap,
+                                             const std::string& agent_id,
+                                             std::string& current,
+                                             std::string& error) {
+    current.clear();
+    error.clear();
+    auto live = acquire(cap, agent_id, error);
+    if (!live) return {};
+    // Options arrive with session/new. Open the session now (the first turn
+    // reuses it), so the picker lists models before anything is sent.
+    if (live->backend->config_options().empty()) {
+        std::optional<TurnError> err;
+        (void)live->backend->open_session(cap, err);
+        if (err) { error = err->message; return {}; }
+    }
+    const auto opt = live->backend->model_option();
+    if (!opt) return {};
+    current = opt->currentValue;
+    std::vector<ModelInfo> out;
+    for (const auto& [value, label] : option_values(*opt)) {
+        ModelInfo mi;
+        mi.id           = ModelId{value};
+        mi.display_name = label.empty() ? value : label;
+        mi.provider     = agent_id;
+        out.push_back(std::move(mi));
+    }
+    return out;
+}
+
+std::optional<std::string> set_acp_agent_model(const maya::unlocked& cap,
+                                               const std::string& agent_id,
+                                               const std::string& model) {
+    std::string err;
+    auto live = acquire(cap, agent_id, err);
+    if (!live) return err.empty() ? std::string{"agent not running"} : err;
+    const auto opt = live->backend->model_option();
+    return live->backend->set_config_option(cap, opt ? opt->id : std::string{"model"}, model);
 }
 
 } // namespace agentty::provider

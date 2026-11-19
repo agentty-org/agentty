@@ -242,6 +242,16 @@ Element providers_panel(const Model& m) {
                 if (active) row.trailing += session_note(p->id);
             }
             row.active         = active;
+        } else if (const auto* acp_row = r.acp_row(); acp_row && acp_row->discovered) {
+            // Installed, not set up: an offer, dim like the other unconfigured
+            // rows. Enter adds it to acp-agents.json and switches.
+            row.badge          = " ";
+            row.badge_style    = fg_of(accent);
+            row.leading        = pad_name(acp_row->label) + acp_row->blurb;
+            row.leading_style  = fg_dim(fg);
+            row.trailing       = "installed \xc2\xb7 Enter to set up";
+            row.trailing_style = fg_dim(info);
+            row.active         = false;
         } else if (const auto* agent = r.acp()) {
             const bool active = (agent->id == active_id);
             row.badge       = active ? "\xe2\x97\x8f" : " ";   // ●

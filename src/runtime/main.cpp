@@ -2004,6 +2004,11 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
                 return provider::stream_external_acp(c, agent_id, std::move(r),
                                                      std::move(s));
             };
+            provider::set_acp_agent_hooks({
+                .list_models = &provider::list_acp_agent_models,
+                .set_model   = &provider::set_acp_agent_model,
+                .answer      = &provider::answer_acp_permission,
+            });
             return router;
         };
 

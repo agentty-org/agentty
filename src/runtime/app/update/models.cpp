@@ -1152,7 +1152,19 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                                               std::chrono::seconds{8});
                 return toast;
             }
-            if (e.models.empty()) return Cmd::none();
+            if (e.models.empty()) {
+                // An external agent that offers no model choice: nothing to
+                // pick, and an empty picker would look broken. Close it and
+                // say who decides.
+                if (m.d.selection.kind == provider::Kind::ExternalAcp
+                    && m.ui.panel.get<pn::Models>()) {
+                    m.ui.panel.close<pn::Models>();
+                    return set_status_toast(m, provider::provider_display_name(m.d.selection)
+                                               + " picks its own model",
+                                            std::chrono::seconds{4});
+                }
+                return Cmd::none();
+            }
             auto& settings = m.d.persisted;
             // Set by the persist-on-success branch below; batched into this
             // arm's return so a proven --provider spec actually reaches disk.

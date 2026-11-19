@@ -14,6 +14,7 @@
 #include "agentty/provider/auth_state.hpp"   // auth_source
 #include "agentty/domain/bundled_catalog.hpp"
 #include "agentty/provider/acp_agents.hpp"
+#include "agentty/provider/dispatch.hpp"      // acp_agent_hooks
 #include "agentty/provider/anthropic/transport.hpp"
 #include "agentty/provider/chatgpt/provider.hpp"
 #include "agentty/provider/copilot/provider.hpp"
@@ -377,7 +378,18 @@ std::vector<ModelInfo> list_models_impl(Io io, const maya::unlocked& cap, const 
     // overwrites — so a Copilot-backed custom host matched nothing, fell
     // through to the generic /v1/models GET (Copilot serves /models), and the
     // picker came up empty with no error.
-    if (sel.kind == Kind::ExternalAcp) return {};   // the agent picks its own
+    if (sel.kind == Kind::ExternalAcp) {
+        // The agent's own model choices (its "model" config option), when it
+        // offers any. Empty = the agent picks, which is a fine answer.
+        const auto hooks = acp_agent_hooks();
+        if (!hooks->list_models) return {};
+        std::string current;
+        auto models = hooks->list_models(cap, sel.acp_agent_id, current, error);
+        // The agent's current pick first: what the picker lands on.
+        std::stable_partition(models.begin(), models.end(),
+                              [&](const ModelInfo& mi) { return mi.id.value == current; });
+        return models;
+    }
     if (sel.is_copilot()) return copilot::list_models(io, cap);
     if (sel.is_kimi())    return kimi::list_models(io, cap);
     if (sel.is_chatgpt()) return chatgpt::list_models(io, cap);

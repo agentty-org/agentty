@@ -242,7 +242,39 @@ std::string ExternalAcpBackend::session_id() const {
 // through their context (Ctx), so a handler that takes a lock is checked.
 rpc::Dispatch ExternalAcpBackend::make_dispatch() {
     rpc::Dispatch d;
-    d.on_call = [this](const maya::unlocked& cap, const acp::Call& c) {
+    d.on_call = [this](const maya::unlocked& cap, const acp::Call& c) -> acp::Maybe<std::string> {
+        // session/request_permission with a round that can ASK: hand the
+        // question to the UI and answer later (Deferred), so the reader is
+        // never parked on a human. Anything else, or no asker: the router's
+        // synchronous delegate policy below.
+        if (c.method == acp::to_client::RequestPermission::name) {
+            auto round = round_.current();
+            if (round && round->ask) {
+                acp::RequestPermissionParams p;
+                try { p = jsonrpc::from_json<acp::RequestPermissionParams>(c.params); }
+                catch (const std::exception& e) {
+                    return acp::reply(c.id, std::unexpected(
+                        acp::RpcError(acp::errc::InvalidParams, e.what())));
+                }
+                auto pending = std::make_shared<AcpPendingAsk>(
+                    rpc::Peer::Deferred<acp::to_client::RequestPermission>(*peer_, c.id));
+                pending->arm(cap);
+                for (;;) {
+                    auto cur  = this->asks_.current();
+                    auto next = cur ? std::make_shared<AskList>(*cur) : std::make_shared<AskList>();
+                    next->push_back(pending);
+                    if (this->asks_.publish_if(cur, std::move(next))) break;
+                }
+                std::weak_ptr<AcpPendingAsk> weak = pending;
+                const bool taken = round->ask(cap, p,
+                    [weak](const maya::unlocked& c2, acp::RequestPermissionOutcome o) {
+                        if (auto a = weak.lock()) a->answer(c2, std::move(o));
+                    });
+                if (taken) return acp::Nothing;
+                // Declined: answer now through the normal policy.
+                pending->disarm(cap);
+            }
+        }
         Ctx ctx{*this, cap};
         return router_.handle(ctx, c);
     };
@@ -260,25 +292,37 @@ ExternalAcpBackend::Router ExternalAcpBackend::make_router() const {
 
     // session/update → normalized SessionUpdate to the round's sink.
     r.on<m::SessionUpdate>([](B& c, const acp::SessionUpdateMsg& msg) {
+        // The agent changed its options (a model switch, a new mode): keep the
+        // current set, whether or not a round is listening.
+        if (const auto* co = std::get_if<acp::SU_ConfigOptions>(&msg.update))
+            c.self.config_.store(co->configOptions);
         auto round = c.self.round_.current();
         if (!round) return;
         if (auto member = round->inflight.join()) round->sink(msg.update);
     });
 
-    // request_permission → delegate decides; default allow. We answer with the
-    // agent's own first option when allowing, else Cancelled.
+    // request_permission with no one to ask (headless, a subagent, a test):
+    // the delegate decides, default allow. Allowing selects the agent's
+    // allow_once option (never an "always" grant nobody saw), denying its
+    // reject_once; with no matching option, Cancelled.
     r.on<m::RequestPermission>([](B& c, const acp::RequestPermissionParams& p) {
         auto& b = c.self;
         bool allow = true;
         if (b.opts_.delegate.request_permission) allow = b.opts_.delegate.request_permission(p);
         acp::RequestPermissionResult res;
-        if (allow && !p.options.empty()) {
+        res.outcome = acp::PO_Cancelled{};
+        const auto want = allow ? acp::PermissionOptionKind::AllowOnce
+                                : acp::PermissionOptionKind::RejectOnce;
+        const acp::PermissionOption* pick = nullptr;
+        for (const auto& o : p.options)
+            if (o.kind == want) { pick = &o; break; }
+        if (!pick && allow)
+            for (const auto& o : p.options)
+                if (o.kind == acp::PermissionOptionKind::AllowAlways) { pick = &o; break; }
+        if (pick) {
             acp::PO_Selected sel;
-            sel.optionId = p.options.front().optionId;
+            sel.optionId = pick->optionId;
             res.outcome  = sel;
-        } else {
-            // Denied, or allowed with nothing to select.
-            res.outcome = acp::PO_Cancelled{};
         }
         return res;
     });
@@ -375,10 +419,27 @@ ExternalAcpBackend::ensure_session_(const maya::unlocked& cap, const Request& re
     np.mcpServers = opts_.mcp_servers;
 
     auto r = peer_->call<acp::to_agent::SessionNew>(cap, np);
+    // Not signed in. ACP says the agent answers session/new with
+    // auth_required (-32000) and lists how to sign in on initialize. Sign in
+    // once with an agent-run method (the agent opens its own browser /
+    // device flow) and retry; a terminal-only method can't be run from
+    // here, so say exactly what to run instead of a raw protocol error.
+    if (!r && r.error().code == acp::AuthRequired) {
+        std::string why;
+        if (try_authenticate_(cap, why))
+            r = peer_->call<acp::to_agent::SessionNew>(cap, np);
+        if (!r) {
+            err = TurnError{why.empty() ? std::string{"the agent needs you to sign in first"} : why};
+            err->auth_expired = false;
+            return std::nullopt;
+        }
+    }
     if (!r) {
         err = TurnError{std::string("session/new failed: ") + r.error().what()};
         return std::nullopt;
     }
+    if (r->configOptions) config_.store(*r->configOptions);
+    apply_pending_config_(cap, r->sessionId);
     if (!opts_.reuse_session) return r->sessionId;
     // Rounds are one at a time, but if two ever raced, the first id wins.
     const auto kept = session_.update(
@@ -386,6 +447,98 @@ ExternalAcpBackend::ensure_session_(const maya::unlocked& cap, const Request& re
             return s ? s : std::optional<std::string>{id};
         }, r->sessionId.value);
     return acp::SessionId{**kept};
+}
+
+// ── Sign-in ──────────────────────────────────────────────────────────────────────
+// One agent-run method (type "agent": the agent drives its own browser or
+// device login) is tried. A "terminal" method needs an interactive TTY the
+// agent's stdio isn't, so it becomes an instruction naming the command.
+bool ExternalAcpBackend::try_authenticate_(const maya::unlocked& cap, std::string& why) {
+    const auto methods = auth_methods_.get();
+    const acp::AuthMethod* agent_run = nullptr;
+    const acp::AuthMethod* terminal  = nullptr;
+    for (const auto& m : methods) {
+        if (m.type == "terminal") { if (!terminal) terminal = &m; }
+        else if (!agent_run) agent_run = &m;
+    }
+    if (agent_run) {
+        acp::AuthenticateParams ap;
+        ap.methodId = agent_run->id;
+        rpc::CallOptions o;
+        o.timeout = std::chrono::minutes{5};   // a browser sign-in takes a human
+        auto a = peer_->call<acp::to_agent::Authenticate>(cap, ap, std::move(o));
+        if (a) return true;
+        why = "signing in to the agent (" + agent_run->name + ") failed: " + a.error().what();
+        return false;
+    }
+    if (terminal) {
+        std::string cmd = opts_.agent_command.empty() ? std::string{"the agent"} : opts_.agent_command;
+        for (const auto& a : terminal->args) cmd += " " + a;
+        why = "sign in first: run `" + cmd + "` in a terminal (" + terminal->name + "), then send again";
+        return false;
+    }
+    why = "the agent needs you to sign in; run it once on its own to log in, then send again";
+    return false;
+}
+
+void ExternalAcpBackend::set_auth_methods(acp::List<acp::AuthMethod> m) {
+    auth_methods_.store(std::move(m));
+}
+acp::List<acp::AuthMethod> ExternalAcpBackend::auth_methods() const {
+    return auth_methods_.get();
+}
+
+// ── Session config options (model, mode, ...) ─────────────────────────────────────────
+acp::List<acp::ConfigOption> ExternalAcpBackend::config_options() const {
+    return config_.get();
+}
+
+std::optional<acp::ConfigOption> ExternalAcpBackend::model_option() const {
+    for (const auto& o : config_.get())
+        if ((o.category && *o.category == "model") || o.id == "model")
+            if (!o.is_boolean()) return o;
+    return std::nullopt;
+}
+
+std::optional<std::string> ExternalAcpBackend::set_config_option(
+        const maya::unlocked& cap, const std::string& config_id, const std::string& value) {
+    const auto sid = session_.get();
+    if (!sid || peer_ == nullptr) {
+        // No session yet: remember it; ensure_session_ applies it.
+        pending_config_.with(cap, [](std::vector<std::pair<std::string, std::string>>& v,
+                                     std::string id, std::string val) {
+            std::erase_if(v, [&](const auto& kv) { return kv.first == id; });
+            v.emplace_back(std::move(id), std::move(val));
+        }, config_id, value);
+        return std::nullopt;
+    }
+    acp::SetConfigOptionParams p;
+    p.sessionId = acp::SessionId{*sid};
+    p.configId  = config_id;
+    p.value     = value;
+    auto r = peer_->call<acp::to_agent::SessionSetConfig>(cap, p);
+    if (!r) return std::string{r.error().what()};
+    config_.store(r->configOptions);
+    return std::nullopt;
+}
+
+void ExternalAcpBackend::apply_pending_config_(const maya::unlocked& cap, const acp::SessionId& sid) {
+    auto picks = pending_config_.with(cap, [](std::vector<std::pair<std::string, std::string>>& v) {
+        return std::exchange(v, {});
+    });
+    for (const auto& [id, val] : picks) {
+        acp::SetConfigOptionParams p;
+        p.sessionId = sid;
+        p.configId  = id;
+        p.value     = val;
+        if (auto r = peer_->call<acp::to_agent::SessionSetConfig>(cap, p)) config_.store(r->configOptions);
+    }
+}
+
+void ExternalAcpBackend::cancel_asks_(const maya::unlocked& cap) {
+    auto open = asks_.take();
+    if (!open) return;
+    for (const auto& a : *open) a->answer(cap, acp::PO_Cancelled{});
 }
 
 // ── The round ────────────────────────────────────────────────────────────────
@@ -402,8 +555,10 @@ TurnResult ExternalAcpBackend::prompt(const maya::unlocked&       cap,
     // reader thread) reach it. Cleared on scope exit — a late update becomes a
     // no-op, never a second terminal event.
     {
-        auto round = std::make_shared<Round>(util::Callback<void(acp::SessionUpdate)>{
-            [&sink](acp::SessionUpdate su) { sink(std::move(su)); }});
+        auto round = std::make_shared<Round>(
+            util::Callback<void(acp::SessionUpdate)>{
+                [&sink](acp::SessionUpdate su) { sink(std::move(su)); }},
+            sink.ask);
         round_.publish(std::move(round));
     }
     struct RoundGuard {
@@ -411,6 +566,9 @@ TurnResult ExternalAcpBackend::prompt(const maya::unlocked&       cap,
         const maya::unlocked& cap;   // the prompt's: this thread holds nothing
         ~RoundGuard() {
             if (auto r = self->round_.take()) (void)r->inflight.stop_and_wait(cap, std::nullopt);
+            // A question still on screen when the round ends (Esc, the agent
+            // finished or died): answer it Cancelled, as ACP requires.
+            self->cancel_asks_(cap);
         }
     } round_guard{this, cap};
 
@@ -429,6 +587,10 @@ TurnResult ExternalAcpBackend::prompt(const maya::unlocked&       cap,
     if (cancel) o.cancel = cancel->token();
     o.on_cancel = [this, &sent_cancel, sid = *sid](const maya::unlocked& c) {
         sent_cancel = true;
+        // ACP: on cancel the client answers every pending request_permission
+        // with Cancelled -- do it first, so the agent isn't left waiting on a
+        // question while it unwinds.
+        cancel_asks_(c);
         acp::CancelParams cp;
         cp.sessionId = sid;
         peer_->notify<acp::to_agent::SessionCancel>(c, cp);
@@ -504,6 +666,10 @@ SpawnedAcpAgent spawn_acp_agent(const maya::unlocked&           cap,
         ::agentty::util::ChildProcess::Spawn spawn;
         spawn.command = argv.front();
         spawn.args.assign(argv.begin() + 1, argv.end());
+        // An agent's own logs aren't ours to print (they land on the TUI or
+        // a headless run's stderr). AGENTTY_ACP_STDERR=1 lets them through.
+        const char* show = std::getenv("AGENTTY_ACP_STDERR");
+        spawn.quiet_stderr = !(show && show[0] == '1');
         holder->child = std::make_unique<::agentty::util::ChildProcess>(spawn);
     } catch (const std::exception& e) {
         err = std::string("spawn_acp_agent: cannot start '") + argv.front() + "': " + e.what();
@@ -537,6 +703,8 @@ SpawnedAcpAgent spawn_acp_agent(const maya::unlocked&           cap,
         err = std::string("spawn_acp_agent: initialize failed: ") + r.error().what();
         return {};   // `out` tears the peer and the child down
     }
+    out.auth_methods = r->authMethods;
+    if (r->agentInfo) out.agent_title = r->agentInfo->title ? *r->agentInfo->title : r->agentInfo->name;
     return out;
 }
 

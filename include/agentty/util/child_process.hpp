@@ -287,6 +287,10 @@ public:
         std::vector<std::string> env_kv;    // extra "KEY=VALUE" entries
         std::string              cwd;        // empty inherits parent cwd
         bool                     merge_stderr = false;
+        // Send the child's stderr to /dev/null instead of ours: a chatty
+        // agent (Devin logs every trace span there) must not scribble over
+        // the TUI or a headless run's output.
+        bool                     quiet_stderr = false;
     };
 
     explicit ChildProcess(const Spawn& s) {
@@ -303,7 +307,8 @@ public:
         spec.cwd          = s.cwd;
         spec.stdin_from   = pf::stream_to::pipe;
         spec.stdout_to    = pf::stream_to::pipe;
-        spec.stderr_to    = s.merge_stderr ? pf::stream_to::pipe : pf::stream_to::inherit;
+        spec.stderr_to    = s.merge_stderr ? pf::stream_to::pipe
+                          : s.quiet_stderr ? pf::stream_to::null : pf::stream_to::inherit;
         spec.merge_stderr = s.merge_stderr;
         spec.new_session  = true;
         auto p = pf::native_process::spawn(spec);

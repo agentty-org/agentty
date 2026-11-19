@@ -46,6 +46,33 @@ using json = nlohmann::json;
 
 namespace {
 
+// y / a / n on a delegated agent's question. The agent's own option of that
+// kind is sent back (off the UI thread); "always" falls back to once when
+// the agent offers no standing grant, and a reject the agent didn't offer
+// is a Cancelled outcome, which every agent reads as "don't".
+enum class AgentAnswer { AllowOnce, AllowAlways, Reject };
+Cmd answer_agent_ask(Model& m, AgentAnswer how) {
+    const auto ask = *m.d.pending_permission->agent;
+    std::string option;
+    switch (how) {
+        case AgentAnswer::AllowOnce:   option = ask.allow_once.empty() ? ask.allow_always : ask.allow_once; break;
+        case AgentAnswer::AllowAlways: option = ask.allow_always.empty() ? ask.allow_once : ask.allow_always; break;
+        case AgentAnswer::Reject:      option = ask.reject_once; break;
+    }
+    m.d.pending_permission.reset();
+    // The turn goes back to streaming: the agent carries on (or stops) by
+    // itself once it has the answer.
+    if (m.s.is_awaiting_permission()) {
+        if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx) {
+            ctx->last_event_at = m.now;
+            m.s.phase = phase::Streaming{std::move(*ctx)};
+        } else {
+            m.s.phase = phase::Idle{};
+        }
+    }
+    return cmd::answer_acp_permission(ask.ask_id, std::move(option));
+}
+
 // Private OSC number for host (editor) integration escapes — see
 // ui::host::file_event_osc. 5379 is unclaimed by mainstream terminals; the
 // "agentty;" payload tag lets a host match ours and ignore other OSCs.
@@ -803,6 +830,8 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
         // ── Permission ──────────────────────────────────────────────
         [&](PermissionApprove) -> Cmd {
             if (!m.d.pending_permission) return Cmd::none();
+            if (m.d.pending_permission->agent)
+                return answer_agent_ask(m, AgentAnswer::AllowOnce);
             auto id = m.d.pending_permission->id;
             // Permission only ever fires against a tool in the live
             // tail — a frozen turn is by definition past every pending
@@ -827,6 +856,8 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
         },
         [&](PermissionReject) -> Cmd {
             if (!m.d.pending_permission) return Cmd::none();
+            if (m.d.pending_permission->agent)
+                return answer_agent_ask(m, AgentAnswer::Reject);
             auto id = m.d.pending_permission->id;
             mark_tool_rejected(m, id, "User rejected this tool call.");
             m.d.pending_permission.reset();
@@ -864,6 +895,8 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
         },
         [&](PermissionApproveAlways) -> Cmd {
             if (!m.d.pending_permission) return Cmd::none();
+            if (m.d.pending_permission->agent)
+                return answer_agent_ask(m, AgentAnswer::AllowAlways);
             auto id   = m.d.pending_permission->id;
             auto name = m.d.pending_permission->tool_name;
             // Record a session-scoped grant for this tool NAME so every

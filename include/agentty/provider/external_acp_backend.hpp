@@ -31,6 +31,7 @@
 //
 // See docs/internal-acp-backends.md — this header is §6, step 5 of that plan.
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -101,7 +102,38 @@ struct AcpClientDelegate {
 // tool/sandbox headers.
 [[nodiscard]] AcpClientDelegate default_sandbox_delegate();
 
-// ── Options ──────────────────────────────────────────────────────────────────
+// A permission question handed to the round's asker, answered later. At
+// most once: by the user, or with Cancelled when the round ends first (Esc,
+// the agent finishing) -- ACP requires a client that cancels to answer every
+// outstanding request_permission. `done` is the once-latch, so the deferred
+// reply is written by exactly one thread.
+struct AcpPendingAsk {
+    explicit AcpPendingAsk(rpc::Peer::Deferred<acp::to_client::RequestPermission> d)
+        : reply(std::move(d)) {}
+    // The reply, claimed by whoever answers first (the user, or the round
+    // ending): taking it out under the lock is the once-latch, so it is
+    // written by exactly one thread -- and written AFTER the lock is gone.
+    using Reply = rpc::Peer::Deferred<acp::to_client::RequestPermission>;
+    maya::guarded<std::optional<Reply>> reply_slot;
+    rpc::Peer::Deferred<acp::to_client::RequestPermission> reply;
+    void arm(const maya::unlocked& cap) {
+        reply_slot.with(cap, [](std::optional<Reply>& s, Reply r) { s.emplace(std::move(r)); },
+                        std::move(reply));
+    }
+    void answer(const maya::unlocked& cap, acp::RequestPermissionOutcome o) {
+        auto r = reply_slot.with(cap, [](std::optional<Reply>& s) { return std::exchange(s, std::nullopt); });
+        if (!r) return;
+        acp::RequestPermissionResult res;
+        res.outcome = std::move(o);
+        r->ok(cap, res);
+    }
+    // Answered elsewhere (the router's synchronous policy): drop the claim.
+    void disarm(const maya::unlocked& cap) {
+        (void)reply_slot.with(cap, [](std::optional<Reply>& s) { return std::exchange(s, std::nullopt); });
+    }
+};
+
+// ── Options ─────────────────────────────────────────────────────────────────────────────
 struct ExternalAcpOptions {
     // Working directory handed to `session/new` (the agent's project root).
     std::string cwd;
@@ -117,6 +149,10 @@ struct ExternalAcpOptions {
     // MCP servers delegated to the external agent through session/new. The
     // delegated agent owns execution; agentty only observes its tool updates.
     std::vector<acp::McpServer> mcp_servers;
+
+    // The command that launched the agent ("devin"), for a sign-in hint
+    // that names what to run. Empty in tests.
+    std::string agent_command;
 
     // Optional client-side capabilities the agent may call back into.
     AcpClientDelegate delegate;
@@ -154,6 +190,35 @@ public:
     // until then, or in per-round mode).
     [[nodiscard]] std::string session_id() const;
 
+    // What `initialize` returned: how the agent can be signed in to. The
+    // spawn path hands it over; a backend that never got one has none.
+    void set_auth_methods(acp::List<acp::AuthMethod> m);
+    [[nodiscard]] acp::List<acp::AuthMethod> auth_methods() const;
+
+    // The agent's session config options (model, mode, effort...) as the
+    // agent last reported them: from session/new, a config_option_update,
+    // or a set_config_option reply. Empty before the first session.
+    [[nodiscard]] acp::List<acp::ConfigOption> config_options() const;
+
+    // Ask the agent to change one option ("model" = SWE-2, say). Sent at
+    // once if a session is open; otherwise remembered and applied right
+    // after session/new, so a pick made before the first turn still holds.
+    // Waits for the agent: `unlocked`.
+    [[nodiscard]] std::optional<std::string> set_config_option(
+        const maya::unlocked& cap, const std::string& config_id, const std::string& value);
+
+    // The option the agent uses to pick its model: one whose category or id
+    // is "model". nullopt when the agent exposes none.
+    [[nodiscard]] std::optional<acp::ConfigOption> model_option() const;
+
+    // Open (or reuse) the session without prompting, so the agent's options
+    // and sign-in state are known before the first turn. Same path prompt()
+    // takes; fills `err` on failure. Waits for the agent: `unlocked`.
+    std::optional<acp::SessionId> open_session(const maya::unlocked& cap,
+                                               std::optional<TurnError>& err) {
+        return ensure_session_(cap, Request{}, err);
+    }
+
     // How the agent's calls reach us (session/update → active sink; fs/*,
     // terminal/*, request_permission → delegate). The spawn factory builds
     // the peer with it. It closes over `this`, so this backend MUST outlive
@@ -182,15 +247,34 @@ private:
     // The reused session id: set once, read every round. A snapshot.
     maya::snapshot<std::optional<std::string>> session_;
 
+    // Sign-in methods from initialize, the agent's current config options,
+    // and option picks waiting for a session to apply to.
+    maya::snapshot<acp::List<acp::AuthMethod>>  auth_methods_;
+    maya::snapshot<acp::List<acp::ConfigOption>> config_;
+    maya::guarded<std::vector<std::pair<std::string, std::string>>> pending_config_;
+    // Sign in (authenticate) with the agent's first non-terminal method, once
+    // per backend; true when it was tried and worked.
+    bool try_authenticate_(const maya::unlocked& cap, std::string& why);
+    void apply_pending_config_(const maya::unlocked& cap, const acp::SessionId& sid);
+
     // The round in flight. session/update arrives on the peer's reader,
     // which joins `inflight` before calling `sink`. prompt() takes the
     // round on exit and waits for in-flight calls, so the sink (which points at
     // prompt's stack) is never called after it returns. No round: updates drop.
     struct Round {
         const util::Callback<void(acp::SessionUpdate)> sink;   // set at build, then only called
+        // The round's interactive permission asker (TurnSink::ask), or empty.
+        const util::Callback<bool(const maya::unlocked&, const acp::RequestPermissionParams&,
+                                  TurnSink::PermissionReply)> ask;
         maya::stop_group                               inflight;
     };
     maya::published<Round> round_;
+
+    // Questions out to the user this round. Copy-on-write, no lock: an
+    // answer writes to the peer, so it must never run under one.
+    using AskList = std::vector<std::shared_ptr<AcpPendingAsk>>;
+    maya::published<const AskList> asks_;
+    void cancel_asks_(const maya::unlocked& cap);
 
     // terminal/create runs the command synchronously (via the delegate) and
     // keeps its result here under a fresh id until terminal/release.
@@ -217,6 +301,9 @@ struct SpawnedAcpAgent {
     // Opaque owner of the subprocess. Reset after the peer: the peer's
     // reader reads the child's stdout stream.
     std::shared_ptr<void> process;
+    // From initialize: how to sign in, and the agent's own display name.
+    acp::List<acp::AuthMethod> auth_methods;
+    std::string                agent_title;
 
     SpawnedAcpAgent() = default;
     SpawnedAcpAgent(SpawnedAcpAgent&&) noexcept = default;
@@ -252,3 +339,7 @@ struct SpawnedAcpAgent {
                                               std::string&                    err);
 
 } // namespace agentty::provider
+
+// The deferred reply sits in a guarded slot taken out under the lock; the
+// struct is otherwise unchanged after arm(). Many threads may hold one.
+MAYA_SYNC(agentty::provider::AcpPendingAsk);

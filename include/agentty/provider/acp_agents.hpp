@@ -39,6 +39,8 @@
 #include <utility>
 #include <vector>
 
+#include "agentty/util/io.hpp"   // Io
+
 namespace agentty::provider {
 
 // A fully-resolved launch spec for one external ACP agent.
@@ -70,5 +72,23 @@ struct AcpAgentSpec {
 // Enumerate configured ACP agents for dynamic provider-picker rows. Empty
 // config means an empty result.
 [[nodiscard]] std::vector<AcpAgentSpec> enumerate_acp_agents();
+
+// Well-known ACP agents installed on this machine (found on PATH) that are
+// NOT configured yet: picker offers, never started on their own. Picking one
+// writes its entry to ~/.agentty/acp-agents.json (add_acp_agent) and only
+// then can it run -- the config stays the one place that grants a spawn.
+// The list is facts about public CLIs (`devin acp`, `gemini --experimental-
+// acp`, ...), not privileged built-ins. Cached by PATH, so it's cheap to
+// call from the view.
+struct DiscoveredAcpAgent {
+    AcpAgentSpec spec;      // what add_acp_agent would write
+    std::string  label;     // "Devin"
+    std::string  blurb;     // "Devin CLI over ACP (SWE-2 and more)"
+};
+[[nodiscard]] std::vector<DiscoveredAcpAgent> discover_acp_agents();
+
+// Add (or replace) one agent in the user-global acp-agents.json, creating
+// the file if needed (atomic write). Returns an error message, or empty.
+[[nodiscard]] std::string add_acp_agent(Io io, const AcpAgentSpec& spec);
 
 } // namespace agentty::provider

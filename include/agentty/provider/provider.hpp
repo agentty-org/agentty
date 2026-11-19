@@ -134,6 +134,13 @@ struct Request {
         return affinity_key.empty() ? session_key : affinity_key;
     }
 
+    // A person is watching this turn and can answer questions (the TUI's
+    // main turn). An external ACP agent's permission requests then go to
+    // them as AcpPermissionAsk Msgs on the sink; when false (headless runs,
+    // subagents, titles) the agent's requests follow the permission policy
+    // without asking.
+    bool interactive_asks = false;
+
     // The provider this request was BUILT for: its model id, auth and system
     // prompt all came from this selection. dispatch_stream routes by it, so a
     // provider switch while the turn is running can't send this provider's

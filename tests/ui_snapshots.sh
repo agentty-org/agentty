@@ -16,6 +16,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 dir="$here/fixtures/ui_snapshots"
 mkdir -p "$dir"
 export COLS=92 THEME=Srcery FREEZE_CLOCK=1 TOOL_CORPUS="$here/fixtures/tool_corpus.json"
+# What happens to be installed or configured on this machine must not change
+# a fixture: no PATH discovery, and an empty agents file.
+export AGENTTY_NO_AGENT_DISCOVERY=1
+printf '{"acpAgents":{}}\n' > "${TMPDIR:-/tmp}/agentty-snap-acp-agents.json"
+export AGENTTY_ACP_AGENTS="${TMPDIR:-/tmp}/agentty-snap-acp-agents.json"
 unset TERM_FG TERM_BG TERM_PALETTE
 
 # name | args

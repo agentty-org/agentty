@@ -26,7 +26,13 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
+
+#include "agentty/domain/catalog.hpp"   // ModelInfo
+#include "agentty/util/callback.hpp"    // util::Callback (Sendable + Frozen)
 
 namespace agentty::provider {
 
@@ -81,6 +87,25 @@ struct ProviderRouter {
 // Back-compat alias: `Routes` was the struct's name before it became
 // descriptor-indexed. Kept so existing call sites/tests keep compiling.
 using Routes = ProviderRouter;
+
+// The rest of what the app asks of an external ACP agent, beyond a turn:
+// list its models, switch its model, answer its permission question. Same
+// reason as `external_acp` above -- bound once in main() to the adapter, so
+// the runtime and model-list code never link the ACP translation unit.
+// Unbound (tests, a build without ACP): no models, no-op, no-op.
+struct AcpAgentHooks {
+    util::Callback<std::vector<ModelInfo>(const maya::unlocked&, const std::string& agent,
+                                          std::string& current, std::string& error)>
+        list_models;
+    util::Callback<std::optional<std::string>(const maya::unlocked&, const std::string& agent,
+                                              const std::string& model)>
+        set_model;
+    util::Callback<void(const maya::unlocked&, const std::string& ask_id,
+                        const std::string& option_id)>
+        answer;
+};
+void set_acp_agent_hooks(AcpAgentHooks h);
+[[nodiscard]] std::shared_ptr<const AcpAgentHooks> acp_agent_hooks();
 
 // Route ONE turn to the right transport for `sel`. The short-lived
 // OpenAI-compat / Ollama / ACP transports are constructed inside; the two

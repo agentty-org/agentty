@@ -19,6 +19,7 @@
 #include "agentty/runtime/msg.hpp"
 #include "agentty/io/http.hpp"   // http::CancelTokenPtr (run_tool)
 #include "agentty/provider/selection.hpp"  // provider::Selection (fetch_models)
+#include "agentty/provider/acp_agents.hpp" // provider::AcpAgentSpec (add_acp_agent)
 #include "agentty/tool/plugin.hpp"         // plugin::ServerSpec (edit_plugin)
 
 namespace agentty::app::cmd {
@@ -259,6 +260,13 @@ struct LoopBreak {
 // Fetch a SPECIFIC provider's catalog without switching to it (fused picker
 // fan-out). Dispatches FusedCatalogLoaded{spec, models, ok}.
 [[nodiscard]] Cmd fetch_models_for(std::string spec);
+
+// Send the user's answer to a delegated agent's permission question
+// (AcpPermissionAsk). `option_id` empty = cancel. Off the UI thread.
+[[nodiscard]] Cmd answer_acp_permission(std::string ask_id, std::string option_id);
+
+// Write a discovered ACP agent to acp-agents.json; dispatches AcpAgentAdded.
+[[nodiscard]] Cmd add_acp_agent(::agentty::provider::AcpAgentSpec spec, std::string label);
 
 // Re-measure the live context window of `model_id` on the active provider
 // when it is a local OpenAI-compatible endpoint (llama.cpp router, LM Studio,

@@ -64,6 +64,18 @@ struct AgentScript {
     std::string read_back;
     std::string term_output;
     int         term_exit = -1;
+    // Sign-in: session/new answers auth_required until `authenticate` with
+    // this method id arrives. Empty = never required.
+    std::string require_auth_method;
+    bool        authenticated = false;
+    // Report a "model" select option on session/new; set_config_option
+    // changes `current_model`.
+    bool        offer_models = false;
+    std::string current_model = "swe-1.5";
+    // During the prompt, ask session/request_permission and record the
+    // client's outcome ("selected:<id>" or "cancelled") before ending.
+    bool        ask_permission = false;
+    std::string permission_outcome;
 };
 
 // The fake agent: its own peer, answering on the far end of a channel pair.
@@ -101,9 +113,54 @@ struct FakeAgent {
     }
 
     // Runs on a worker so the agent's reader stays free for replies.
+    List<ConfigOption> model_options() const {
+        ConfigOption o;
+        o.id = "model";
+        o.name = "Model";
+        o.category = std::string{"model"};
+        o.currentValue = script.current_model;
+        o.options = CSO_Ungrouped{{
+            ConfigSelectOption{"swe-1.5", "SWE-1.5", Nothing, Json::object()},
+            ConfigSelectOption{"swe-2", "SWE-2", Nothing, Json::object()},
+            ConfigSelectOption{"opus", "Claude Opus", Nothing, Json::object()},
+        }};
+        return {o};
+    }
+
+    // Runs on a worker so the agent's reader stays free for replies.
     void run_prompt(Id id, PromptParams p) {
         using Prompt = to_agent::SessionPrompt;
         if (script.ignore_cancel) return;   // never answer
+        if (script.ask_permission) {
+            RequestPermissionParams rp;
+            rp.sessionId = p.sessionId;
+            rp.toolCall.toolCallId = ToolCallId{std::string("tc_perm")};
+            rp.toolCall.title = std::string{"Run `make test`"};
+            rp.toolCall.kind  = ToolKind::Execute;
+            rp.options = {
+                PermissionOption{"once", "Allow", PermissionOptionKind::AllowOnce, Json::object()},
+                PermissionOption{"always", "Always allow", PermissionOptionKind::AllowAlways, Json::object()},
+                PermissionOption{"no", "Reject", PermissionOptionKind::RejectOnce, Json::object()},
+            };
+            auto r = peer->call<to_client::RequestPermission>(agtest::cap(), rp);
+            if (r) {
+                if (const auto* s = std::get_if<PO_Selected>(&r->outcome))
+                    script.permission_outcome = "selected:" + s->optionId;
+                else
+                    script.permission_outcome = "cancelled";
+            } else {
+                script.permission_outcome = std::string{"error:"} + r.error().what();
+            }
+            if (script.block_until_released) {
+                std::unique_lock lk(mu);
+                cv.wait(lk, [&] { return released; });
+                lk.unlock();
+                peer->reply<Prompt>(agtest::cap(), id, PromptResult{StopReason::Cancelled});
+                return;
+            }
+            peer->reply<Prompt>(agtest::cap(), id, PromptResult{StopReason::EndTurn});
+            return;
+        }
         if (script.block_until_released) {
             std::unique_lock lk(mu);
             cv.wait(lk, [&] { return released; });
@@ -149,11 +206,29 @@ struct FakeAgent {
             if (c.method == to_agent::Initialize::name) {
                 InitializeResult r;
                 r.agentCapabilities.promptCapabilities.embeddedContext = true;
+                if (!script.require_auth_method.empty())
+                    r.authMethods.push_back(AuthMethod{script.require_auth_method, "Devin account",
+                                                       Nothing, "agent", {}, {}, Json::object()});
                 return reply<to_agent::Initialize>(c.id, r);
             }
+            if (c.method == to_agent::Authenticate::name) {
+                auto ap = jsonrpc::from_json<AuthenticateParams>(c.params);
+                if (ap.methodId != script.require_auth_method)
+                    return reply(c.id, std::unexpected(RpcError(errc::InvalidParams, "unknown method")));
+                script.authenticated = true;
+                return reply<to_agent::Authenticate>(c.id, Unit{});
+            }
+            if (c.method == to_agent::SessionSetConfig::name) {
+                auto sp = jsonrpc::from_json<SetConfigOptionParams>(c.params);
+                script.current_model = sp.value_string();
+                return reply<to_agent::SessionSetConfig>(c.id, SetConfigOptionResult{model_options(), Json::object()});
+            }
             if (c.method == to_agent::SessionNew::name) {
-                return reply<to_agent::SessionNew>(c.id,
-                    NewSessionResult{SessionId{std::string("sess_fake")}, Nothing, Nothing, Json::object()});
+                if (!script.require_auth_method.empty() && !script.authenticated)
+                    return reply(c.id, std::unexpected(RpcError(AuthRequired, "Authentication required")));
+                NewSessionResult r{SessionId{std::string("sess_fake")}, Nothing, Nothing, Json::object()};
+                if (script.offer_models) r.configOptions = model_options();
+                return reply<to_agent::SessionNew>(c.id, r);
             }
             if (c.method == to_agent::SessionPrompt::name) {
                 auto p = jsonrpc::from_json<PromptParams>(c.params);
@@ -335,6 +410,123 @@ void test_user_cancel_via_token() {
 
     CHECK(!res.ok());
     CHECK(res.error.has_value() && res.error->user_cancel);
+}
+
+// A BUGGY agent that never settles the cancelled prompt future. Without the
+// backend's engine-level escape hatch, prompt() would block forever in the
+// getter-join. We assert it still returns cancelled, bounded in wall-clock.
+void test_signs_in_when_the_agent_requires_it() {
+    AgentScript script;
+    script.require_auth_method = "devin-login";
+    auto h = make_harness(script);
+    // initialize ran in make_harness through the client peer; hand its
+    // auth methods over the way spawn_acp_agent does.
+    acp::List<acp::AuthMethod> methods;
+    methods.push_back(AuthMethod{"devin-login", "Devin account", Nothing, "agent", {}, {}, Json::object()});
+    h->backend->set_auth_methods(methods);
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};
+    auto res = h->backend->prompt(agtest::cap(), make_req("hi"), sink, nullptr);
+    CHECK(res.ok());
+    CHECK(h->script().authenticated);
+}
+
+void test_terminal_only_sign_in_names_the_command() {
+    AgentScript script;
+    script.require_auth_method = "tty";
+    auto h = make_harness(script);
+    acp::List<acp::AuthMethod> methods;
+    methods.push_back(AuthMethod{"tty", "Log in", Nothing, "terminal", {"login"}, {}, Json::object()});
+    h->backend->set_auth_methods(methods);
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};
+    auto res = h->backend->prompt(agtest::cap(), make_req("hi"), sink, nullptr);
+    CHECK(!res.ok());
+    CHECK(res.error && res.error->message.find("login") != std::string::npos);
+    CHECK(res.error && res.error->message.find("sign in") != std::string::npos);
+}
+
+void test_models_come_from_the_agent_and_switch() {
+    AgentScript script;
+    script.offer_models = true;
+    auto h = make_harness(script);
+    // A pick made before any session is remembered and applied on open.
+    CHECK(!h->backend->set_config_option(agtest::cap(), "model", "swe-2").has_value());
+    std::optional<P::TurnError> err;
+    CHECK(h->backend->open_session(agtest::cap(), err).has_value());
+    CHECK(!err);
+    CHECK(h->script().current_model == "swe-2");
+    auto opt = h->backend->model_option();
+    CHECK(opt.has_value() && opt->currentValue == "swe-2");
+    // And with a session open it goes straight to the agent.
+    CHECK(!h->backend->set_config_option(agtest::cap(), "model", "opus").has_value());
+    CHECK(h->script().current_model == "opus");
+    CHECK(h->backend->model_option()->currentValue == "opus");
+}
+
+void test_permission_goes_to_the_user() {
+    AgentScript script;
+    script.ask_permission = true;
+    auto h = make_harness(script);
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};
+    std::string asked_title;
+    std::vector<std::string> kinds;
+    sink.ask = [&](const maya::unlocked&, const acp::RequestPermissionParams& p,
+                   P::TurnSink::PermissionReply reply) {
+        asked_title = p.toolCall.title.value_or("");
+        for (const auto& o : p.options) kinds.push_back(o.optionId);
+        // The user answers from another thread, later: the reader is free.
+        std::thread([reply = std::move(reply)] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            acp::PO_Selected s; s.optionId = "always";
+            reply(agtest::cap(), s);
+        }).detach();
+        return true;
+    };
+    auto res = h->backend->prompt(agtest::cap(), make_req("test it"), sink, nullptr);
+    CHECK(res.ok());
+    CHECK(asked_title == "Run `make test`");
+    CHECK(kinds.size() == 3);
+    CHECK(h->script().permission_outcome == "selected:always");
+}
+
+void test_cancel_answers_an_open_question_cancelled() {
+    AgentScript script;
+    script.ask_permission = true;
+    script.block_until_released = true;
+    auto h = make_harness(script);
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};
+    sink.ask = [](const maya::unlocked&, const acp::RequestPermissionParams&,
+                  P::TurnSink::PermissionReply) { return true; };   // the user never answers
+    auto cancel = std::make_shared<agentty::http::CancelToken>();
+    std::thread tripper([&]{
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        cancel->cancel();
+    });
+    auto res = h->backend->prompt(agtest::cap(), make_req("x"), sink, cancel);
+    tripper.join();
+    CHECK(!res.ok() && res.error && res.error->user_cancel);
+    CHECK(h->script().permission_outcome == "cancelled");
+}
+
+void test_headless_permission_picks_allow_once() {
+    AgentScript script;
+    script.ask_permission = true;
+    auto h = make_harness(script);
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};   // no asker
+    auto res = h->backend->prompt(agtest::cap(), make_req("x"), sink, nullptr);
+    CHECK(res.ok());
+    // Never a standing grant nobody saw.
+    CHECK(h->script().permission_outcome == "selected:once");
+}
+
+void test_headless_permission_deny_picks_reject() {
+    AgentScript script;
+    script.ask_permission = true;
+    P::AcpClientDelegate d;
+    d.request_permission = [](const acp::RequestPermissionParams&) { return false; };
+    auto h = make_harness(script, std::move(d));
+    P::TurnSink sink; sink.update = [](acp::SessionUpdate){};
+    (void)h->backend->prompt(agtest::cap(), make_req("x"), sink, nullptr);
+    CHECK(h->script().permission_outcome == "selected:no");
 }
 
 // A BUGGY agent that never settles the cancelled prompt future. Without the
@@ -598,6 +790,13 @@ int main(int argc, char** argv) {
     test_map_stop_reason_pure();
     test_delegate_callbacks_wired();
     test_default_sandbox_delegate_roundtrip();
+    test_signs_in_when_the_agent_requires_it();
+    test_terminal_only_sign_in_names_the_command();
+    test_models_come_from_the_agent_and_switch();
+    test_permission_goes_to_the_user();
+    test_cancel_answers_an_open_question_cancelled();
+    test_headless_permission_picks_allow_once();
+    test_headless_permission_deny_picks_reject();
     test_spawn_real_subprocess(argv[0]);
     test_wedged_child_teardown_is_bounded(argv[0]);
 

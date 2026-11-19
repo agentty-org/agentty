@@ -987,9 +987,10 @@ commit_provider_switch(Model& m, std::string_view spec,
     // to hit /model. Done HERE, in the one shared switch helper, so EVERY
     // entry point (provider picker, custom host, api-key/chatgpt/copilot
     // login) gets it uniformly — not just the two login-modal paths the
-    // feature originally patched. External ACP agents drive their own model
-    // and expose no catalog (fetch_models returns empty), so opening the
-    // picker there would just show a permanent "no models" box — skip them.
+    // feature originally patched. External ACP agents that offer a model
+    // choice (a "model" config option, e.g. Devin's SWE-2) get the picker
+    // too: their catalog comes from the agent. One that offers none lands
+    // on an empty list the reducer closes with a "the agent picks" toast.
     //
     // BUT when the caller already pre-stashed a SPECIFIC model (the fused
     // picker: the user picked provider+model in one shot), popping the classic
@@ -997,8 +998,7 @@ commit_provider_switch(Model& m, std::string_view spec,
     // choice already made. Skip it — the desired model installs on ModelsLoaded
     // — and give a "Switching to X…" toast instead.
     const bool have_desired = !desired_model.empty();
-    if (open_panel && m.d.selection.kind != provider::Kind::ExternalAcp
-        && !have_desired)
+    if (open_panel && !have_desired)
         m.ui.panel.descend(pn::Models{{0, ""}});
 
     // Name the DERIVED wire endpoint for OpenAI-dialect hosts so the /v1

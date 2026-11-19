@@ -24,10 +24,14 @@
 #include <string>
 
 #include <acp/updates.hpp>   // acp::SessionUpdate
+#include <acp/methods.hpp>   // acp::RequestPermissionParams
+#include <acp/tools.hpp>     // acp::RequestPermissionOutcome
+#include <maya/runtime.hpp>  // maya::unlocked
 
 #include "agentty/io/http.hpp"          // http::CancelTokenPtr
 #include "agentty/provider/provider.hpp" // provider::Request
 #include "agentty/runtime/msg.hpp"       // agentty::StopReason
+#include "agentty/util/callback.hpp"     // util::Callback
 
 namespace agentty::provider {
 
@@ -39,6 +43,17 @@ namespace agentty::provider {
 // structural, not a convention four transports must each remember.
 struct TurnSink {
     std::function<void(acp::SessionUpdate)> update;
+
+    // An external agent asking the user to approve a tool call
+    // (session/request_permission). Set only when something can actually ASK
+    // (the TUI); unset, the backend falls back to its delegate's policy.
+    // Called on the peer's reader during the round; it must not block: show
+    // the question, return true, and call `reply` exactly once later (from
+    // any thread) with the outcome. Return false to decline (fallback runs).
+    using PermissionReply =
+        util::Callback<void(const maya::unlocked&, acp::RequestPermissionOutcome)>;
+    std::function<bool(const maya::unlocked&, const acp::RequestPermissionParams&,
+                       PermissionReply)> ask;
 
     void operator()(acp::SessionUpdate su) const {
         if (update) update(std::move(su));

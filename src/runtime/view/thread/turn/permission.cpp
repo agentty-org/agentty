@@ -56,6 +56,27 @@ maya::Permission::Config inline_permission_config(const PendingPermission& pp,
     cfg.accent            = tool_category_color(n);
     cfg.show_always_allow = true;
 
+    // A delegated agent's question (Devin, Claude Code over ACP...): its own
+    // words, the agent's kind of action, and "always" only when the agent
+    // offers a standing grant.
+    if (pp.agent) {
+        const auto& ag = *pp.agent;
+        cfg.tool_name = ag.kind == "execute" ? "Run"
+                      : ag.kind == "edit" || ag.kind == "delete" || ag.kind == "move" ? "Edit"
+                      : ag.kind == "read" || ag.kind == "search" ? "Read"
+                      : ag.kind == "fetch" ? "Fetch" : "Agent";
+        cfg.verb = ag.kind == "execute" ? "run this?"
+                 : ag.kind == "edit" ? "change this?"
+                 : ag.kind == "delete" ? "delete this?"
+                 : ag.kind == "fetch" ? "open this?" : "allow this?";
+        cfg.lang = "";   // the agent's words are prose, not a command line
+        cfg.description = ag.title.empty() ? pp.reason : ag.title;
+        cfg.show_always_allow = !ag.allow_always.empty();
+        cfg.note = pp.reason.substr(pp.reason.rfind("asked by ") == std::string::npos
+                                        ? 0 : pp.reason.rfind("asked by "));
+        return cfg;
+    }
+
     std::string desc;
     if (!tc.args.is_object()) {
         desc = pp.reason;

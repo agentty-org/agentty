@@ -7,12 +7,32 @@
 
 #include <utility>
 
+#include <maya/runtime.hpp>
+
 #include "agentty/provider/ollama/provider.hpp"
 #include "agentty/provider/openai/provider.hpp"
 #include "agentty/provider/selection.hpp"
 #include "agentty/util/logx.hpp"
 
 namespace agentty::provider {
+
+namespace {
+// Bound once at startup (main), read from workers: one atomic load, never
+// racing the bind. Readers get a shared, immutable copy.
+maya::published<const AcpAgentHooks>& acp_hooks_cell() {
+    static maya::published<const AcpAgentHooks> s;
+    return s;
+}
+} // namespace
+
+void set_acp_agent_hooks(AcpAgentHooks h) {
+    acp_hooks_cell().publish(std::make_shared<const AcpAgentHooks>(std::move(h)));
+}
+std::shared_ptr<const AcpAgentHooks> acp_agent_hooks() {
+    static const auto none = std::make_shared<const AcpAgentHooks>();
+    auto held = acp_hooks_cell().current();
+    return held ? held : none;
+}
 
 namespace {
 // Human tag for the route taken — which ADAPTER (thin ugly per-provider

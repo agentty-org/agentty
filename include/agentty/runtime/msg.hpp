@@ -234,6 +234,24 @@ struct StreamObservedToolResult {
     bool failed = false;
     std::string output;
 };
+// A delegated agent (external ACP) asks to run one of its own tool calls.
+// The agent waits until AcpPermissionAnswer goes back with one of `options`
+// (or the turn ends, which answers Cancelled). `ask_id` keys the answer;
+// `tool_id` is the observed card the question is about, when the agent
+// already announced it.
+struct AcpPermissionAsk {
+    std::string ask_id;
+    ToolCallId  tool_id;
+    std::string title;          // the agent's words: "Run `make test`"
+    std::string kind;           // read | edit | execute | fetch | ... | other
+    struct Option {
+        std::string id;
+        std::string name;       // the agent's label
+        // allow_once | allow_always | reject_once | reject_always
+        std::string kind;
+    };
+    std::vector<Option> options;
+};
 // A chunk of the assistant's thinking block (adaptive thinking). `text` is
 // the visible reasoning delta (empty under display:omitted); `signature` is
 // the opaque per-block signature that arrives once, near the block's end.
@@ -600,6 +618,13 @@ struct CloseProviders {};
 struct ProvidersMove { int delta; };
 struct ProvidersJump  { enum class Where { Home, End, PageUp, PageDown }; Where where; };
 struct ProvidersSelect {};
+// A discovered ACP agent was written to acp-agents.json (or that failed).
+// On success the reducer switches to it, as if it had always been there.
+struct AcpAgentAdded {
+    std::string id;
+    std::string label;
+    std::string error;   // non-empty = it couldn't be saved
+};
 // Live search-filter over the provider list (mirrors the model picker): a
 // typed character appends to the query, Backspace trims it. The row list
 // narrows to fuzzy/substring matches on the id + label + blurb.
@@ -1492,7 +1517,7 @@ using ComposerMsg = std::variant<
 using StreamMsg = std::variant<
     StreamStarted, StreamTextDelta, StreamTextBlockClosed,
     StreamToolUseStart, StreamToolUseDelta, StreamToolUseSnapshot,
-    StreamToolUseEnd, StreamObservedToolResult,
+    StreamToolUseEnd, StreamObservedToolResult, AcpPermissionAsk,
     StreamThinkingDelta,
     StreamReasoning,
     StreamUsage, StreamFinished, StreamError, StreamHeartbeat,
@@ -1514,7 +1539,7 @@ using ProvidersMsg = std::variant<
     OpenProviders, CloseProviders, ProvidersMove,
     ProvidersJump, ProvidersSelect,
     ProvidersFilterInput, ProvidersFilterBackspace,
-    ProvidersDelete, ProvidersToggleAll>;
+    ProvidersDelete, ProvidersToggleAll, AcpAgentAdded>;
 
 // The ONE model surface: browse/filter every provider's models, tune effort,
 // and (in Smart Mode slot-assign mode) pin a role→model. `ModelsLoaded` is

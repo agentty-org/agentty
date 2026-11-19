@@ -1707,6 +1707,60 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             resync_live_tool_viewer(m);
             return Cmd::none();
         },
+        [&](AcpPermissionAsk& e) -> Cmd {
+            // A delegated agent wants to run one of its own tool calls and
+            // waits for the answer. Raise the SAME permission card agentty's
+            // own tools use, anchored to the agent's card (made here if the
+            // agent asked before announcing it), so y / a / n and Esc read
+            // the same. The answer goes back through answer_agent_ask.
+            auto* a = active_ctx(m.s.phase);
+            if (!a || m.d.current.messages.empty()
+                || m.d.current.messages.back().role != Role::Assistant) {
+                // No live turn to show it in: decline, the agent stops.
+                return cmd::answer_acp_permission(e.ask_id, {});
+            }
+            a->last_event_at = m.now;
+            const ToolCallId tid = e.tool_id.empty() ? ToolCallId{e.ask_id} : e.tool_id;
+            ToolUse* tc = find_streaming_tool(tid);
+            if (!tc) {
+                seal_thinking(m, m.now);
+                ToolUse fresh;
+                fresh.id   = tid;
+                fresh.name = ToolName{e.title.empty() ? e.kind : e.title};
+                fresh.args = json::object();
+                fresh.status = ToolUse::Pending{m.now};
+                m.d.current.messages.back().tool_calls.push_back(std::move(fresh));
+                tc = &m.d.current.messages.back().tool_calls.back();
+            }
+            PendingPermission::AgentAsk ask;
+            ask.ask_id = e.ask_id;
+            ask.title  = e.title;
+            ask.kind   = e.kind;
+            for (const auto& o : e.options) {
+                if (o.kind == "allow_once"    && ask.allow_once.empty())   ask.allow_once   = o.id;
+                if (o.kind == "allow_always"  && ask.allow_always.empty()) ask.allow_always = o.id;
+                if (o.kind == "reject_once"   && ask.reject_once.empty())  ask.reject_once  = o.id;
+            }
+            if (ask.reject_once.empty())
+                for (const auto& o : e.options)
+                    if (o.kind == "reject_always") { ask.reject_once = o.id; break; }
+            // A second question while one is open (an agent asking in
+            // parallel): this one waits its turn -- answer the newer one
+            // Cancelled rather than replace what the user is reading.
+            if (m.d.pending_permission)
+                return cmd::answer_acp_permission(e.ask_id, {});
+            PendingPermission pp;
+            pp.id        = tc->id;
+            pp.tool_name = tc->name;
+            pp.reason    = (e.title.empty() ? std::string{"The agent"} : e.title)
+                         + " \xe2\x80\x94 asked by "
+                         + provider::provider_display_name(m.d.selection);
+            pp.agent     = std::move(ask);
+            m.d.pending_permission = std::move(pp);
+            if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx)
+                m.s.phase = phase::AwaitingPermission{std::move(*ctx)};
+            return Cmd::none();
+        },
         [&](StreamThinkingDelta& e) -> Cmd {
             // Adaptive-thinking block delta. Two shapes arrive: a
             // `thinking_delta` carries reasoning text (usually empty under
@@ -1944,6 +1998,15 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return Cmd::none();
         },
         [&](StreamFinished e) -> Cmd {
+            // A delegated agent's question still on screen when its turn
+            // ends: the agent already moved on (the backend answered it
+            // Cancelled), so the card is stale.
+            if (m.d.pending_permission && m.d.pending_permission->agent) {
+                m.d.pending_permission.reset();
+                if (m.s.is_awaiting_permission())
+                    if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx)
+                        m.s.phase = phase::Streaming{std::move(*ctx)};
+            }
             // Which model just ran: the compaction model for a compaction
             // turn (finalize_turn clears the flag, so read it first).
             std::string ran_model = m.d.model_id.value;
@@ -2014,6 +2077,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
         },
         [&](StreamError& e) -> Cmd {
             seal_thinking(m, m.now);
+            if (m.d.pending_permission && m.d.pending_permission->agent)
+                m.d.pending_permission.reset();   // stale: see StreamFinished
             // THE seam where a failure becomes something the user sees.
             // Logged with the classification that drives what happens next
             // (retry vs surface vs drop to Idle), so a "why did it give up?"
