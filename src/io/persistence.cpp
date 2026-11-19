@@ -3110,6 +3110,21 @@ store::Settings load_settings_from_disk() {
                     s.rejected_fields[k] =
                         static_cast<std::uint16_t>(v.get<unsigned>() & 0xFFFFu);
         }
+        if (j.contains("session_headers") && j["session_headers"].is_object()) {
+            // Re-validated on load: this names a header we send a
+            // conversation id under, so a hand edit can't smuggle in
+            // `authorization`. x-, [a-z0-9-], 4..64; "=" marks the user's.
+            for (auto& [k, v] : j["session_headers"].items()) {
+                if (!v.is_string()) continue;
+                const std::string raw = v.get<std::string>();
+                std::string_view n{raw};
+                if (n.starts_with('=')) n.remove_prefix(1);
+                bool ok = n.starts_with("x-") && n.size() >= 4 && n.size() <= 64;
+                for (char c : n)
+                    ok = ok && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-');
+                if (ok) s.session_headers[k] = raw;
+            }
+        }
         if (j.contains("reasoning_echo") && j["reasoning_echo"].is_object()) {
             // Scopes past All (2) are not ours: a hand edit or a newer build.
             for (auto& [k, v] : j["reasoning_echo"].items())
@@ -3563,6 +3578,11 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
         for (const auto& [k, v] : s.rejected_fields)
             rf[k] = static_cast<unsigned>(v);
         j["rejected_fields"] = std::move(rf);
+    }
+    if (!s.session_headers.empty()) {
+        json sh = json::object();
+        for (const auto& [k, v] : s.session_headers) sh[k] = v;
+        j["session_headers"] = std::move(sh);
     }
     if (!s.reasoning_echo.empty()) {
         json re = json::object();

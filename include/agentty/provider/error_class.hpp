@@ -489,6 +489,64 @@ enum class OptionalField : std::uint16_t {
     return OptionalField::None;
 }
 
+// ── Required session header → learned carrier ────────────────────────────
+// Gateways route a conversation to one backend (prompt cache, provider
+// affinity) by a per-conversation id, and each spells the header its own
+// way: bifrost/OpenRouter read `x-session-id`, OpenCode Go demands
+// `x-opencode-session` and 400s without it:
+//   "Request is missing x-opencode-session and cannot be routed efficiently."
+// agentty already HAS the id (the thread). This finds the header NAME the
+// host asked for, so the transport can learn it for that host and resend.
+//
+// Strict on purpose -- whatever this returns is a header agentty will send
+// to that host from then on, carrying the conversation id:
+//   * the status must be a client error (or 0: an SSE error body);
+//   * the message must say the header is MISSING / REQUIRED, not merely
+//     mention it;
+//   * the name must look like a session id: `x-` prefix, [a-z0-9-] only,
+//     4..64 chars, containing session / conversation / thread. So a server
+//     can never talk agentty into sending its id under `authorization` or
+//     `cookie`, and an unrelated "missing x-api-key" is not learned.
+// Returns the lowercased name, or "" when the error isn't this.
+[[nodiscard]] inline std::string parse_required_session_header(
+        std::string_view message, int http_status) {
+    if (http_status != 0 && http_status != 400 && http_status != 401
+        && http_status != 403 && http_status != 412 && http_status != 422
+        && http_status != 428)
+        return {};
+    std::string low;
+    low.reserve(message.size());
+    for (char c : message)
+        low.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
+    constexpr std::string_view kNeedWords[] = {
+        "missing", "required", "requires", "must include", "must send",
+        "must provide", "must be set", "must be present", "no session",
+        "is not set", "not provided", "expected header",
+    };
+    bool says_needed = false;
+    for (auto w : kNeedWords)
+        if (low.find(w) != std::string::npos) { says_needed = true; break; }
+    if (!says_needed) return {};
+    auto tok = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+    };
+    for (std::size_t at = low.find("x-"); at != std::string::npos;
+         at = low.find("x-", at + 2)) {
+        if (at > 0 && tok(low[at - 1])) continue;          // inside a word
+        std::size_t end = at;
+        while (end < low.size() && tok(low[end])) ++end;
+        std::string_view name{low.data() + at, end - at};
+        while (!name.empty() && name.back() == '-') name.remove_suffix(1);
+        if (name.size() < 4 || name.size() > 64) continue;
+        if (name.find("session") == std::string_view::npos
+            && name.find("conversation") == std::string_view::npos
+            && name.find("thread") == std::string_view::npos)
+            continue;
+        return std::string{name};
+    }
+    return {};
+}
+
 // ── Required reasoning echo → learned contract (#117) ────────────────────
 // The mirror image of OptionalField: a field the server wants ADDED, not
 // dropped. Thinking-mode models want each earlier assistant turn's

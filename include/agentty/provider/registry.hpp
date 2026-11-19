@@ -265,6 +265,18 @@ struct ProviderDescriptor {
     // sending it to a strict host costs the whole turn. When in doubt, omit.
     bool             accepts_prompt_cache_key = false;
 
+    // ── Session header (optional) ───────────────────────────────────
+    // The header NAME this host reads the conversation id from, when it
+    // isn't the default `x-session-id` (bifrost/OpenRouter/LiteLLM). OpenCode
+    // Go is the case that forced it: it 400s every request without
+    // `x-opencode-session`. Only the NAME is a row fact -- the value is
+    // always agentty's own per-conversation id (provider::session_id_for),
+    // never a static string, so this can't become a secrets channel.
+    // Hosts nobody listed are covered at runtime: the transport learns the
+    // name from the host's own "missing x-...-session" error and persists
+    // it per host (catalog: session_header_entry).
+    std::string_view session_header;
+
     // Ollama's NATIVE /api/chat protocol (NDJSON, structured tool_calls)
     // instead of its OpenAI-compat shim, which makes weak local models
     // leak tool calls as raw JSON in `content`.
@@ -356,7 +368,7 @@ using ProviderPreset = ProviderDescriptor;
 // To add a provider: append ONE row here. The endpoint columns below are the
 // only place its host/path live — Endpoint::from_spec is a lookup over this
 // table, so there is no second arm to keep in sync.
-inline constexpr std::array<ProviderDescriptor, 15> kProviders{{
+inline constexpr std::array<ProviderDescriptor, 16> kProviders{{
     {.id = "anthropic", .label = "Anthropic",
      .blurb = "Claude — OAuth (Pro/Max) or API key",
      // Own transport (not the OpenAI-compat one): no endpoint columns.
@@ -528,6 +540,18 @@ inline constexpr std::array<ProviderDescriptor, 15> kProviders{{
      .host = "api.fireworks.ai", .path = "/inference/v1/chat/completions",
      .models_path = "/inference/v1/models"},
 
+    {.id = "opencode-go", .label = "OpenCode Go",
+     .blurb = "Open coding models on an OpenCode Go plan",
+     .wire = Wire::OpenAIChat, .lifetime = Lifetime::PerCall,
+     .auth = AuthStyle::ApiKey,
+     .auth_env = {"OPENCODE_API_KEY", "", ""},
+     .host = "opencode.ai", .path = "/inference/go/v1/chat/completions",
+     .models_path = "/inference/go/v1/models",
+     // Required since 2026-09: requests without it are refused ("missing
+     // x-opencode-session and cannot be routed efficiently"). Stable per
+     // conversation, for routing and prompt caching.
+     .session_header = "x-opencode-session"},
+
     {.id = "ollama", .label = "Ollama",
      .blurb = "Local models at localhost:11434",
      // Plain HTTP on loopback, and the NATIVE /api/chat protocol.
@@ -605,6 +629,14 @@ namespace detail {
         // bail below, because the rows that would get this wrong (the chatgpt
         // / acp sentinels) are exactly the ones that bail.
         if (p.attribution && !p.http_dialled()) return false;
+        // A session header names a header on a host we dial, and must be
+        // one the runtime learner would also accept (x-, lowercase).
+        if (!p.session_header.empty()) {
+            if (!p.http_dialled() || !p.session_header.starts_with("x-")) return false;
+            for (char c : p.session_header)
+                if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
+                    return false;
+        }
         if (!p.http_dialled()) {
             // Not dialled over the compat transport ⇒ must not carry half
             // an endpoint (a stray path with no host is how rows rot).

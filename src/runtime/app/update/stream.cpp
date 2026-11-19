@@ -1972,6 +1972,24 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 }
                 if (grew) cmd = Cmd::batch(std::move(cmd), save_record(m));
             }
+            // Same for a session header a host demanded mid-turn. Say so once,
+            // quietly: the turn already went through, this is just why.
+            {
+                std::string news;
+                bool grew = false;
+                for (const auto& [host, name] : session_headers_snapshot()) {
+                    auto& have = m.d.persisted.session_headers[host];
+                    if (have == name) continue;
+                    have = name;
+                    grew = true;
+                    if (!name.empty() && name.front() != '=')
+                        news = host + " needs " + name + " \xe2\x80\x94 sending it from now on";
+                }
+                if (grew) cmd = Cmd::batch(std::move(cmd), save_record(m));
+                if (!news.empty())
+                    cmd = Cmd::batch(std::move(cmd),
+                                     set_status_toast(m, std::move(news), std::chrono::seconds{6}));
+            }
             // No force_redraw arming. The previous version armed
             // needs_force_redraw here so the next user input would
             // trigger maya's case-(B) soft redraw — meant to flush

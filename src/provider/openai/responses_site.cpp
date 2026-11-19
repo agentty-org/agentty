@@ -35,6 +35,7 @@
 #include "agentty/auth/auth.hpp"
 #include "agentty/io/http.hpp"
 #include "agentty/provider/dialect.hpp"
+#include "agentty/provider/error_class.hpp"
 #include "agentty/provider/openai/transport.hpp"
 #include "agentty/provider/registry.hpp"
 #include "agentty/provider/responses/responses.hpp"
@@ -84,7 +85,7 @@ openai_target(const PendingTarget& p, const provider::Request& req) {
     };
     if (!key.empty())
         t.headers.push_back({"authorization", "Bearer " + key});
-    openai::append_session_header(t.headers, req.affinity());
+    openai::append_session_header(t.headers, req.affinity(), p.host, p.port, p.provider_id);
     // Copilot-style editor identification, or a gateway's required extras.
     for (const auto& [k, v] : p.extra_headers)
         t.headers.push_back({k, v});
@@ -122,6 +123,12 @@ void openai_decorate_body(json& body, const provider::Request&) {
 
 std::string openai_explain_http_error(int status, std::string_view body) {
     const std::string b{body};
+    // A gateway that refuses for want of a session header is not a key
+    // problem: keep its own words, which name the header (and let the
+    // learner in stream_responses read it).
+    if (status >= 400 && status < 500
+        && !provider::parse_required_session_header(body, status).empty())
+        return "request refused (HTTP " + std::to_string(status) + "): " + b;
     switch (status) {
         case 401:
         case 403:
@@ -205,8 +212,27 @@ provider::StreamResult stream_responses(const ResponsesEndpoint& ep,
     AGT_LOG(Wire, Info, "openai.responses",
             "dialling {}{} for {}", ep.host, ep.path, model);
 
+    // Kept only for the one possible resend below (a host that names a
+    // session header it requires). The first attempt's terminal error is
+    // held back until we know: a 4xx streams nothing else, so if we resend
+    // the user never sees the refusal, and if we don't it goes out as-is.
+    provider::Request again = req;
+    auto held = std::make_shared<std::optional<Msg>>();
+    EventSink first_sink = [sink, held](Msg m) {
+        if (const auto* s = std::get_if<msg::StreamMsg>(&m))
+            if (std::get_if<StreamError>(s)) { *held = std::move(m); return; }
+        sink(std::move(m));
+    };
     auto result = responses::stream(kOpenAiSite, std::move(target), std::move(req),
-                                    std::move(sink));
+                                    std::move(first_sink));
+    if (!result.ok() && result.http_status >= 400 && result.http_status < 500
+        && !(again.cancel && again.cancel->is_cancelled())
+        && learn_session_header(result.error.value_or(""), result.http_status,
+                                ep.host, ep.port, provider_id))
+        result = responses::stream(kOpenAiSite, openai_target(pending, again),
+                                   std::move(again), sink);
+    else if (*held)
+        sink(std::move(**held));
 
     // ── Teach the router from what the wire actually said ────────────────
     // The family tables in dialect.cpp are a prior about model NAMES, and

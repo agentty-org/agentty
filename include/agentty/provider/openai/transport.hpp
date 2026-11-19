@@ -334,10 +334,40 @@ struct HostProbe {
 [[nodiscard]] http::Headers build_request_headers(const AuthHeader& auth,
                                                   const Endpoint& endpoint);
 
-// Adds `x-session-id: <key>` when there is one, so a routing gateway like
-// bifrost or OpenRouter keeps a conversation on the backend that served it
-// last (#118). Sent on the chat and Responses streams.
-void append_session_header(http::Headers& h, std::string_view key);
+// Adds the conversation's session header when there is a conversation, so
+// a routing gateway keeps it on the backend that served it last (#118).
+// Sent on the chat and Responses streams. Which header, and what value:
+//   name  = user override for this host > name learned from the host's own
+//           "missing x-..." error > the row's session_header > x-session-id
+//   value = for a hosted preset, an opaque id derived from (thread, host):
+//           stable for the conversation, meaningless to the vendor, and
+//           different per vendor so two gateways can't join your sessions.
+//           A custom/local host is your own infrastructure: it gets the raw
+//           thread id, so its logs line up with agentty's.
+// A host that REQUIRES a header (row or learned) gets one even with no
+// conversation: a per-process id, so the request isn't refused.
+void append_session_header(http::Headers& h, std::string_view key,
+                           std::string_view host, std::uint16_t port,
+                           std::string_view provider_id);
+
+// Where the session header comes from, for the provider pane.
+enum class SessionHeaderSource : std::uint8_t { Default, Row, Learned, User };
+struct SessionHeaderChoice {
+    std::string         name;
+    SessionHeaderSource source = SessionHeaderSource::Default;
+};
+[[nodiscard]] SessionHeaderChoice session_header_for(std::string_view host,
+                                                     std::uint16_t port,
+                                                     std::string_view provider_id);
+// The value sent for `key` to this host (see append_session_header).
+[[nodiscard]] std::string session_header_value(std::string_view key,
+                                               std::string_view host,
+                                               std::string_view provider_id);
+// Learn the header a refused request named (parse_required_session_header)
+// for this host. True when it is NEW -- the caller should resend once.
+[[nodiscard]] bool learn_session_header(std::string_view error_body, int http_status,
+                                        std::string_view host, std::uint16_t port,
+                                        std::string_view provider_id);
 
 // Extra system-prompt guidance appended ONLY for OpenAI-compatible backends.
 // Weak local models (Ollama qwen2.5-coder, llama.cpp templates) over-call

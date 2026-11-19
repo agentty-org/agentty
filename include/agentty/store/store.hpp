@@ -227,6 +227,11 @@ struct Settings {
     // by the reject→learn→retry arm in stream.cpp (#93), hydrated at init
     // so the transport never sends that host the field again.
     std::map<std::string, std::uint16_t> rejected_fields;
+    // LEARNED / CHOSEN: host → the header it reads the conversation id from,
+    // when it isn't the default (catalog: session_header_entry). "name" was
+    // learned from the host's own "missing x-..." error; "=name" is the
+    // user's pick in the provider pane. Hydrated at init.
+    std::map<std::string, std::string> session_headers;
     // LEARNED: "host|model" → which earlier assistant turns that model needs
     // reasoning_content on (provider::ReasoningEcho: 1 tool-call turns, 2
     // every turn). Written by the reject→learn→retry arm in stream.cpp

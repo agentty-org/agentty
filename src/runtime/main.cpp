@@ -1902,6 +1902,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         const auto learned = persistence::load_settings(IoAccess::grant());
         set_learned_effort_sets(learned.learned_effort_sets);
         set_rejected_fields(learned.rejected_fields);
+        set_session_headers(learned.session_headers);
         set_reasoning_echoes(learned.reasoning_echo);
     }
 

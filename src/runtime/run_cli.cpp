@@ -221,15 +221,23 @@ bool valid_effort(std::string_view s) {
 int run(const maya::unlocked& cap, const Options& o) {
     std::optional<maya::sig> got;
     const auto rejected_before = rejected_fields_snapshot();
+    const auto headers_before = session_headers_snapshot();
     const tools::OneShotResult r = run_with_signals(cap, o, got);
     const int code = exit_code_for(r.status, got);
 
     // Fields a host refused during this run (the transport learned and
-    // resent): keep them so the next run doesn't hit the same 400.
-    if (const auto now = rejected_fields_snapshot(); now != rejected_before) {
+    // resent): keep them so the next run doesn't hit the same 400. Same for
+    // a session header a host demanded.
+    const auto headers_now = session_headers_snapshot();
+    if (const auto now = rejected_fields_snapshot();
+        now != rejected_before || headers_now != headers_before) {
         try {
             auto s = persistence::load_settings(IoAccess::grant());
             for (const auto& [host, bits] : now) s.rejected_fields[host] |= bits;
+            for (const auto& [host, name] : headers_now) {
+                auto& have = s.session_headers[host];
+                if (have.empty() || have.front() != '=') have = name;   // never clobber a user pick
+            }
             persistence::save_settings(IoAccess::grant(), cap, s);
         } catch (...) {}
     }

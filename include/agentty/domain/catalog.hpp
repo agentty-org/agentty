@@ -1927,6 +1927,52 @@ inline void set_rejected_fields(std::map<std::string, std::uint16_t> all) {
     return rejected_fields_detail::reg().snapshot();
 }
 
+// ── Learned session header (per HOST) ─────────────────────────────────────
+// The header NAME a host wants the conversation id under, when it isn't the
+// row's default (`x-session-id`). Learned from the host's own "missing
+// x-...-session" error (provider::parse_required_session_header), or set
+// by the user in the provider pane; persisted in Settings.session_headers.
+// Keyed by HOST like rejected_fields: routing is the gateway's, the same
+// for every model behind it. The VALUE is never stored or chosen here --
+// it is always agentty's own per-conversation id.
+//
+// A value starting with '=' marks a USER override ("=x-foo"); a bare name
+// was learned. Kept in one string so the store stays a flat map and the
+// pane can say which one it is.
+namespace session_header_detail {
+inline Registry<std::string>& reg() { static Registry<std::string> r; return r; }
+} // namespace session_header_detail
+
+inline void set_learned_session_header(const std::string& host, std::string name) {
+    (void)session_header_detail::reg().facts.update(
+        [](const Facts<std::string>& f, const std::string& k, const std::string& v) {
+            Facts<std::string> out = f;
+            // A user override wins over anything learned later.
+            if (auto it = out.map.find(k); it != out.map.end()
+                && !it->second.empty() && it->second.front() == '=')
+                return out;
+            out.map[k] = v;
+            return out;
+        }, host, std::move(name));
+}
+inline void set_session_header_override(const std::string& host, std::string name) {
+    if (name.empty()) { (void)session_header_detail::reg().erase(host); return; }
+    session_header_detail::reg().set(host, "=" + std::move(name));
+}
+inline void forget_session_header(const std::string& host) {
+    (void)session_header_detail::reg().erase(host);
+}
+inline void set_session_headers(std::map<std::string, std::string> all) {
+    session_header_detail::reg().replace(std::move(all));
+}
+// The raw entry ("=name" override, "name" learned), or nullopt.
+[[nodiscard]] inline std::optional<std::string> session_header_entry(const std::string& host) {
+    return session_header_detail::reg().find("", host);
+}
+[[nodiscard]] inline std::map<std::string, std::string> session_headers_snapshot() {
+    return session_header_detail::reg().snapshot();
+}
+
 // ── Learned reasoning-echo registry (per HOST + MODEL) ────────────────────────
 // Which earlier assistant turns a model needs `reasoning_content` on, even
 // turns with no reasoning of their own to send (provider::ReasoningEcho; #117).

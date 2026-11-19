@@ -49,7 +49,7 @@ channel list and line format.
 
 | Variable | Effect |
 |----------|--------|
-| `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` · `GROQ_API_KEY` · `OPENROUTER_API_KEY` · `TOGETHER_API_KEY` · `CEREBRAS_API_KEY` · `DEEPSEEK_API_KEY` · `XAI_API_KEY` · `MISTRAL_API_KEY` · `GEMINI_API_KEY` / `GOOGLE_API_KEY` · `FIREWORKS_API_KEY` | Per-provider API keys. Each provider also falls back to `OPENAI_API_KEY` where its wire is OpenAI-compatible. Keys saved via `agentty login` take precedence. |
+| `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` · `GROQ_API_KEY` · `OPENROUTER_API_KEY` · `TOGETHER_API_KEY` · `CEREBRAS_API_KEY` · `DEEPSEEK_API_KEY` · `XAI_API_KEY` · `MISTRAL_API_KEY` · `GEMINI_API_KEY` / `GOOGLE_API_KEY` · `FIREWORKS_API_KEY` · `OPENCODE_API_KEY` | Per-provider API keys. Each provider also falls back to `OPENAI_API_KEY` where its wire is OpenAI-compatible. Keys saved via `agentty login` take precedence. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Use an existing Claude Code OAuth token instead of signing in. |
 | `AGENTTY_API_HOST` / `AGENTTY_OAUTH_HOST` | Point the Anthropic wire at a different API / OAuth host (gateways, enterprise proxies). |
 | `AGENTTY_OLLAMA_HOST` | Ollama base URL. Default `http://localhost:11434`. |

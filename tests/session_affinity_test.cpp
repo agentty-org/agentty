@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "agentty/provider/error_class.hpp"
 #include "agentty/provider/openai/provider.hpp"
 #include "agentty/provider/openai/transport.hpp"
 
@@ -121,6 +122,9 @@ public:
         return std::nullopt;
     }
     [[nodiscard]] std::string body() const { std::lock_guard lk(mu_); return last_body_; }
+    [[nodiscard]] int requests() const { return requests_.load(); }
+    // Refuse (400, OpenCode Go's exact words) any request lacking `name`.
+    void require_header(std::string name) { std::lock_guard lk(mu_); required_ = std::move(name); }
 
 private:
     void serve() {
@@ -157,10 +161,23 @@ private:
             }
             if (head_end != std::string::npos && in.size() >= head_end + 4 + want) break;
         }
+        std::string required;
         {
             std::lock_guard lk(mu_);
             last_head_ = in.substr(0, head_end);
             last_body_ = in.substr(head_end + 4, want);
+            required = required_;
+        }
+        ++requests_;
+        if (!required.empty() && !header(required)) {
+            const std::string err =
+                "{\"type\":\"error\",\"error\":{\"type\":\"BadRequestError\",\"message\":"
+                "\"Request is missing " + required + " and cannot be routed efficiently.\"}}";
+            const std::string r400 =
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                "Content-Length: " + std::to_string(err.size()) + "\r\n\r\n" + err;
+            (void)::send(c, r400.data(), static_cast<int>(r400.size()), 0);
+            return;
         }
         const std::string sse =
             "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n"
@@ -182,7 +199,8 @@ private:
     std::atomic<bool> stop_{false};
     std::thread worker_;
     mutable std::mutex mu_;
-    std::string last_head_, last_body_;
+    std::string last_head_, last_body_, required_;
+    std::atomic<int> requests_{0};
 #if defined(_WIN32)
     bool wsa_ = false;
 #endif
@@ -261,4 +279,98 @@ TEST_CASE("session affinity: provider::Request::affinity falls back to the sessi
     CHECK(req.affinity() == "t");
     req.affinity_key = "parent";
     CHECK(req.affinity() == "parent");
+}
+
+// ── Session header: learned from the host, for every provider ──────────────────
+
+TEST_CASE("session header: a host that names the header it needs gets it, once, and keeps it") {
+    ChatServer s;
+    REQUIRE(s.valid(), "loopback server starts");
+    s.require_header("x-opencode-session");
+    const std::string host = host_key("127.0.0.1", s.port());
+    forget_session_header(host);
+
+    const auto r = send(s, turn("thread-oc"));
+    CHECK_MESSAGE(r.ok(), "the refused request was resent with the header and went through");
+    CHECK(s.requests() == 2);
+    CHECK(s.header("x-opencode-session") == std::optional<std::string>{"thread-oc"});
+    CHECK_MESSAGE(session_header_entry(host) == std::optional<std::string>{"x-opencode-session"},
+                  "learned for this host, so it can be persisted");
+
+    // The next turn sends it up front: no second refusal.
+    (void)send(s, turn("thread-oc"));
+    CHECK(s.requests() == 3);
+    forget_session_header(host);
+}
+
+TEST_CASE("session header: a host still refusing the learned header is not resent forever") {
+    ChatServer s;
+    REQUIRE(s.valid(), "loopback server starts");
+    // Demands one header, but the user pinned another: no learning, one try.
+    s.require_header("x-opencode-session");
+    const std::string host = host_key("127.0.0.1", s.port());
+    set_session_header_override(host, "x-my-session");
+    const auto r = send(s, turn("thread-pin"));
+    CHECK(!r.ok());
+    CHECK(s.requests() == 1);
+    CHECK(s.header("x-my-session") == std::optional<std::string>{"thread-pin"});
+    REQUIRE(r.error.has_value());
+    CHECK_MESSAGE(r.error->find("x-my-session") != std::string::npos,
+                  "the error says what was sent instead of blaming the key");
+    forget_session_header(host);
+}
+
+TEST_CASE("session header: what a server can make agentty learn is narrow") {
+    using provider::parse_required_session_header;
+    CHECK(parse_required_session_header(
+              "Request is missing x-opencode-session and cannot be routed efficiently.", 400)
+          == "x-opencode-session");
+    CHECK(parse_required_session_header("Header X-Conversation-Id is required", 422)
+          == "x-conversation-id");
+    CHECK(parse_required_session_header("missing x-thread-key", 0) == "x-thread-key");
+    // Not session-shaped, or not a header name: never learned.
+    CHECK(parse_required_session_header("missing x-api-key", 401).empty());
+    CHECK(parse_required_session_header("missing authorization (session expired)", 401).empty());
+    CHECK(parse_required_session_header("missing cookie session", 400).empty());
+    // Mentioned, but not missing: a value error isn't a missing header.
+    CHECK(parse_required_session_header("x-session-id must be a uuid", 400).empty());
+    // Server errors are weather, not contract.
+    CHECK(parse_required_session_header("missing x-session-id", 503).empty());
+    // Overlong names are refused.
+    CHECK(parse_required_session_header(
+              "missing x-" + std::string(80, 'a') + "-session", 400).empty());
+}
+
+TEST_CASE("session header: a hosted vendor gets an opaque per-vendor id, your own host the thread id") {
+    namespace oai2 = agentty::provider::openai;
+    const auto a = oai2::session_header_value("thread-1", "opencode.ai", "opencode-go");
+    const auto b = oai2::session_header_value("thread-1", "openrouter.ai", "openrouter");
+    CHECK(a.size() == 32);
+    CHECK(a.find("thread-1") == std::string::npos);
+    CHECK_MESSAGE(a != b, "two vendors can't join the same conversation by its id");
+    CHECK_MESSAGE(a == oai2::session_header_value("thread-1", "opencode.ai", "opencode-go"),
+                  "stable for the conversation (that's the point)");
+    CHECK(a != oai2::session_header_value("thread-2", "opencode.ai", "opencode-go"));
+    CHECK(oai2::session_header_value("thread-1", "127.0.0.1", "127.0.0.1:8080") == "thread-1");
+}
+
+TEST_CASE("session header: OpenCode Go's row sends x-opencode-session from the first request") {
+    namespace oai2 = agentty::provider::openai;
+    const auto ep = oai2::Endpoint::from_spec("opencode-go");
+    CHECK(ep.host == "opencode.ai");
+    CHECK(ep.path == "/inference/go/v1/chat/completions");
+    forget_session_header(host_key(ep.host, ep.port));
+    const auto c = oai2::session_header_for(ep.host, ep.port, ep.label);
+    CHECK(c.name == "x-opencode-session");
+    CHECK(c.source == oai2::SessionHeaderSource::Row);
+    // Even with no conversation (a model-list probe) a requiring host gets one.
+    http::Headers h;
+    oai2::append_session_header(h, {}, ep.host, ep.port, ep.label);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].name == "x-opencode-session");
+    CHECK(!h[0].value.empty());
+    // ...while a default host with no conversation gets nothing, as before.
+    http::Headers none;
+    oai2::append_session_header(none, {}, "127.0.0.1", 9, "127.0.0.1:9");
+    CHECK(none.empty());
 }

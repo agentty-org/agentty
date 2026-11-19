@@ -92,6 +92,24 @@ Element providers_panel(const Model& m) {
     };
 
     cfg.items.reserve(srows.size() + 3);
+    // The active row's session header, when it isn't the default: what
+    // agentty sends the conversation id as, and why (the host demanded it,
+    // the row declares it, or you pinned it). Off the Model only -- the
+    // persisted map mirrors the transport's registry. Empty = default.
+    const auto session_note = [&](std::string_view provider_id) -> std::string {
+        const auto& ep = m.d.selection.openai_endpoint;
+        if (ep.host.empty()) return {};
+        if (auto it = settings.session_headers.find(host_key(ep.host, ep.port));
+            it != settings.session_headers.end() && !it->second.empty()) {
+            if (it->second.front() == '=')
+                return "  \xc2\xb7  " + it->second.substr(1) + " (pinned)";
+            return "  \xc2\xb7  " + it->second + " (learned)";
+        }
+        if (const auto* row = provider::preset_for(provider_id);
+            row && !row->session_header.empty())
+            return "  \xc2\xb7  " + std::string{row->session_header};
+        return {};
+    };
     std::optional<ui::ProviderSection> cur_section;
     int visual_selected = 0;
     // Per-section counts for the right-pinned stat on each divider.
@@ -221,6 +239,7 @@ Element providers_panel(const Model& m) {
             } else {
                 row.trailing       = note;
                 row.trailing_style = fg_of(note_color);
+                if (active) row.trailing += session_note(p->id);
             }
             row.active         = active;
         } else if (const auto* agent = r.acp()) {
@@ -262,6 +281,7 @@ Element providers_panel(const Model& m) {
                     row.trailing       = "\xe2\x9c\x93 ready";
                     row.trailing_style = fg_of(success);
                 }
+                if (active) row.trailing += session_note(*spec);
             }
             row.active         = active;
         } else if (const std::string* prefill = r.new_host_prefill()) {

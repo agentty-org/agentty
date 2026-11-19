@@ -55,6 +55,7 @@ Press `^P` to switch provider and `^/` to switch model. There is no restart and 
 | `cerebras` | wafer-scale inference (very fast) | `CEREBRAS_API_KEY` |
 | `together` | open models on `together.ai` | `TOGETHER_API_KEY` |
 | `fireworks` | open models on `fireworks.ai` | `FIREWORKS_API_KEY` |
+| `opencode-go` | open coding models on an OpenCode Go plan | `OPENCODE_API_KEY` |
 | `openrouter` | any model via `openrouter.ai` | `OPENROUTER_API_KEY` |
 | `ollama` | local models at `localhost:11434` | none |
 | `host:port` | any raw OpenAI-compatible endpoint | `OPENAI_API_KEY` |
@@ -207,7 +208,10 @@ Saved hosts reappear in `^P` every session. A local host added without a key is 
   ```
 
 - **Scheme and port.** `https://` (or a bare host on 443) uses TLS and asks for an API key. `http://` or any non-443 port uses plain HTTP and connects without a key.
-- **Gateways keep a thread on one backend.** Every request to an OpenAI-compatible host sends an `x-session-id` header with the thread's id. Routing gateways (Bifrost, OpenRouter, LiteLLM) use it to send each turn where the last one went, so a fallback chain isn't walked every turn and the backend's prompt cache stays warm. Titles, compaction and subagents send their thread's id too. Hosts that don't know the header ignore it.
+- **Gateways keep a thread on one backend.** Every request to an OpenAI-compatible host carries a per-conversation session id. Routing gateways (Bifrost, OpenRouter, LiteLLM, OpenCode Go) use it to send each turn where the last one went, so a fallback chain isn't walked every turn and the backend's prompt cache stays warm. Titles, compaction and subagents send their thread's id too.
+  - **The header name fits the host.** It's `x-session-id` by default. A provider that reads another name declares it, like OpenCode Go's `x-opencode-session`. If a host refuses a request because it's "missing x-something-session", agentty learns that name for the host, resends the same request, and remembers it from then on. You see one note saying so, and nothing fails.
+  - **The value is never something you type.** A hosted vendor gets an opaque id derived from the thread and the vendor's host: it stays the same for the conversation, means nothing to the vendor, and two vendors can't match up the same conversation. Your own custom or local host gets the raw thread id, so its logs line up with agentty's.
+  - **To pin a header yourself,** set it for the host in `settings.json` under `"session_headers"`, e.g. `{"llm.corp:8443": "=x-corp-session"}`. The leading `=` marks it as yours; a learned name never replaces it. Names must start with `x-` and use only lowercase letters, digits and dashes.
 
 #### Several accounts on one endpoint
 

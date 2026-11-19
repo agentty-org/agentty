@@ -1185,6 +1185,34 @@ TEST_CASE("a host rejection learned by the transport is saved when the turn ends
     agentty::set_rejected_fields({});
 }
 
+// A session header the transport learned from a host's refusal is saved
+// when the turn ends, said once, and a user's pinned header is never
+// clobbered by it.
+TEST_CASE("a session header learned by the transport is saved, and said once") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    g_settings = store::Settings{};
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection("anthropic"));
+    Model m = seeded_model();
+    m.d.model_id = ModelId{"claude-opus-4-5"};
+    Message u; u.role = Role::User; u.text = "q";
+    m.d.current.messages.push_back(u);
+    auto [m1, c1] = app::update(std::move(m), Msg{CompactContext{}});
+    REQUIRE(m1.s.compacting);
+
+    agentty::set_session_headers({});
+    agentty::set_learned_session_header("gw.example:443", "x-gw-session");
+    agentty::set_session_header_override("mine.example:443", "x-mine-session");
+    agentty::set_learned_session_header("mine.example:443", "x-other-session");
+    m1.ui.composer.text.clear();
+    auto [m2, c2] = app::update(std::move(m1), Msg{StreamTextDelta{"<summary>s</summary>"}});
+    auto [m3, c3] = app::update(std::move(m2), Msg{StreamFinished{StopReason::EndTurn}});
+    CHECK(m3.d.persisted.session_headers["gw.example:443"] == "x-gw-session");
+    CHECK_MESSAGE(m3.d.persisted.session_headers["mine.example:443"] == "=x-mine-session",
+                  "a learned name never replaces the user's pick");
+    agentty::set_session_headers({});
+}
+
 
 TEST_CASE("same model id on two providers: a reasoning override is per provider") {
     agentty::clear_reasoning_overrides();

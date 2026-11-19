@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -2287,9 +2288,89 @@ http::Headers build_request_headers(const AuthHeader& auth,
     return h;
 }
 
-void append_session_header(http::Headers& h, std::string_view key) {
-    if (!key.empty())
-        h.push_back({"x-session-id", std::string{key}});
+namespace {
+constexpr std::string_view kDefaultSessionHeader = "x-session-id";
+
+// A hosted preset row (a vendor's server), as opposed to a custom or local
+// host the user runs themselves.
+bool hosted_preset(std::string_view provider_id) {
+    const auto* row = provider::preset_for(provider_id);
+    return row && row->http_dialled() && !row->is_local && row->use_tls;
+}
+
+// One id per agentty process, for a host that REQUIRES a session header on
+// a request with no conversation behind it (a models probe, a one-shot).
+const std::string& process_session_id() {
+    static const std::string id = [] {
+        std::random_device rd;
+        char buf[33];
+        std::snprintf(buf, sizeof buf, "%08x%08x%08x%08x", rd(), rd(), rd(), rd());
+        return std::string{buf};
+    }();
+    return id;
+}
+} // namespace
+
+SessionHeaderChoice session_header_for(std::string_view host, std::uint16_t port,
+                                       std::string_view provider_id) {
+    if (!host.empty())
+        if (auto e = session_header_entry(host_key(std::string{host}, port)); e && !e->empty()) {
+            if (e->front() == '=')
+                return {e->substr(1), SessionHeaderSource::User};
+            return {*e, SessionHeaderSource::Learned};
+        }
+    if (const auto* row = provider::preset_for(provider_id);
+        row && !row->session_header.empty())
+        return {std::string{row->session_header}, SessionHeaderSource::Row};
+    return {std::string{kDefaultSessionHeader}, SessionHeaderSource::Default};
+}
+
+std::string session_header_value(std::string_view key, std::string_view host,
+                                 std::string_view provider_id) {
+    if (key.empty()) return {};
+    if (!hosted_preset(provider_id)) return std::string{key};
+    // Keyed hash of (conversation, host): the same conversation always maps
+    // to the same id at one vendor, and to unrelated ids at two vendors.
+    std::string material = "agentty.session\x1f";
+    material.append(key);
+    material.push_back('\x1f');
+    material.append(host);
+    std::string hex = auth::sha256_hex(material);
+    hex.resize(32);
+    return hex;
+}
+
+void append_session_header(http::Headers& h, std::string_view key,
+                           std::string_view host, std::uint16_t port,
+                           std::string_view provider_id) {
+    const auto choice = session_header_for(host, port, provider_id);
+    std::string value = session_header_value(key, host, provider_id);
+    if (value.empty()) {
+        // No conversation. Only a host that insists gets a header at all.
+        if (choice.source == SessionHeaderSource::Default) return;
+        value = process_session_id();
+    }
+    for (const auto& [k, v] : h)
+        if (k == choice.name) return;   // a caller already set it
+    h.push_back({choice.name, std::move(value)});
+}
+
+bool learn_session_header(std::string_view error_body, int http_status,
+                          std::string_view host, std::uint16_t port,
+                          std::string_view provider_id) {
+    if (host.empty()) return false;
+    const std::string name = provider::parse_required_session_header(error_body, http_status);
+    if (name.empty()) return false;
+    const auto now = session_header_for(host, port, provider_id);
+    // The user chose this host's header: respect it, say why it failed.
+    if (now.source == SessionHeaderSource::User) return false;
+    // Already sending exactly that (and it still failed): nothing to learn,
+    // and resending would loop.
+    if (now.source != SessionHeaderSource::Default && now.name == name) return false;
+    set_learned_session_header(host_key(std::string{host}, port), name);
+    AGT_LOG(Model, Warn, "session.header_learned",
+            "host={}:{} header={} http={}", host, port, name, http_status);
+    return true;
 }
 
 std::string local_transport_hint(const Endpoint& ep, int http_status,
@@ -2486,7 +2567,8 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     }
     hreq.headers = build_request_headers(req.auth, req.endpoint);
     append_session_header(hreq.headers,
-                          req.affinity_key.empty() ? req.session_key : req.affinity_key);
+                          req.affinity_key.empty() ? req.session_key : req.affinity_key,
+                          req.endpoint.host, req.endpoint.port, req.endpoint.label);
     // Copilot bills a premium request per USER-initiated turn. Tool-result
     // rounds and subagent calls are the agent's, and say so, or every tool
     // round costs a premium request. Same rule as Zed and VS Code.
@@ -2532,6 +2614,19 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
     http::CancelTokenPtr cancel_for_end = cancel;
     auto result = http::default_client(::agentty::IoAccess::grant()).stream(hreq, std::move(handler),
                                                 tos, cancel);
+
+    // A host that refuses the request for want of a session header it names
+    // ("missing x-opencode-session"): learn that name for the host and
+    // resend once. Same place and reasoning as the field learner below --
+    // `agentty run`, ACP, subagents, titles and compaction all heal, and
+    // learn_session_header() returns false for a name we already send, so
+    // this can't loop. A 4xx body never reached the sink.
+    if (sc.http_status >= 400 && sc.http_status < 500
+        && !(cancel && cancel->is_cancelled())
+        && learn_session_header(sc.error_body, sc.http_status, req.endpoint.host,
+                                req.endpoint.port, req.endpoint.label)) {
+        return run_stream_sync(std::move(req), std::move(ctx.sink), std::move(cancel));
+    }
 
     // An off field this host doesn't take (an older server 400s
     // reasoning_effort:"none", a strict one the template field): learn it
@@ -2591,6 +2686,19 @@ provider::StreamResult run_stream_sync(Request req, EventSink sink, http::Cancel
             std::string msg = "HTTP " + std::to_string(sc.http_status);
             if (auto said = provider_error_message(sc.error_body); !said.empty())
                 msg += ": " + said;
+            // Still refused for a session header even after learning (or the
+            // user pinned another one): say what to do, not "check the key".
+            const std::string wants =
+                provider::parse_required_session_header(sc.error_body, sc.http_status);
+            if (!wants.empty()) {
+                const auto now = session_header_for(req.endpoint.host, req.endpoint.port,
+                                                    req.endpoint.label);
+                msg += "  (sending the conversation id as " + now.name
+                     + (now.source == SessionHeaderSource::User
+                            ? ", pinned for this host in settings.json \"session_headers\")"
+                            : "; pin another for this host in settings.json \"session_headers\", e.g. \"=x-foo-session\")");
+                return msg;
+            }
             if (sc.http_status == 401 || sc.http_status == 403)
                 msg += provider::preset_for(req.endpoint.label)
                     ? "  (check the provider API key)"
@@ -3082,6 +3190,10 @@ HostProbe probe_host(Io io, const AuthHeader& auth, const Endpoint& endpoint) {
             r.dial_port = ov.port;
         }
         r.headers        = build_request_headers(auth, endpoint);
+        // A host that requires a session header (OpenCode Go) may refuse
+        // the model list without one too. No conversation here, so it's the
+        // per-process id; a default host gets nothing (key is empty).
+        append_session_header(r.headers, {}, endpoint.host, endpoint.port, endpoint.label);
         r.max_body_bytes = 2ull * 1024 * 1024;
         const auto t0   = std::chrono::steady_clock::now();
         auto resp       = http::default_client(io).send(r, tos);
