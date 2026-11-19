@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.59] - 2026-11-19
+
 ### Added
 - **OpenCode Go provider** (`OPENCODE_API_KEY`). It sends the
   `x-opencode-session` header OpenCode Go now requires, from the first request.
