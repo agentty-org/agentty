@@ -4,7 +4,28 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **OpenCode Go provider** (`OPENCODE_API_KEY`). It sends the
+  `x-opencode-session` header OpenCode Go now requires, from the first request.
+- **Every gateway gets its session id the way it wants it.** agentty sends a
+  stable per-conversation id so routing gateways keep a conversation on one
+  backend. The header name now fits the host: your pin, else one learned from
+  the host, else the provider's, else `x-session-id`. A host that refuses a
+  request for a "missing x-...-session" header has that name learned and the
+  same request resent, so the turn just works, and agentty remembers it. Hosted
+  vendors get an opaque id that differs per vendor; your own hosts get the
+  thread id. Pin one under `"session_headers"` in `settings.json`.
+- **A subagent's own tool calls show inside its Agent card**, one row each
+  (icon, tool, detail), newest five with older ones folded into "N earlier".
+- **^O on a subagent** lists every call it made, then its report as formatted
+  prose (headings, bold, code, bullets) instead of numbered raw markdown.
+
 ### Fixed
+- **Settings search finds the General toggles** such as "Keep retrying on
+  errors", and picking one lands on that row (#133).
+- **The composer no longer bounces while a subagent runs.** The Agent card now
+  only grows a row at a time.
+- **Session-header errors no longer say "check the API key".**
 - **Subagents read in parallel.** Independent read-only calls in one turn
   (several greps or reads) run side by side instead of one after another.
 - **The tool panel footer shows the real elapsed time** while tools run (it
