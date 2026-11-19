@@ -186,18 +186,22 @@ AcpClientDelegate default_sandbox_delegate() {
         constexpr auto        kTimeout = 120s;
 
         util::SubprocessResult r;
-        if (cwd && !cwd->empty()) {
-            // A cwd is requested — run through the shell form so we can `cd`
-            // first. Quote the cwd and each arg minimally (single-quote wrap).
-            auto shq = [](const std::string& s) {
-                std::string q = "'";
-                for (char c : s) { if (c == '\'') q += "'\\''"; else q += c; }
-                q += "'";
-                return q;
-            };
-            std::string cmd = "cd " + shq(*cwd) + " && " + shq(command);
-            for (const auto& a : args) cmd += " " + shq(a);
-            r = util::sandbox::run_shell_command(cmd, kMax, kTimeout);
+        auto shq = [](const std::string& s) {
+            std::string q = "'";
+            for (char c : s) { if (c == '\'') q += "'\\''"; else q += c; }
+            q += "'";
+            return q;
+        };
+        // Two shapes reach here. With `args`, it's an argv: the program and
+        // its arguments, each quoted. With NO args (Devin, Gemini, Claude
+        // Code), `command` is a whole shell line -- `ls -la | head -3` --
+        // and must run AS shell. Quoting it as one word made every such
+        // command "not found", and the agent concluded it had no shell.
+        std::string line = args.empty() ? command : shq(command);
+        for (const auto& a : args) line += " " + shq(a);
+        if (cwd && !cwd->empty()) line = "cd " + shq(*cwd) + " && " + line;
+        if (args.empty() || (cwd && !cwd->empty())) {
+            r = util::sandbox::run_shell_command(line, kMax, kTimeout);
         } else {
             std::vector<std::string> argv;
             argv.reserve(args.size() + 1);

@@ -80,6 +80,23 @@ TEST_CASE("ACP: prose after a tool card continues in a new message, not the fini
     CHECK(body == "# agentty\n\n**An agent harness** for your terminal.");
 }
 
+TEST_CASE("ACP: thinking after a tool card opens a new block below it") {
+    A::Model m;
+    m.d.selection.kind = A::provider::Kind::ExternalAcp;
+    m.d.selection.acp_agent_id = "devin";
+    m.s.phase = A::phase::Streaming{};
+    A::Message a; a.role = A::Role::Assistant;
+    m.d.current.messages.push_back(std::move(a));
+    m = apply(std::move(m), A::StreamThinkingDelta{"plan first", {}});
+    m = apply(std::move(m), A::StreamToolUseStart{A::ToolCallId{"t1"}, A::ToolName{"Listed ./"}});
+    m = apply(std::move(m), A::StreamToolUseEnd{A::ToolCallId{"t1"}});
+    m = apply(std::move(m), A::StreamThinkingDelta{"then this", {}});
+    const auto& msgs = m.d.current.messages;
+    REQUIRE(msgs.size() == 2u);
+    CHECK(msgs[0].thinking.find("then this") == std::string::npos);
+    CHECK(msgs[1].thinking.find("then this") != std::string::npos);
+}
+
 TEST_CASE("tool stream snapshot") {
     {
         auto decoded = A::http::test::decode_chunked({

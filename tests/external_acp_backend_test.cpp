@@ -629,6 +629,22 @@ void test_default_sandbox_delegate_roundtrip() {
     // Out-of-workspace write is refused by the write gate.
     CHECK(del.write_text_file("/etc/acp_should_not_write", "nope") == false);
 
+#if !defined(_WIN32)
+    // An agent's terminal/create with no args sends a whole shell line
+    // (Devin: "ls -la | head -3"). It must run as shell, pipes and all --
+    // not as one program named "ls -la | head -3".
+    {
+        auto t = del.run_terminal("printf 'a\\nb\\nc\\n' | head -2", {}, root.string());
+        CHECK(t.exit_code == 0);
+        CHECK(t.output.find("a") != std::string::npos);
+        CHECK(t.output.find("b") != std::string::npos);
+        CHECK(t.output.find("c") == std::string::npos);
+        // argv form still quotes: the arg stays one word.
+        auto t2 = del.run_terminal("printf", {"%s|%s", "x y", "z"}, std::nullopt);
+        CHECK(t2.output.find("x y|z") != std::string::npos);
+    }
+#endif
+
     fs::remove_all(root);
 }
 

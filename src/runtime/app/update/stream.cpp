@@ -1253,6 +1253,36 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
         return nullptr;
     };
 
+    // A delegated (ACP) agent streams thinking, prose, tool calls, then more
+    // thinking and prose, all in ONE stream; native providers start a new
+    // message per tool round. Output after a card must not land in the
+    // card's message: its markdown and its reasoning block were finished
+    // when the card appeared, so later deltas render one fragment per line,
+    // above the card. Close that message and continue in a fresh one -- the
+    // same shape a native tool round produces.
+    auto continue_after_acp_card = [&] {
+        if (m.d.selection.kind != provider::Kind::ExternalAcp
+            || m.d.current.messages.empty()
+            || m.d.current.messages.back().role != Role::Assistant
+            || m.d.current.messages.back().tool_calls.empty())
+            return;
+        auto& prev = m.d.current.messages.back();
+        if (!prev.pending_stream.empty()) {
+            prev.streaming_text += prev.pending_stream;
+            prev.pending_stream.clear();
+        }
+        if (!prev.streaming_text.empty()) {
+            if (prev.text.empty()) prev.text = std::move(prev.streaming_text);
+            else                   prev.text += std::move(prev.streaming_text);
+            std::string{}.swap(prev.streaming_text);
+        }
+        seal_thinking(m, m.now);
+        Message next;
+        next.role = Role::Assistant;
+        next.timestamp = prev.timestamp;
+        m.d.current.messages.push_back(std::move(next));
+    };
+
     return std::visit(overload{
         [&](StreamStarted) -> Cmd {
             auto now = m.now;
@@ -1360,33 +1390,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 }
                 return Cmd::none();
             }
-            if (!m.d.current.messages.empty()
-                && m.d.current.messages.back().role == Role::Assistant
-                && m.d.selection.kind == provider::Kind::ExternalAcp
-                && !m.d.current.messages.back().tool_calls.empty()) {
-                // A delegated agent streams prose, tool calls and more prose
-                // in ONE stream (native providers start a new message per
-                // tool round). Prose after a card must not land in the same
-                // message: its markdown widget was finished when the card
-                // appeared, and every later delta committed as its own
-                // paragraph -- one fragment per line. Close this message and
-                // continue in a fresh one, the same shape a native tool
-                // round produces, so the view handles it like any other.
-                auto& prev = m.d.current.messages.back();
-                if (!prev.pending_stream.empty()) {
-                    prev.streaming_text += prev.pending_stream;
-                    prev.pending_stream.clear();
-                }
-                if (!prev.streaming_text.empty()) {
-                    if (prev.text.empty()) prev.text = std::move(prev.streaming_text);
-                    else                   prev.text += std::move(prev.streaming_text);
-                    std::string{}.swap(prev.streaming_text);
-                }
-                Message next;
-                next.role = Role::Assistant;
-                next.timestamp = prev.timestamp;
-                m.d.current.messages.push_back(std::move(next));
-            }
+            continue_after_acp_card();
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
                 // Append to the smoothing buffer rather than directly to
@@ -1819,6 +1823,10 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // Captured for replay only — never rendered, and there's no
             // assistant placeholder to attach to during compaction.
             if (m.s.compacting) return Cmd::none();
+            // A delegated agent thinking again after a tool card: that's a
+            // new reasoning block, below the card -- not more of the closed
+            // one above it.
+            if (!e.text.empty()) continue_after_acp_card();
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
                 auto& msg = m.d.current.messages.back();
