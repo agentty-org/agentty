@@ -2004,13 +2004,19 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
                 return provider::stream_external_acp(c, agent_id, std::move(r),
                                                      std::move(s));
             };
-            provider::set_acp_agent_hooks({
-                .list_models = &provider::list_acp_agent_models,
-                .set_model   = &provider::set_acp_agent_model,
-                .answer      = &provider::answer_acp_permission,
-            });
             return router;
         };
+
+    // The rest of what the app asks of an ACP agent (its models, a model
+    // switch, a permission answer). Bound HERE, at startup: the model picker
+    // asks for the agent's models before any turn has run, and binding it
+    // inside build_router (per turn) left that first ask unanswered -- the
+    // picker said "the agent picks its own model" and the turn was blocked.
+    provider::set_acp_agent_hooks({
+        .list_models = &provider::list_acp_agent_models,
+        .set_model   = &provider::set_acp_agent_model,
+        .answer      = &provider::answer_acp_permission,
+    });
 
     // Both seams run on a turn worker (the TUI's turn task, a subagent, an
     // ACP turn), which holds no lock and passes its `unlocked` in.

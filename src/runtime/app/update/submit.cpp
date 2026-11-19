@@ -147,8 +147,11 @@ Cmd submit_message(Model& m) {
     // its /models fetch has landed and auto-selected a model. Refuse cleanly
     // and tell the user, keeping their text in the composer so nothing is
     // lost. (Hosted providers always have a model id, so this only bites the
-    // local-preset-before-models-loaded window it's meant to cover.)
-    if (m.d.model_id.value.empty()) {
+    // local-preset-before-models-loaded window it's meant to cover.) An
+    // external ACP agent is exempt: it always has its own default model, and
+    // an empty id just means "use it".
+    if (m.d.model_id.value.empty()
+        && m.d.selection.kind != provider::Kind::ExternalAcp) {
         // When the model list failed, that failure is the reason there's no
         // model (a rejected key, most often); say it, not "pick a model".
         if (!m.s.models_loading && !m.s.models_error.empty()) {
