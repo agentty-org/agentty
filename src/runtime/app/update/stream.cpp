@@ -3216,7 +3216,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     // the window has to be carried across the overwrite, and
                     // carried only if it was ever recorded.
                     if (!tc.is_terminal())
-                        tc.settle_failed(now, "cancelled");
+                        tc.settle_cancelled(now);
                     std::string{}.swap(tc.args_streaming);
                 }
                 if (last.text.empty() && last.tool_calls.empty()) {

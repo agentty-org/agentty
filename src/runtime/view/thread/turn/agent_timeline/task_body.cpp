@@ -113,13 +113,15 @@ std::string clean_report(std::string_view body) {
     return out;
 }
 
-// "◆ coder · turn 7/80 · 9 tools · 1m 12s" -> "▰▱▱▱▱▱▱▱ turn 7/80 · 9 tools · 1m 12s".
+// "◆ coder · turn 7/80 · 9 tools · 1m 12s" -> "▰▱▱▱▱▱▱▱  1m 12s · turn 7/80 · 9 tools".
 // The bar shows how much of the turn budget is spent, so a run nearing its
-// cap is visible at a glance. Empty when the line isn't a status line.
+// cap is visible at a glance. The elapsed time leads: in a narrow terminal
+// the row is clipped from the right, and the tool count is the part that
+// can go. Empty when the line isn't a status line.
 std::string status_row(std::string_view first) {
     const auto at = first.find("turn ");
     if (at == std::string_view::npos) return {};
-    const std::string_view rest = first.substr(at);
+    std::string_view rest = first.substr(at);
     int turn = 0, max = 0;
     std::size_t i = 5;
     while (i < rest.size() && rest[i] >= '0' && rest[i] <= '9') turn = turn * 10 + (rest[i++] - '0');
@@ -131,6 +133,16 @@ std::string status_row(std::string_view first) {
         const int filled = std::clamp((turn * kCells + max - 1) / max, 1, kCells);
         for (int k = 0; k < kCells; ++k) bar += k < filled ? "\xe2\x96\xb0" : "\xe2\x96\xb1";
         bar += "  ";
+    }
+    // The last " · " field is the clock when it looks like one ("1m 12s",
+    // "8s"): move it to the front.
+    constexpr std::string_view kSep = " \xc2\xb7 ";
+    if (const auto cut = rest.rfind(kSep); cut != std::string_view::npos) {
+        const std::string_view clock = rest.substr(cut + kSep.size());
+        const bool is_clock = !clock.empty() && clock.back() == 's'
+            && clock.find_first_not_of("0123456789hms. ") == std::string_view::npos;
+        if (is_clock)
+            return bar + std::string{clock} + std::string{kSep} + std::string{rest.substr(0, cut)};
     }
     return bar + std::string{rest};
 }
@@ -245,6 +257,13 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
     out.kind = Kind::CodeBlock;
     // content lines + 1 "⋯ N more" marker = the row ceiling.
     out.text = head_window(body, kTaskReportRows - 1);
+    // The rest is one key away: say which. Same phrasing reasoning blocks
+    // use ("⋯ 17 lines above · ^U to read").
+    if (const auto nl = out.text.rfind('\n');
+        nl != std::string::npos
+        && std::string_view{out.text}.substr(nl + 1).starts_with("\xe2\x8b\xaf ")
+        && (out.text.ends_with(" more lines") || out.text.ends_with(" more line")))
+        out.text += " \xc2\xb7 ^O to read";
     out.text_color = partial ? status_warn : text_primary;
     if (partial) out.chrome_color = status_warn;
     out.colorize = !partial;
@@ -255,3 +274,9 @@ bool task_body(const ToolUse& tc, maya::ToolBodyPreview::Config& out) {
 }
 
 } // namespace agentty::ui::detail
+
+namespace agentty::ui {
+std::string task_status_row(std::string_view first_line) {
+    return detail::status_row(first_line);
+}
+} // namespace agentty::ui

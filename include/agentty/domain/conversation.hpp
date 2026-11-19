@@ -453,6 +453,23 @@ struct ToolUse {
         status = Failed{started_at(), now, std::move(output)};
         if (window) std::get<Failed>(status).executing_since = *window;
     }
+    // The user stopped this call (Esc): CancelStream settles a live tool
+    // as Failed with exactly kCancelledOutput. Shown neutral, not red --
+    // nothing went wrong. A subagent's own calls still in flight are
+    // settled the same way, so no nested spinner outlives the run.
+    static constexpr std::string_view kCancelledOutput = "cancelled";
+    void settle_cancelled(std::chrono::steady_clock::time_point now) {
+        settle_failed(now, std::string{kCancelledOutput});
+        for (auto& c : children)
+            if (c.state == Child::State::Running) {
+                c.state  = Child::State::Failed;
+                c.output = std::string{kCancelledOutput};
+            }
+    }
+    [[nodiscard]] bool cancelled_by_user() const noexcept {
+        const auto* f = std::get_if<Failed>(&status);
+        return f && f->output == kCancelledOutput;
+    }
     void settle_done(std::chrono::steady_clock::time_point now,
                      std::string output,
                      std::vector<ImageContent> images = {}) {

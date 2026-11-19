@@ -378,6 +378,16 @@ void render_agents(int cols) {
                 "   101\tVerdict check_with(std::string_view path, std::string_view tool,\n   102\t                   sandbox_cfg::HandoffPolicy policy) {\n", 3),
         };
         scene("agent \xc2\xb7 nested (done)", "map the gate", {std::move(d)});
+
+        // Esc mid-run: the in-flight call settles with the agent, neutral.
+        ToolUse x = running(task("n3", "explorer", "List runtime headers"), 6,
+            "\xe2\x97\x86 explorer \xc2\xb7 turn 2/32 \xc2\xb7 2 tools \xc2\xb7 6s\n");
+        x.children = {
+            kid("x1", "glob", json{{"pattern", "include/agentty/runtime/**/*.hpp"}}, C::State::Done, "a\nb\n", 40),
+            kid("x2", "read", json{{"path", "include/agentty/runtime/cmd.hpp"}}, C::State::Running, "", 0),
+        };
+        x.settle_cancelled(now);
+        scene("agent \xc2\xb7 cancelled", "list the runtime headers", {std::move(x)});
     }
 
     {
@@ -718,6 +728,10 @@ static void render_viewer_agent(int cols) {
     o->viewing = true;
     m.ui.tool_viewer_scroll.y = 0;
     emit_element("tool output \xc2\xb7 agent", ui::tool_output_panel(m), cols);
+    // Tab to the failed call, Enter: its output opens in place.
+    o->child_cursor = 3;
+    o->child_open = {"k4"};
+    emit_element("tool output \xc2\xb7 agent \xc2\xb7 call opened", ui::tool_output_panel(m), cols);
 }
 
 int main(int argc, char** argv) {

@@ -63,4 +63,9 @@ private:
 };
 [[nodiscard]] bool building_frozen() noexcept;
 
+// A subagent's live status line ("◆ coder · turn 7/80 · …") as the card's
+// progress row: "▰▱…  1m 12s · turn 7/80 · 9 tools". Empty if it isn't one.
+// The ^O reader shows the same row for a running agent.
+[[nodiscard]] std::string task_status_row(std::string_view first_line);
+
 } // namespace agentty::ui

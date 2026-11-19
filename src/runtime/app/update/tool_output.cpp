@@ -133,9 +133,38 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
     // so stop following; on a running top entry you're watching again.
     auto landed = [&](tool_output::Open& o) {
         if (o.index != 0) o.following = false;
+        o.child_cursor = -1;
+        o.child_open.clear();
         arm_viewer_follow(m, o);
     };
     return std::visit(overload{
+        [&](ToolOutputChild& e) -> Cmd {
+            // A subagent's body: walk its calls, open one to read its output
+            // right there. No-op anywhere else.
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
+            if (!o || !o->viewing || o->index < 0
+                || o->index >= static_cast<int>(o->entries.size()))
+                return Cmd::none();
+            const auto& kids = o->entries[static_cast<std::size_t>(o->index)].call.children;
+            const int n = static_cast<int>(kids.size());
+            if (n == 0) return Cmd::none();
+            if (e.delta != 0) {
+                o->child_cursor = o->child_cursor < 0
+                    ? (e.delta > 0 ? 0 : n - 1)
+                    : std::clamp(o->child_cursor + e.delta, 0, n - 1);
+                m.ui.tool_viewer_tail = false;   // you're reading, not following
+            }
+            if (e.toggle) {
+                if (o->child_cursor < 0) o->child_cursor = n - 1;   // newest
+                const auto& id = kids[static_cast<std::size_t>(o->child_cursor)].id;
+                if (auto it = std::ranges::find(o->child_open, id); it != o->child_open.end())
+                    o->child_open.erase(it);
+                else
+                    o->child_open.push_back(id);
+                m.ui.tool_viewer_tail = false;
+            }
+            return Cmd::none();
+        },
         [&](OpenToolOutput) -> Cmd {
             auto entries = collect_viewer_entries(m);
             if (entries.empty()) {
@@ -209,6 +238,8 @@ Cmd tool_output_update(Model& m, msg::ToolOutputMsg tm) {
                 || o->index >= static_cast<int>(o->entries.size()))
                 return Cmd::none();
             o->viewing = true;
+            o->child_cursor = -1;
+            o->child_open.clear();
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
             arm_viewer_follow(m, *o);

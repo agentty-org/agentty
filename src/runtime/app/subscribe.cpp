@@ -846,6 +846,18 @@ std::optional<Msg> on_tool_viewer(const Model& m, const KeyEvent& ev) {
     const char32_t chord = (o && o->thinking_only) ? U'u' : U'o';
     if (const auto v = nav::char_view(ev); v && v->ctrl && (v->c == chord || v->c == chord - 32))
         return Msg{CloseToolOutput{true}};
+    // Reading a subagent with calls: Tab / Shift+Tab walk them, Enter opens
+    // the selected one's output in place. Elsewhere these keys keep their
+    // usual meaning.
+    if (o && o->viewing && o->index >= 0
+        && o->index < static_cast<int>(o->entries.size())
+        && !o->entries[static_cast<std::size_t>(o->index)].call.children.empty()) {
+        if (const auto* sk = std::get_if<SpecialKey>(&ev.key)) {
+            if (*sk == SpecialKey::Tab)     return Msg{ToolOutputChild{ev.mods.shift ? -1 : +1, false}};
+            if (*sk == SpecialKey::BackTab) return Msg{ToolOutputChild{-1, false}};
+            if (*sk == SpecialKey::Enter)   return Msg{ToolOutputChild{0, true}};
+        }
+    }
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
             if (*sk == SpecialKey::Left)     return Msg{ToolOutputStep{-1}};

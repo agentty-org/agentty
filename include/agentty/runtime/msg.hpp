@@ -808,6 +808,9 @@ struct ToolOutputNewest {};
 // output without bouncing through the list; in the list stage ←/→ are
 // unbound (the viewer swallows all keys while open, so they simply no-op).
 struct ToolOutputStep { int delta; };
+// In a subagent's body: Tab / Shift+Tab move between its calls (delta),
+// Enter opens or closes the selected call's output (toggle).
+struct ToolOutputChild { int delta = 0; bool toggle = false; };
 // Find in the body: / opens the prompt, typing searches as you go, Enter
 // keeps the query, Esc drops it, n / N go to the next / previous match.
 struct ToolOutputFind {
@@ -1533,7 +1536,7 @@ using ToolMsg = std::variant<
 using ToolOutputMsg = std::variant<
     OpenToolOutput, OpenThinking, CloseToolOutput,
     ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep,
-    ToolOutputFind, ToolOutputNewest>;
+    ToolOutputFind, ToolOutputNewest, ToolOutputChild>;
 
 using ProvidersMsg = std::variant<
     OpenProviders, CloseProviders, ProvidersMove,

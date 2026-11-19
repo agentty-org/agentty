@@ -507,9 +507,15 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
             const auto t0 = tc.started_at();
             for (std::size_t k = from; k < n; ++k) {
                 const ToolUse kt = child_as_tool_use(tc.children[k], t0);
+                std::string kd = tool_timeline_detail(kt);   // carries a failure's reason
+                // A cancelled call: the ⊘ icon says it; no "· cancelled" tail.
+                if (kt.cancelled_by_user())
+                    if (auto p = kd.rfind("  \xc2\xb7  cancelled"); p != std::string::npos
+                        && p + 13 == kd.size())
+                        kd.resize(p);
                 kids->push_back({
                     .name = tool_display_name(kt.name.value),
-                    .detail = tool_timeline_detail(kt),  // already carries a failure's reason
+                    .detail = std::move(kd),
                     .category_color = tool_category_color(kt.name.value),
                     .status = tool_event_status(kt),
                 });
@@ -557,9 +563,10 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
     //    panel that's already partially in native scrollback can't
     //    rewrite the rows that scrolled off.
     if (total > 0) {
-        int failed = 0, rejected = 0;
+        int failed = 0, rejected = 0, cancelled = 0;
         for (const auto& tc : tool_calls) {
-            if (tc.is_failed())   ++failed;
+            if (tc.cancelled_by_user()) ++cancelled;
+            else if (tc.is_failed())    ++failed;
             if (tc.is_rejected()) ++rejected;
         }
         const bool all_done = (done == total);
@@ -577,6 +584,11 @@ maya::AgentTimeline::Config agent_timeline_config(std::span<const ToolUse> tool_
                 f.glyph = "\xe2\x8a\x98";           // ⊘
                 f.text  = std::to_string(rejected) + " rejected";
                 f.color = warn;
+            } else if (cancelled > 0) {
+                // You stopped it: neutral, not an error.
+                f.glyph = "\xe2\x8a\x98";           // ⊘
+                f.text  = "cancelled";
+                f.color = muted;
             }
         } else {
             // The ONLY animated bytes in a live panel. Seam-safe because the

@@ -11,6 +11,8 @@
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
+#include "agentty/runtime/view/thread/turn/agent_timeline/tool_body_preview.hpp"   // task_status_row
+#include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"        // tool_event_status
 
 namespace A = agentty;
 namespace D = agentty::app::detail;
@@ -95,6 +97,35 @@ TEST_CASE("ACP: thinking after a tool card opens a new block below it") {
     REQUIRE(msgs.size() == 2u);
     CHECK(msgs[0].thinking.find("then this") == std::string::npos);
     CHECK(msgs[1].thinking.find("then this") != std::string::npos);
+}
+
+TEST_CASE("subagent: Esc settles its in-flight calls, and reads as cancelled, not failed") {
+    A::ToolUse tc;
+    tc.id = A::ToolCallId{"t"};
+    tc.name = A::ToolName{"task"};
+    A::ToolUse::Running r; r.started_at = agentty::app::kTestEpoch;
+    tc.status = r;
+    using C = A::ToolUse::Child;
+    tc.children = {C{"a", "glob", {}, C::State::Done, "x", 5},
+                   C{"b", "read", {}, C::State::Running, "", 0}};
+    tc.settle_cancelled(agentty::app::kTestEpoch);
+    CHECK(tc.cancelled_by_user());
+    CHECK(tc.children[0].state == C::State::Done);
+    CHECK(tc.children[1].state == C::State::Failed);
+    CHECK(tc.children[1].output == A::ToolUse::kCancelledOutput);
+    CHECK(A::ui::tool_event_status(tc) == maya::AgentEventStatus::Cancelled);
+    // A real failure stays a failure.
+    A::ToolUse f = tc;
+    f.settle_failed(agentty::app::kTestEpoch, "[subagent failed: HTTP 529]");
+    CHECK(!f.cancelled_by_user());
+    CHECK(A::ui::tool_event_status(f) == maya::AgentEventStatus::Failed);
+}
+
+TEST_CASE("subagent status row: the clock leads, so a narrow card keeps it") {
+    CHECK(A::ui::task_status_row("\xe2\x97\x86 coder \xc2\xb7 turn 7/80 \xc2\xb7 5 tools \xc2\xb7 1m 12s")
+          == "\xe2\x96\xb0\xe2\x96\xb1\xe2\x96\xb1\xe2\x96\xb1\xe2\x96\xb1\xe2\x96\xb1\xe2\x96\xb1"
+             "\xe2\x96\xb1\xe2\x96\xb1\xe2\x96\xb1  1m 12s \xc2\xb7 turn 7/80 \xc2\xb7 5 tools");
+    CHECK(A::ui::task_status_row("not a status line").empty());
 }
 
 TEST_CASE("tool stream snapshot") {

@@ -402,6 +402,9 @@ Element tool_output_panel(const Model& m) {
         std::uint64_t call_key    = 0;
         int           width       = -1;
         std::string   query;
+        int           child_cursor = -1;
+        std::size_t   child_open_n = 0;
+        std::string   child_open_key;
         std::vector<Element> rows;
         std::vector<int>     hit_rows;   // row of each match, in order
         int           out_lines   = 0;   // output lines (pre-wrap)
@@ -423,10 +426,15 @@ Element tool_output_panel(const Model& m) {
     const void* entries_key = static_cast<const void*>(o->entries.data());
     const void* bytes_key   = static_cast<const void*>(e.output.data());
     const auto call_key     = e.call.compute_render_key();
+    std::string child_open_key;
+    for (const auto& id : o->child_open) { child_open_key += id; child_open_key += '\x1f'; }
     if (cache.entries_key != entries_key || cache.index != cur
         || cache.bytes_key != bytes_key || cache.bytes_len != e.output.size()
         || cache.call_key != call_key || cache.width != pane_w
-        || cache.query != o->query) {
+        || cache.query != o->query
+        || cache.child_cursor != o->child_cursor || cache.child_open_key != child_open_key) {
+        cache.child_cursor   = o->child_cursor;
+        cache.child_open_key = std::move(child_open_key);
         cache.entries_key = entries_key;
         cache.index       = cur;
         cache.bytes_key   = bytes_key;
@@ -557,34 +565,83 @@ Element tool_output_panel(const Model& m) {
         if (task_view) {
             using S = ToolUse::Child::State;
             const auto& kids = e.call.children;
+            // While it runs: the same progress row the card shows (turn
+            // budget bar, time, tool count), so ^O isn't the less-informed
+            // view of a live agent.
+            if (e.is_live) {
+                std::string_view feed = e.call.progress_text();
+                if (feed.starts_with("\xe2\x97\x86 ")) {   // ◆ status line
+                    if (auto row = task_status_row(feed.substr(0, feed.find('\n'))); !row.empty())
+                        cache.rows.push_back(text(row, fg_of(tool_hue))
+                                             | height(1) | overflow(Overflow::Hidden));
+                }
+            }
             if (!kids.empty()) {
                 int bad = 0;
-                for (const auto& c : kids) bad += c.state == S::Failed;
+                for (const auto& c : kids)
+                    bad += c.state == S::Failed && c.output != ToolUse::kCancelledOutput;
                 std::string head = std::to_string(kids.size()) + (kids.size() == 1 ? " call" : " calls");
                 if (bad > 0) head += "  \xc2\xb7  " + std::to_string(bad) + " failed";
+                head += "  \xc2\xb7  Tab to pick, Enter to open";
                 cache.rows.push_back(text(head, fg_dim(muted)) | height(1) | overflow(Overflow::Hidden));
                 const auto t0 = e.call.started_at();
-                for (const auto& c : kids) {
+                const int out_w = std::max(10, pane_w - 6);
+                for (std::size_t ci = 0; ci < kids.size(); ++ci) {
+                    const auto& c = kids[ci];
                     const ToolUse kt = child_as_tool_use(c, t0);
-                    const bool failed = c.state == S::Failed;
+                    const bool cancelled = c.state == S::Failed && c.output == ToolUse::kCancelledOutput;
+                    const bool failed = c.state == S::Failed && !cancelled;
+                    const bool selected = o->child_cursor == static_cast<int>(ci);
+                    const bool open = std::ranges::find(o->child_open, c.id) != o->child_open.end();
                     const char* icon = c.state == S::Done ? "\xe2\x9c\x93 "     // ✓
                                      : failed ? "\xe2\x9c\x97 "                  // ✗
-                                              : "\xe2\x97\x8b ";                 // ○
+                                     : cancelled ? "\xe2\x8a\x98 "               // ⊘
+                                                 : "\xe2\x97\x8b ";             // ○
                     const Color ic = c.state == S::Done ? Color{success}
                                    : failed ? Color{danger} : Color{muted};
-                    std::string dur;
-                    if (c.ms >= 1000)
-                        dur = std::format("  {:.1f}s", static_cast<double>(c.ms) / 1000.0);
-                    else if (c.ms > 0)
-                        dur = std::format("  {}ms", c.ms);
+                    // Always a duration cell, so the column lines up: the
+                    // time once settled, "…" while running, "–" for none.
+                    std::string dur = c.state == S::Running ? std::string{"   \xe2\x80\xa6"}
+                                    : c.ms >= 1000 ? std::format("{:.1f}s", static_cast<double>(c.ms) / 1000.0)
+                                    : c.ms > 0     ? std::format("{}ms", c.ms)
+                                                   : std::string{"\xe2\x80\x93"};
+                    if (dur.size() < 7) dur.insert(0, 7 - std::min<std::size_t>(7, string_width(dur)), ' ');
                     cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                        text(selected ? "\xe2\x96\xb8" : " ", fg_bold(accent)),   // ▸ cursor
                         text(icon, fg_bold(ic)),
-                        text(tool_display_name(c.name), fg_bold(tool_category_color(c.name))),
+                        text(tool_display_name(c.name),
+                             cancelled ? fg_bold(muted) : fg_bold(tool_category_color(c.name))),
                         text("  "),
                         text(tool_timeline_detail(kt), failed ? fg_of(danger) : fg_dim(fg))
                             | clip | grow(1.0f) | shrink(1.0f),
-                        text(dur, fg_dim(muted))
+                        text("  " + dur, fg_dim(muted))
                     ).build() | height(1) | overflow(Overflow::Hidden));
+                    // Opened: the call's own output under it, on a rail.
+                    if (open) {
+                        std::string_view body = c.output;
+                        if (body.empty())
+                            body = c.state == S::Running ? "(still running)" : "(no output)";
+                        int shown_lines = 0;
+                        constexpr int kMaxOpenLines = 40;
+                        for (std::size_t p = 0; p <= body.size() && shown_lines < kMaxOpenLines;) {
+                            auto nl = body.find('\n', p);
+                            if (nl == std::string_view::npos) nl = body.size();
+                            for (auto v : wrap_rows(body.substr(p, nl - p), out_w)) {
+                                if (shown_lines++ >= kMaxOpenLines) break;
+                                cache.rows.push_back(hstack().width(Dimension::percent(100))(
+                                    text("   \xe2\x94\x8a ", fg_dim(failed ? danger : muted)),   // ┊
+                                    text(std::string{v}, failed ? fg_of(danger) : fg_dim(fg))
+                                        | clip | grow(1.0f) | shrink(1.0f)
+                                ).build() | height(1) | overflow(Overflow::Hidden));
+                            }
+                            if (nl == body.size()) break;
+                            p = nl + 1;
+                        }
+                        if (shown_lines >= kMaxOpenLines)
+                            cache.rows.push_back(text("   \xe2\x94\x8a \xe2\x8b\xaf more in the full log",
+                                                      fg_italic(muted))
+                                                 | height(1) | overflow(Overflow::Hidden));
+                    }
                 }
             }
 

@@ -155,6 +155,7 @@ maya::AgentEventStatus tool_event_status(const ToolUse& tc) {
     if (tc.is_running() || tc.is_approved()) return maya::AgentEventStatus::Running;
     if (tc.is_pending())                     return maya::AgentEventStatus::Pending;
     if (tc.is_done())                        return maya::AgentEventStatus::Done;
+    if (tc.cancelled_by_user())              return maya::AgentEventStatus::Cancelled;
     if (tc.is_failed())                      return maya::AgentEventStatus::Failed;
     return maya::AgentEventStatus::Rejected;
 }
@@ -852,6 +853,12 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         // count parsed from the report header ("Subagent report (type, N
         // turns):") so the card doubles as a compact result log.
         std::string type = safe("agent_type");
+        // Still streaming its arguments: say so rather than name a type the
+        // model hasn't picked (it was "general" for a second, then flipped
+        // to "explorer"). Pending/args-streaming only; once the call runs
+        // a missing type really is the default.
+        if (type.empty() && tc.is_pending())
+            return "starting\xe2\x80\xa6";
         if (type.empty()) type = "general";
         // Provenance: a PROJECT-scoped persona rode in on the workspace (a
         // clone could author its role prompt), so tag it so an injected agent

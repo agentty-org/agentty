@@ -96,6 +96,11 @@ struct Open {
     // the bottom of its output. New entries take you along while this
     // holds (see viewer_following). Moving to another entry clears it.
     bool               following = false;
+    // Reading a subagent (`task`) body: which of its calls the cursor is on
+    // (-1 = none yet), and which are expanded to show their output inline.
+    // Tab / Shift+Tab move, Enter toggles. Reset when the entry changes.
+    int                child_cursor = -1;
+    std::vector<std::string> child_open;   // child ids shown expanded
 };
 
 // What an entry is, across refreshes: the tool call, or the message for
