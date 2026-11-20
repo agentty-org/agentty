@@ -427,6 +427,10 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
         m.s.compacting    = false;
         m.s.compaction_ceiling = 0;
         m.s.phase         = phase::Idle{};
+        // The history was rewritten, so the warm prefix past the system
+        // block is gone: the next request starting cold is the plan working,
+        // not a cache bug.
+        m.s.cache_cold_expected = true;
         // The last reported prompt is the pre-compaction one, so the gauge
         // would keep showing the full size until the next turn. Take off what
         // the compaction reclaimed instead. The estimates only cover the
@@ -1292,6 +1296,16 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // (soon-to-be-small) prefix too, so it legitimately resets the
             // idle timer.
             m.s.last_wire_at = now;
+            // Cache verdict: one per request. The idle gap is measured from
+            // the END of the previous request (its last usage frame), and a
+            // compaction's summary request is not a turn the chip judges.
+            if (!m.s.compacting) {
+                m.s.cache_gap = m.s.cache_last_at.time_since_epoch().count() == 0
+                    ? std::chrono::seconds{0}
+                    : std::chrono::duration_cast<std::chrono::seconds>(
+                          now - m.s.cache_last_at);
+                m.s.cache_pending = true;
+            }
             // The phase variant guarantees a non-null ctx when active;
             // StreamStarted only fires after submit_message / retry has
             // already moved us into Streaming.
@@ -1952,6 +1966,18 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 m.s.cache_hit_ratio =
                     static_cast<double>(e.cache_read_input_tokens)
                     / static_cast<double>(m.s.tokens_in);
+                // First usage frame of the request decides the verdict;
+                // later copies (Anthropic repeats usage at message_delta)
+                // only move the "last activity" stamp.
+                if (m.s.cache_pending) {
+                    m.s.cache_pending = false;
+                    m.s.note_cache_usage(
+                        e.input_tokens, e.cache_read_input_tokens,
+                        e.cache_creation_input_tokens,
+                        !m.s.smart_turn_model.empty() ? m.s.smart_turn_model.value
+                                                      : m.d.model_id.value);
+                }
+                m.s.cache_last_at = m.now;
                 AGT_LOG(Perf, Debug, "turn.cache",
                         "in={} read={} create={} hit={:.3f}",
                         e.input_tokens, e.cache_read_input_tokens,
@@ -2049,6 +2075,9 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return Cmd::none();
         },
         [&](StreamFinished e) -> Cmd {
+            // The cache was last touched when this response ENDED; the idle
+            // gap the next request is judged by starts here.
+            m.s.cache_last_at = m.now;
             // A delegated agent's question still on screen when its turn
             // ends: the agent already moved on (the backend answered it
             // Cancelled), so the card is stale.

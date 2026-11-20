@@ -2,6 +2,7 @@
 // agentty::session — per-turn state for a single in-flight LLM request.
 // See docs/design/streaming.md for the full design rationale.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -506,6 +507,99 @@ struct StreamState {
     int    cache_read_tokens     = 0;
     int    cache_creation_tokens = 0;
 
+    // ── Cache verdict for the status bar ──
+    //
+    // A ratio alone lies both ways: a turn that adds a 60k tool output to a
+    // warm 20k prefix reads 25% and is perfectly healthy, and the first
+    // request of a thread reads ~0% and is EXPECTED to. So the verdict
+    // compares what was read against what the previous request left warm,
+    // and knows when cold is expected (new thread, compaction, model
+    // switch, an idle gap past the cache's lifetime).
+    enum class CacheVerdict : std::uint8_t {
+        None,        // nothing to say yet
+        Hit,         // read most of what the last request left warm
+        Warming,     // a cold start that was expected
+        Expired,     // cold because the idle gap outlived the cache
+        Miss,        // should have hit and did not: the prefix changed
+        Unreported,  // the provider never reports cache tokens
+    };
+    CacheVerdict cache_verdict = CacheVerdict::None;
+    int  cache_reuse_pct     = 0;      // Hit: % of the warm prefix this request reused
+    int  cache_prev_prefix   = 0;      // prefix (input+read+write) last request
+    int  cache_priced        = 0;      // cacheable requests priced in this thread
+    bool cache_ever_reported = false;  // any read/write ever seen this thread
+    bool cache_cold_expected = true;   // next request may start cold, legitimately
+    // One verdict per REQUEST: Anthropic reports usage at message_start AND
+    // again at message_delta, and folding the second copy would compare the
+    // request with itself and call every cold start a hit. Armed by
+    // StreamStarted, spent by the first frame that carries a prefix.
+    bool cache_pending       = false;
+    std::string cache_model;           // model the warm prefix belongs to
+    // Idle before the request in flight, measured from the last usage frame
+    // of the previous one (its END) — not from when it was sent, or a long
+    // stream followed by an instant follow-up would read as idle.
+    std::chrono::seconds cache_gap{0};
+    std::chrono::steady_clock::time_point cache_last_at{};
+
+    // Below this a provider will not cache at all (Anthropic and OpenAI both
+    // start at 1024 tokens), so there is nothing to report.
+    static constexpr int kMinCacheablePrefix = 1024;
+    // The rolling message breakpoints keep the providers' default lifetime:
+    // Anthropic's 5 min, and OpenAI evicts in 5-10 min of quiet. (The system
+    // block's 1 h breakpoint survives longer, which is why an expired turn
+    // still reads a little.)
+    static constexpr std::chrono::seconds kPrefixCacheTtl{300};
+
+    // Fold one request's usage into the verdict. Pure state transition, so
+    // the whole decision table is unit-testable without a stream.
+    void note_cache_usage(int input, int read, int write,
+                          std::string_view model) {
+        const int prefix = input + read + write;
+        if (prefix < kMinCacheablePrefix) {
+            // Too small to cache. Says nothing about the provider, and
+            // leaves no warm prefix behind for the next request to miss.
+            cache_verdict     = CacheVerdict::None;
+            cache_prev_prefix = 0;
+            cache_model       = std::string{model};
+            return;
+        }
+        if (read > 0 || write > 0) cache_ever_reported = true;
+        const bool model_changed = !cache_model.empty() && cache_model != model;
+        const bool expired = cache_gap >= kPrefixCacheTtl;
+        const bool cold_ok = cache_cold_expected || cache_prev_prefix == 0
+                          || model_changed;
+        // "Warm" is judged against what the LAST request left in the cache,
+        // not against this prompt: a turn that adds a 60k tool output to a
+        // warm 20k prefix reuses all of it and is perfectly healthy.
+        const bool reused_most =
+            cache_prev_prefix > 0 && read * 2 >= cache_prev_prefix;
+
+        if (!cache_ever_reported) {
+            // A provider may stay silent on the first request (OpenAI only
+            // reports reads, and there is nothing to read yet). Silence after
+            // a cacheable prefix that should have stayed warm means this host
+            // never says.
+            cache_verdict = (cold_ok || expired) ? CacheVerdict::None
+                                                 : CacheVerdict::Unreported;
+        } else if (reused_most || (read > 0 && read * 2 >= prefix)) {
+            cache_verdict   = CacheVerdict::Hit;
+            cache_reuse_pct = cache_prev_prefix > 0
+                ? std::min(100, static_cast<int>(
+                      static_cast<long long>(read) * 100 / cache_prev_prefix))
+                : static_cast<int>(static_cast<long long>(read) * 100 / prefix);
+        } else if (cold_ok) {
+            cache_verdict = CacheVerdict::Warming;
+        } else if (expired) {
+            cache_verdict = CacheVerdict::Expired;
+        } else {
+            cache_verdict = CacheVerdict::Miss;
+        }
+        cache_prev_prefix   = prefix;
+        cache_model         = std::string{model};
+        cache_cold_expected = false;
+        ++cache_priced;
+    }
+
     // Called whenever the current thread is swapped for another. Usage
     // numbers belong to the thread that produced them; `prompt` is the new
     // thread's last reported prompt (0 for a fresh one).
@@ -516,6 +610,17 @@ struct StreamState {
         cache_hit_ratio       = -1.0;
         cache_read_tokens     = 0;
         cache_creation_tokens = 0;
+        // The warm prefix belongs to the thread that built it.
+        cache_verdict         = CacheVerdict::None;
+        cache_reuse_pct       = 0;
+        cache_prev_prefix     = 0;
+        cache_priced          = 0;
+        cache_ever_reported   = false;
+        cache_cold_expected   = true;
+        cache_pending         = false;
+        cache_model.clear();
+        cache_gap             = {};
+        cache_last_at         = {};
     }
     int context_max = 200000;
     // Self-calibrating correction for the local byte-based token estimate.

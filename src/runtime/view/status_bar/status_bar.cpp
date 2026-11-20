@@ -1,6 +1,7 @@
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 
 #include "agentty/runtime/view/status_bar/context_gauge.hpp"
+#include "agentty/runtime/view/status_bar/cache_chip.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include "agentty/runtime/view/status_bar/status_banner.hpp"
@@ -23,6 +24,7 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
     // which also hands the shed ladder back ~14 columns for the phase
     // verb and context gauge on narrow terminals.
     cfg.context       = context_gauge_config(m);
+    cfg.cache         = cache_chip_config(m);
     cfg.status_banner = status_banner_config(m);
     // Shortcuts row retired — the welcome screen carries the full
     // keybinding map. While a thread is active the user has already
@@ -76,6 +78,11 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
         // breadcrumb
         k.add(cfg.breadcrumb.title)
          .add(static_cast<std::uint64_t>(cfg.breadcrumb.max_chars));
+        // cache chip — every field it paints
+        k.add(static_cast<std::uint64_t>(cfg.cache.state))
+         .add(static_cast<std::uint64_t>(cfg.cache.hit_pct))
+         .add(static_cast<std::uint64_t>(cfg.cache.tokens))
+         .add(static_cast<std::uint64_t>(cfg.cache.idle_secs));
         // status banner (takes over the slot entirely when non-empty)
         k.add(cfg.status_banner.text)
          .add(static_cast<std::uint64_t>(cfg.status_banner.is_error))
