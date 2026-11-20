@@ -265,31 +265,47 @@ void annotate(mcp::PluginModel& m) {
 
     // Which (server, tool) pairs ride the wire, keyed by the ToolDef's own
     // origin: the wire name may be shortened and hashed, the origin isn't.
-    std::unordered_set<std::string> on_wire_names;
+    // Deferred specs are tracked apart from full ones: both reach the model,
+    // but only one of them costs schema tokens up front.
+    std::unordered_set<std::string> on_wire_names, deferred_names;
     for (const auto& s : specs)
-        if (!s.defer_loading) on_wire_names.insert(s.name);
+        (s.defer_loading ? deferred_names : on_wire_names).insert(s.name);
     std::unordered_set<std::string> on_wire;          // "server\0tool"
+    std::unordered_set<std::string> deferred;         // "server\0tool"
     std::unordered_map<std::string, std::string> skipped;
     for (const auto& t : *cat) {
         if (t.origin != ToolOrigin::Mcp || t.origin_tool.empty()) continue;
         const std::string key = t.origin_id + '\0' + t.origin_tool;
         if (!t.skipped.empty()) skipped[key] = t.skipped;
         else if (on_wire_names.contains(t.name.value)) on_wire.insert(key);
+        else if (deferred_names.contains(t.name.value)) deferred.insert(key);
     }
     m.loaded_count = 0;
     m.on_demand_count = 0;
+    m.cap = {};
     for (auto& srv : m.servers) {
         if (srv.disabled || !srv.connected || srv.passthrough) continue;
         for (auto& t : srv.tools) {
             if (!t.enabled) continue;
             const std::string key = srv.name + '\0' + t.name;
-            if (auto it = skipped.find(key); it != skipped.end()) { t.skipped = it->second; continue; }
+            if (auto it = skipped.find(key); it != skipped.end()) {
+                t.skipped = it->second;
+                ++m.cap.skipped_by_schema;
+                continue;
+            }
             t.on_demand = !on_wire.contains(key);
             (t.on_demand ? m.on_demand_count : m.loaded_count) += 1;
+            if (deferred.contains(key)) ++m.cap.deferred;
+            // capped_by_provider means exactly one thing: the cap put tools
+            // off the wire even though the setting was "load all". That is
+            // the only case where a tool the user asked for was refused.
+            else if (t.on_demand && p.capped_by_provider)
+                ++m.cap.skipped_by_budget;
         }
     }
     m.schema_tokens = p.schema_tokens;
     m.capped_by_provider = p.capped_by_provider;
+    m.cap.max_tools = r.limits.max_tools;
 }
 
 } // namespace agentty::tools::tool_loading

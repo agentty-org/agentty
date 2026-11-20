@@ -80,10 +80,21 @@ std::atomic<std::size_t>& cap_resolutions() noexcept {
 // different value in the same process, and a process-lifetime latch
 // would silently serve the first caller's cap to everyone after.
 //
-// BOTH bound sites take the resolved value — scan_root's candidate
-// collection and the catalog slice in all() — so a raised cap lifts the
-// scan-side WORK bound too; capping only the slice would truncate
-// discovery of large libraries (the bug scan_root's comment documents).
+// The resolved cap bounds the CATALOG SLICE in all(), and nothing else: the
+// candidate walk is bounded by kMaxSkillCount below. It used to bound the
+// walk as well, which is exactly why "how many are installed" had no answer
+// — a walk that stops at 64 cannot count 185.
+//
+// The hard ceiling on BOTH axes of discovery: the largest catalog cap the
+// env var accepts, and the bound on the walk that COUNTS candidates.
+//
+// Counting is why this exists. "How many skills are installed" cannot be
+// answered from a walk that stops at the catalog cap, so the walk is bounded
+// by this instead while the PARSE still stops at `cap`. 4096 is the same
+// ceiling AGENTTY_MAX_SKILLS is clamped to, so the count and the largest
+// legal catalog agree.
+constexpr std::size_t kMaxSkillCount = 4096;
+
 [[nodiscard]] std::size_t resolve_catalog_cap() noexcept {
     cap_resolutions().fetch_add(1, std::memory_order_relaxed);
     if (const char* e = std::getenv("AGENTTY_MAX_SKILLS"); e && e[0]) {
@@ -92,7 +103,7 @@ std::atomic<std::size_t>& cap_resolutions() noexcept {
         const auto [ptr, ec] = std::from_chars(e, end, v);
         if (ec == std::errc{} && ptr == end) {
             if (v < 8)    return std::size_t{8};
-            if (v > 4096) return std::size_t{4096};
+            if (v > kMaxSkillCount) return kMaxSkillCount;
             return v;
         }
         agentty::util::dbglog("skills.catalog_cap.env",
@@ -338,11 +349,13 @@ void enumerate_resources(const fs::path& dir, std::vector<std::string>& out) {
 // Appends each found SKILL.md's mtime into `sig` so an in-place edit
 // (same dir mtime) still invalidates the cache.
 // `shadows` collects the skills this pass hides behind an earlier root.
-void scan_root(Io io, const fs::path& root, const std::string& source,
-               std::size_t cap, std::vector<Skill>& out, std::string& sig,
-               std::vector<Shadowed>& shadows) {
+// Returns the number of LEGAL skills (a SKILL.md that slugs to a name) this
+// root holds — catalogued or not. `out` still receives at most `cap` of them.
+std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
+                      std::size_t cap, std::vector<Skill>& out, std::string& sig,
+                      std::vector<Shadowed>& shadows) {
     std::error_code ec;
-    if (!fs::is_directory(root, ec) || ec) return;
+    if (!fs::is_directory(root, ec) || ec) return 0;
     auto mt = fs::last_write_time(root, ec);
     // file_time_type's rep is __int128 on Android/bionic — no std::to_string
     // overload matches. long long keeps ~292 years of ns range; a cache-sig
@@ -361,21 +374,27 @@ void scan_root(Io io, const fs::path& root, const std::string& source,
     //
     // The walk is BOUNDED on both axes. Depth stops at kMaxSkillDepth
     // (group folders organize a library; they do not nest arbitrarily),
-    // and the collection stops once enough candidates exist to fill
-    // kMaxSkills. Without the second bound the cap applied to the RESULT
-    // but not the WORK: a skills root that happened to contain a large
-    // tree was traversed in full on every cache miss.
+    // and the collection stops at kMaxSkillCount. Without a second bound
+    // the cap applied to the RESULT but not the WORK: a skills root that
+    // happened to contain a large tree was traversed in full on every
+    // cache miss.
+    //
+    // That bound is the COUNT ceiling, not `cap`, because the headline this
+    // walk feeds ("N of M catalogued") has to see every candidate to be
+    // honest. Parsing still stops at `cap` — the loop below skips the read
+    // once the catalog is full — so a raised ceiling costs directory
+    // entries, not file reads.
     std::vector<fs::path> mds;
     auto opts = fs::directory_options::skip_permission_denied;
     fs::recursive_directory_iterator it(root, opts, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
         // depth() is 0 for entries directly in the root, so a skill dir at
-        // depth d has its SKILL.md at d+1. Stop DESCENDING past the cap
-        // rather than stopping the walk: siblings at legal depth still
+        // depth d has its SKILL.md at d+1. Stop DESCENDING past the depth
+        // limit rather than stopping the walk: siblings at legal depth still
         // need visiting.
         if (it.depth() >= static_cast<int>(kMaxSkillDepth))
             it.disable_recursion_pending();
-        if (mds.size() >= cap) break;
+        if (mds.size() >= kMaxSkillCount) break;
         if (it->is_directory(ec)) {
             auto fname = it->path().filename().string();
             if (!fname.empty() && fname.front() == '.') {
@@ -418,8 +437,8 @@ void scan_root(Io io, const fs::path& root, const std::string& source,
     });
     mds.erase(std::unique(mds.begin(), mds.end()), mds.end());
 
+    std::size_t candidates = 0;
     for (const auto& md : mds) {
-        if (out.size() >= cap) break;
         // Slug = path below the root, sanitized to the spec's charset. A
         // SKILL.md sitting directly in the root has no directory of its
         // own — same as the flat scan, it is not a skill (a skill is a
@@ -440,6 +459,12 @@ void scan_root(Io io, const fs::path& root, const std::string& source,
         if (rel.empty() || rel == "." || rel.starts_with("..")) continue;
         const std::string slug = slug_from_path(rel);
         if (slug.empty()) continue;
+        // A legal skill on disk, whether or not the catalog has room for it.
+        // Counted here — after the slug check, so a group folder that names
+        // nothing is not a skill — and BEFORE the cap, which now bounds only
+        // the parse below.
+        ++candidates;
+        if (out.size() >= cap) continue;
         std::error_code mec;
         auto fmt = fs::last_write_time(md, mec);
         if (!mec)
@@ -508,6 +533,7 @@ void scan_root(Io io, const fs::path& root, const std::string& source,
         util::allow_read_root(io, s.dir);
         out.push_back(std::move(s));
     }
+    return candidates;
 }
 
 // The last discovery: the skills, what they shadowed, and the signature
@@ -518,6 +544,12 @@ void scan_root(Io io, const fs::path& root, const std::string& source,
 struct Discovery {
     std::vector<Skill>    skills;
     std::vector<Shadowed> shadows;
+    // Legal skills found on disk (before shadowing and before the cap), and
+    // the cap that produced `skills`. Cached WITH the catalog because they
+    // come from the same walk: an unchanged tree still costs zero, and a
+    // reader that wants the headline never re-walks.
+    std::size_t           installed = 0;
+    std::size_t           cap       = 0;
     std::string           sig = "\x01uninit";
     std::uint64_t         generation = 0;   // bumped on every rescan
 };
@@ -687,9 +719,12 @@ std::vector<Skill> all(Io io) {
     Discovery fresh;
     std::string parse_sig;
     for (const scope::Source& src : sources) {
-        scan_root(io, src.base / layout.leaf, std::string{scope::to_string(src.locus)},
-                  cap, fresh.skills, parse_sig, fresh.shadows);
+        fresh.installed +=
+            scan_root(io, src.base / layout.leaf,
+                      std::string{scope::to_string(src.locus)},
+                      cap, fresh.skills, parse_sig, fresh.shadows);
     }
+    fresh.cap = cap;
     fresh.sig = sig;
     std::vector<Skill> out = fresh.skills;
     // Publish with the next generation; retried if a racing scan got in first.
@@ -706,6 +741,19 @@ std::vector<Shadowed> shadowed(Io io) {
     (void)all(io);           // ensure a discovery has run
     auto d = discovery().current();
     return d ? d->shadows : std::vector<Shadowed>{};
+}
+
+CatalogStats catalog_stats(Io io) {
+    // Same shape as shadowed(): the cached discovery already knows the
+    // answer, so this never walks a second time.
+    (void)all(io);
+    CatalogStats st;
+    if (auto d = discovery().current()) {
+        st.cataloged = d->skills.size();
+        st.installed = d->installed;
+        st.cap       = d->cap;
+    }
+    return st;
 }
 
 bool shadowed_within_scope(Io io, std::string_view name) {
@@ -1072,6 +1120,18 @@ int cmd_skills(Io io) {
             ++dirty;
         }
     }
+    // The headline answers the question the list cannot: how many of the
+    // skills on disk are IN this list. Without it a capped catalog reads as
+    // the whole library — the failure mode that sends people looking for a
+    // skill they installed and cannot see.
+    const auto st = catalog_stats(io);
+    if (st.installed > st.cataloged)
+        std::printf("%zu of %zu skill(s) cataloged \xc2\xb7 cap %zu \xc2\xb7 %zu not cataloged"
+                    " \xc2\xb7 raise it: AGENTTY_MAX_SKILLS=<n>\n",
+                    st.cataloged, st.installed, st.cap, st.skipped());
+    else
+        std::printf("%zu skill(s) cataloged \xc2\xb7 cap %zu \xc2\xb7 all of them fit\n",
+                    st.cataloged, st.cap);
     std::printf("%zu skill(s), %d warning(s)\n", sk.size(), dirty);
     return dirty ? 1 : 0;
 }

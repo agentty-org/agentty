@@ -19,6 +19,10 @@ namespace agentty {
 struct Library {
     bool                                  loaded = false;
     std::vector<tools::skills::Skill>     skills;
+    // Cataloged vs installed, and the cap that decided — cached with the
+    // discovery, so carrying it here costs no extra walk. Panels show the
+    // gap instead of implying the catalog IS the library.
+    tools::skills::CatalogStats           skills_catalog;
     std::vector<tools::skills::Shadowed>  shadowed;
     scope::Approvals                      skill_approvals;
     std::vector<tools::commands::Command> commands;

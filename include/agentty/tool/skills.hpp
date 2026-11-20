@@ -132,6 +132,27 @@ struct Skill {
 // shadow user skills with the same name.
 [[nodiscard]] std::vector<Skill> all(Io);
 
+// What the catalog is up against: how many skills made it in, how many are
+// on disk, and the cap that decided. The gap is the whole point — a capped
+// catalog looks exactly like a small library unless the two numbers are
+// shown side by side.
+struct CatalogStats {
+    std::size_t cataloged = 0;  // in the catalog (what the model can see)
+    std::size_t installed = 0;  // legal skills found on disk
+    std::size_t cap       = 0;  // the cap applied to this pass
+
+    // Installed but not catalogued: over the cap, or shadowed by a skill of
+    // the same name in an earlier root. Never negative when discovery has
+    // not run yet.
+    [[nodiscard]] std::size_t skipped() const noexcept {
+        return installed > cataloged ? installed - cataloged : 0;
+    }
+};
+
+// Read the last discovery's numbers. Cheap and side-effect free: the counts
+// ride along with the cached catalog, so this never walks the disk again.
+[[nodiscard]] CatalogStats catalog_stats(Io);
+
 // Look up one skill by exact name. nullptr if absent. Finds
 // `disable-model-invocation` skills too (explicit lookup is allowed;
 // only the catalog hides them).

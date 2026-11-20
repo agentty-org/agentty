@@ -125,11 +125,20 @@ inline constexpr int kPickerChromeRows = 7;
     return 40;
 }
 
-[[nodiscard]] inline int panel_viewport_h() {
+// `reserved_rows` is what the CALLER already spends on rows that are not
+// list rows — a header, a detail footer, a summary line. kPickerChromeRows
+// covers the shared chrome and a two-row hint footer; a panel that draws a
+// multi-line detail under the list spends far more than that, and the
+// budget does not know it. Left unaccounted the panel grows past the
+// terminal, and a panel taller than the screen loses its BOTTOM edge — the
+// detail footer — which is exactly the text the reader opened it for. The
+// floor of 4 still wins: on a tiny terminal the list scrolls rather than the
+// panel spilling.
+[[nodiscard]] inline int panel_viewport_h(int reserved_rows = 0) {
     const int term_rows = panel_terminal_rows();
     // Leave the chrome plus a small breathing margin so the picker's top
     // border sits strictly below the viewport top with the base behind it.
-    const int avail = term_rows - kPickerChromeRows - 1;
+    const int avail = term_rows - kPickerChromeRows - 1 - std::max(0, reserved_rows);
     // The ceiling is the user's DENSITY, not the compiled-in kViewportH:
     // compact 10 / normal 14 / roomy 20 / tall 28. It stays a ceiling — a tall
     // setting on a 20-row terminal still yields what the terminal has, so

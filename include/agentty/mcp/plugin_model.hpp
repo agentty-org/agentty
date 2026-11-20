@@ -81,6 +81,28 @@ struct PluginModel {
     std::string loading;               // "auto" | "all" | "on_demand"
     std::size_t loaded_count      = 0; // schemas on the wire
     std::size_t on_demand_count   = 0; // enabled, found with tool_search
+    // The cap accounting, as ONE member: these four numbers are only
+    // meaningful together (a skip count without the cap that caused it says
+    // nothing), and keeping them grouped leaves PluginModel at the arity the
+    // visual-hash ladder supports.
+    struct Cap {
+        // Per-request cap on loaded tools: 0 = none (deferred providers),
+        // otherwise the provider's limit or AGENTTY_MCP_TOOL_BUDGET.
+        std::size_t max_tools         = 0;
+        // Addressable without a search: sent as a deferred spec, so the
+        // provider expands the schema when the model references it
+        // (Anthropic). Counted inside on_demand_count, broken out here
+        // because "on demand" reads as "the model has to look for it" and
+        // these it does not.
+        std::size_t deferred          = 0;
+        // Enabled and schema-valid, but off the wire because the cap refused
+        // it. The only skip the user did not choose: on demand is a setting,
+        // skipped-by-schema is a broken server, this one is "pin it or lose
+        // it".
+        std::size_t skipped_by_budget = 0;
+        // Enabled, but its schema would fail the whole request (server bug).
+        std::size_t skipped_by_schema = 0;
+    } cap;
     std::size_t schema_tokens     = 0; // what the loaded schemas cost
     std::size_t context_window    = 0; // the active model's, 0 = unknown
     // A hard provider limit (OpenAI/Gemini: 128 tools) put tools on demand

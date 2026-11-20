@@ -102,6 +102,16 @@ struct Open {
     // can impersonate the frame around it.
     std::vector<Row> rows;
 
+    // How many skills are on disk versus in this list, and the cap that
+    // decided. Carried from the Library (which got it from the same cached
+    // discovery), so the panel can say what it is NOT showing — the failure
+    // mode where a capped catalog reads as the whole library.
+    tools::skills::CatalogStats catalog;
+
+    [[nodiscard]] bool capped() const noexcept {
+        return catalog.skipped() > 0;
+    }
+
     [[nodiscard]] bool empty() const noexcept { return rows.empty(); }
 
     [[nodiscard]] const Row* selected() const noexcept {

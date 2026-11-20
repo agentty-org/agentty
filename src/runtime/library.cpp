@@ -10,6 +10,7 @@ namespace agentty {
 Library read_library(Io io) {
     Library l;
     l.skills          = tools::skills::all(io);
+    l.skills_catalog  = tools::skills::catalog_stats(io);   // cached: no 2nd walk
     l.shadowed        = tools::skills::shadowed(io);
     l.skill_approvals = tools::skills::load_approvals(io);
     l.commands        = tools::commands::all(io);
