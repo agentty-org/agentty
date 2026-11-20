@@ -5,6 +5,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **A buffering gateway no longer hides the status bar.** When a proxy holds
+  the model's output back, the whole status row used to turn into "network
+  gateway is buffering output — waiting…", re-armed every 15 s, so the
+  context gauge and everything else vanished for the length of the stream.
+  The phase chip now just reads `buffered…` until the burst lands.
 - **The Skills panel stays inside the terminal.** Its header and its detail
   footer are rows the list does not get, and the shared viewport estimate only
   knew the two-row hint chrome — so on a short terminal the panel grew taller

@@ -141,7 +141,12 @@ maya::PhaseChip::Config phase_chip_config(const Model& m) {
         if (const auto* a = active_ctx(m.s.phase);
             a && a->first_delta_at.time_since_epoch().count() == 0) {
             const auto& sel = m.d.selection;
-            if (sel.kind == provider::Kind::OpenAI
+            if (a->gateway_buffered)
+                // A proxy is holding the output; it will land in one burst.
+                // Lives HERE, not in the toast band, so the context gauge and
+                // the rest of the row stay visible while it waits.
+                verb = "buffered\xe2\x80\xa6";
+            else if (sel.kind == provider::Kind::OpenAI
                 && !sel.openai_endpoint.use_tls)
                 verb = "processing\xe2\x80\xa6";
         }

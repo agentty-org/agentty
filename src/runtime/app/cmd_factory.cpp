@@ -862,6 +862,7 @@ Cmd launch_stream(Model& m) {
         a->live_delta_bytes       = 0;
         a->rate_last_sample_at    = {};
         a->rate_last_sample_bytes = 0;
+        a->gateway_buffered       = false;
     }
 
     // Snapshot the per-turn retry counter so the worker can stamp it on

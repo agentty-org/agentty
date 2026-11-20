@@ -85,6 +85,13 @@ struct Active {
     // without treating proxy PING traffic as semantic model progress.
     bool transport_activity = false;
 
+    // A live intermediary is holding back response DATA (StreamBufferedWait).
+    // Shown as the phase chip's verb, not a toast: the toast band takes the
+    // WHOLE status row, and the http layer re-reports every 15 s, so a toast
+    // hid the context gauge for the entire buffered stream. Cleared when the
+    // first content byte lands (the burst arrived) and on every relaunch.
+    bool gateway_buffered = false;
+
     // Per-turn retry counters. truncation_retries: silent re-launches
     // when the stream EOFs mid-tool-args. transient_retries: 5xx /
     // network / overloaded / 429. Independent budgets.

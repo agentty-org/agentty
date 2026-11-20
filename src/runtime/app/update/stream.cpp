@@ -1311,6 +1311,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 a->first_delta_at         = {};
                 a->rate_last_sample_at    = {};
                 a->rate_last_sample_bytes = 0;
+                a->gateway_buffered       = false;
             }
             // Fresh stream is alive — wipe any leftover toast (retry
             // countdown, "error: …", "cancelled") from the previous
@@ -1339,6 +1340,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             if (auto* a = active_ctx(m.s.phase)) {
                 a->last_event_at = now;
                 if (!e.text.empty()) {
+                    a->gateway_buffered = false;   // the burst arrived
                     if (a->first_delta_at.time_since_epoch().count() == 0) {
                         a->first_delta_at = now;
                         // TTFT sample — request launch to first content
@@ -1501,6 +1503,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             if (auto* a = active_ctx(m.s.phase)) {
                 a->last_event_at = now;
                 if (!e.partial_json.empty()) {
+                    a->gateway_buffered = false;   // the burst arrived
                     if (a->first_delta_at.time_since_epoch().count() == 0) {
                         a->first_delta_at = now;
                         // See StreamTextDelta — same rationale.
@@ -2035,13 +2038,14 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             return Cmd::none();
         },
         [&](StreamBufferedWait) -> Cmd {
+            // No toast: it takes the whole status row and this re-fires
+            // every 15 s, so it would hide the context gauge for as long as
+            // the gateway buffers. The phase chip says "buffered" instead.
             if (auto* a = active_ctx(m.s.phase)) {
                 a->last_event_at = m.now;
                 a->transport_activity = true;
+                a->gateway_buffered = true;
             }
-            m.s.status = "network gateway is buffering output \xE2\x80\x94 waiting\xE2\x80\xA6";
-            m.s.status_until = m.now
-                             + std::chrono::seconds{20};
             return Cmd::none();
         },
         [&](StreamFinished e) -> Cmd {

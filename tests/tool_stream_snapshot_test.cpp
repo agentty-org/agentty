@@ -173,8 +173,10 @@ TEST_CASE("tool stream snapshot") {
     auto* buffered_ctx = A::active_ctx(m.s.phase);
     check(buffered_ctx && buffered_ctx->transport_activity,
           "buffered gateway wait is tracked as transport activity");
-    check(m.s.status.find("buffering output") != std::string::npos,
-          "buffered gateway wait explains burst delivery to the user");
+    check(buffered_ctx && buffered_ctx->gateway_buffered,
+          "buffered gateway wait is shown by the phase chip");
+    check(m.s.status.find("buffering output") == std::string::npos,
+          "buffered gateway wait never takes over the status row (hid ctx)");
 
     m = apply(std::move(m), A::StreamHeartbeat{});
     auto* model_ctx = A::active_ctx(m.s.phase);
