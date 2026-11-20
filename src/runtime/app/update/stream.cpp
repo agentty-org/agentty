@@ -1298,7 +1298,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             m.s.last_wire_at = now;
             // Cache verdict: one per request. The idle gap is measured from
             // the END of the previous request (its last usage frame), and a
-            // compaction's summary request is not a turn the chip judges.
+            // compaction's summary request is not a turn the gauge judges.
             if (!m.s.compacting) {
                 m.s.cache_gap = m.s.cache_last_at.time_since_epoch().count() == 0
                     ? std::chrono::seconds{0}

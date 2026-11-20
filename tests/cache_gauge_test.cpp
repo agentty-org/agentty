@@ -1,9 +1,9 @@
-// cache_chip_test — the status bar tells a healthy cache from a broken one.
+// cache_gauge_test — the status bar tells a healthy cache from a broken one.
 //
 // The usage numbers have always been there (and on the perf log channel),
 // but a ratio cannot tell an EXPECTED cold start from the one that matters.
 // These cases pin the decision table in StreamState::note_cache_usage, then
-// render the real status bar to show the chip survives every width without
+// render the real status bar to show the gauge survives every width without
 // costing the phase verb or the ctx gauge.
 
 #include "agtest.hpp"
@@ -117,10 +117,10 @@ TEST_CASE("cache verdict: providers that never say are n/a, small prompts silent
     CHECK(tiny.cache_verdict == V::None);      // nothing cacheable to report on
 }
 
-TEST_CASE("cache chip: renders every verdict with the right words") {
-    using S = maya::CacheChip::State;
-    auto paint = [](maya::CacheChip::Config c) {
-        return ascii_row(maya::CacheChip{c}.build(), 60);
+TEST_CASE("cache gauge: renders every verdict with the right words") {
+    using S = maya::CacheGauge::State;
+    auto paint = [](maya::CacheGauge::Config c) {
+        return ascii_row(maya::CacheGauge{c}.build(), 60);
     };
     CHECK(paint({.state = S::Hit, .hit_pct = 94, .tokens = 115'000}).find("CACHE 94% 115k")
           != std::string::npos);
@@ -134,7 +134,7 @@ TEST_CASE("cache chip: renders every verdict with the right words") {
     CHECK(paint({.state = S::Hidden}).find("CACHE") == std::string::npos);
 }
 
-TEST_CASE("cache chip: the status bar sheds it before phase or ctx") {
+TEST_CASE("cache gauge: the status bar sheds it before phase or ctx") {
     Model m;
     m.s.phase       = phase::Streaming{};
     m.s.tokens_in   = 115'000;
@@ -155,7 +155,7 @@ TEST_CASE("cache chip: the status bar sheds it before phase or ctx") {
         const std::string row = bar(w);
         CAPTURE(w);
         INFO(row);
-        // The ctx gauge outranks the cache chip at every width.
+        // The ctx gauge outranks the cache gauge at every width.
         if (row.find("CACHE") != std::string::npos)
             CHECK(row.find("CTX") != std::string::npos);
     }

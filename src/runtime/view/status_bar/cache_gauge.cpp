@@ -1,13 +1,13 @@
-#include "agentty/runtime/view/status_bar/cache_chip.hpp"
+#include "agentty/runtime/view/status_bar/cache_gauge.hpp"
 
 #include <chrono>
 
 namespace agentty::ui {
 
-maya::CacheChip::Config cache_chip_config(const Model& m) {
+maya::CacheGauge::Config cache_gauge_config(const Model& m) {
     using V = StreamState::CacheVerdict;
-    using S = maya::CacheChip::State;
-    maya::CacheChip::Config cfg;
+    using S = maya::CacheGauge::State;
+    maya::CacheGauge::Config cfg;
     const auto& s = m.s;
     switch (s.cache_verdict) {
     case V::None:
