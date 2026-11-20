@@ -14,6 +14,7 @@
 #include <maya/render/canvas.hpp>
 #include <maya/render/renderer.hpp>
 #include <maya/style/theme.hpp>
+#include <maya/widget/context_gauge.hpp>
 #include <maya/widget/status_bar.hpp>
 
 #include <chrono>
@@ -187,4 +188,56 @@ TEST_CASE("cache gauge: the status bar sheds it before phase or ctx") {
             for (int w : {160, 100, 80, 60})
                 std::printf("%3d |%s|\n", w, bar(w).c_str());
         }
+}
+
+namespace {
+// The bar's glyphs, cell by cell, as UTF-8.
+std::string utf8_row(const maya::Element& root, int width) {
+    maya::StylePool pool;
+    maya::Canvas canvas(width, 4, &pool);
+    canvas.clear();
+    maya::render_tree(root, canvas, pool, maya::theme::native, true);
+    std::string s;
+    for (int x = 0; x < width; ++x) {
+        const char32_t c = canvas.get(x, 0).character;
+        if (c < 0x80) { s.push_back(c ? static_cast<char>(c) : ' '); continue; }
+        s += static_cast<char>(0xE0 | (c >> 12));
+        s += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        s += static_cast<char>(0x80 | (c & 0x3F));
+    }
+    return s;
+}
+int count_of(const std::string& s, std::string_view g) {
+    int n = 0;
+    for (auto p = s.find(g); p != std::string::npos; p = s.find(g, p + g.size())) ++n;
+    return n;
+}
+}  // namespace
+
+TEST_CASE("ctx gauge: the bar shows how much of the context was cached") {
+    const std::string_view kCached = "\xe2\x96\x93";   // ▓
+    const std::string_view kFresh  = "\xe2\x96\x88";   // █
+    auto gauge = [](int used, int cached) {
+        return maya::ContextGauge{{.used = used, .max = 100'000, .cells = 10,
+                                   .cached = cached}}.build();
+    };
+    // 50% full, 40% of the window served from cache: 4 cached cells, 1 fresh.
+    const std::string split = utf8_row(gauge(50'000, 40'000), 60);
+    INFO(split);
+    CHECK(count_of(split, kCached) == 4);
+    CHECK(count_of(split, kFresh) == 1);
+    // Width never changes: the split is a shape, not extra columns.
+    CHECK(split == utf8_row(gauge(50'000, 40'000), 60));
+    const std::string plain = utf8_row(gauge(50'000, 0), 60);
+    CHECK(count_of(plain, kCached) == 0);
+    CHECK(count_of(plain, kFresh) == 5);
+    CHECK(plain.find_last_not_of(' ') == split.find_last_not_of(' '));
+    // A cached figure larger than `used` (stale frame) can never overdraw.
+    CHECK(count_of(utf8_row(gauge(30'000, 90'000), 60), kCached) == 3);
+
+    // Wired from the session: the status bar's gauge gets the read share.
+    Model m;
+    m.s.tokens_in         = 115'000;
+    m.s.cache_read_tokens = 108'000;
+    CHECK(ui::status_bar_config(m).context.cached == 108'000);
 }

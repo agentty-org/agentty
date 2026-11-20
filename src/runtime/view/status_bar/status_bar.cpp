@@ -74,7 +74,8 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
          .add(static_cast<std::uint64_t>(cfg.context.max))
          .add(static_cast<std::uint64_t>(cfg.context.cells))
          .add(static_cast<std::uint64_t>(cfg.context.show_bar))
-         .add(static_cast<std::uint64_t>(cfg.context.show_tokens));
+         .add(static_cast<std::uint64_t>(cfg.context.show_tokens))
+         .add(static_cast<std::uint64_t>(cfg.context.cached));
         // breadcrumb
         k.add(cfg.breadcrumb.title)
          .add(static_cast<std::uint64_t>(cfg.breadcrumb.max_chars));

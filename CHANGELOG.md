@@ -36,7 +36,9 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   cache use read `n/a`. Judged against what the previous request left warm,
   so a big new tool output does not look like a miss. On narrow terminals
   the word goes first, then the number, before the phase or the context
-  gauge.
+  gauge. The context bar itself now shows the same split: the part of the
+  window served from cache draws as `▓`, the part paid in full this
+  request as `█` — same width, readable without colour.
 - **The plan is always in view.** The composer footer's empty middle now
   carries the agent's plan: a task meter, `3/7` and the item in flight
   (`●`), or the next one up (`○`) between steps — no `^T` needed. It is
