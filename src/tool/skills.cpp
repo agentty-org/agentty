@@ -349,8 +349,11 @@ void enumerate_resources(const fs::path& dir, std::vector<std::string>& out) {
 // Appends each found SKILL.md's mtime into `sig` so an in-place edit
 // (same dir mtime) still invalidates the cache.
 // `shadows` collects the skills this pass hides behind an earlier root.
-// Returns the number of LEGAL skills (a SKILL.md that slugs to a name) this
-// root holds — catalogued or not. `out` still receives at most `cap` of them.
+// Returns how many legal skills (a SKILL.md that slugs to a name) the CAP
+// turned away — the only gap "raise AGENTTY_MAX_SKILLS" can close. Shadowed
+// copies, oversized files and unparseable frontmatter are not in it: they
+// have their own reports, and counting them sent people to raise a cap that
+// was never hit. `out` receives at most `cap` skills.
 std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
                       std::size_t cap, std::vector<Skill>& out, std::string& sig,
                       std::vector<Shadowed>& shadows) {
@@ -437,7 +440,7 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
     });
     mds.erase(std::unique(mds.begin(), mds.end()), mds.end());
 
-    std::size_t candidates = 0;
+    std::size_t over_cap = 0;
     for (const auto& md : mds) {
         // Slug = path below the root, sanitized to the spec's charset. A
         // SKILL.md sitting directly in the root has no directory of its
@@ -459,12 +462,13 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
         if (rel.empty() || rel == "." || rel.starts_with("..")) continue;
         const std::string slug = slug_from_path(rel);
         if (slug.empty()) continue;
-        // A legal skill on disk, whether or not the catalog has room for it.
-        // Counted here — after the slug check, so a group folder that names
-        // nothing is not a skill — and BEFORE the cap, which now bounds only
-        // the parse below.
-        ++candidates;
-        if (out.size() >= cap) continue;
+        // A legal skill the catalog has no room for. Counted after the slug
+        // check (a group folder that names nothing is not a skill); the cap
+        // bounds the parse, not the walk, so the count is complete.
+        if (out.size() >= cap) {
+            ++over_cap;
+            continue;
+        }
         std::error_code mec;
         auto fmt = fs::last_write_time(md, mec);
         if (!mec)
@@ -533,7 +537,7 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
         util::allow_read_root(io, s.dir);
         out.push_back(std::move(s));
     }
-    return candidates;
+    return over_cap;
 }
 
 // The last discovery: the skills, what they shadowed, and the signature
@@ -544,12 +548,12 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
 struct Discovery {
     std::vector<Skill>    skills;
     std::vector<Shadowed> shadows;
-    // Legal skills found on disk (before shadowing and before the cap), and
-    // the cap that produced `skills`. Cached WITH the catalog because they
-    // come from the same walk: an unchanged tree still costs zero, and a
-    // reader that wants the headline never re-walks.
-    std::size_t           installed = 0;
-    std::size_t           cap       = 0;
+    // Legal skills the cap turned away, and the cap that produced `skills`.
+    // Cached WITH the catalog because they come from the same walk: an
+    // unchanged tree still costs zero, and a reader that wants the headline
+    // never re-walks.
+    std::size_t           over_cap = 0;
+    std::size_t           cap      = 0;
     std::string           sig = "\x01uninit";
     std::uint64_t         generation = 0;   // bumped on every rescan
 };
@@ -673,8 +677,8 @@ std::vector<Skill> all(Io io) {
     // locked. Two callers racing a change both scan, and the second's
     // identical result replaces the first's: wasted work, never a wrong one.
 
-    // Resolve the cap ONCE for this pass — every root's scan bound and
-    // every catalog slice below share this value, so the environment
+    // Resolve the cap ONCE for this pass — every root's catalog slice below
+    // shares this value, so the environment
     // cannot change the answer part-way through a discovery, and a
     // malformed value logs its breadcrumb exactly once.
     const std::size_t cap = resolve_catalog_cap();
@@ -719,7 +723,7 @@ std::vector<Skill> all(Io io) {
     Discovery fresh;
     std::string parse_sig;
     for (const scope::Source& src : sources) {
-        fresh.installed +=
+        fresh.over_cap +=
             scan_root(io, src.base / layout.leaf,
                       std::string{scope::to_string(src.locus)},
                       cap, fresh.skills, parse_sig, fresh.shadows);
@@ -750,7 +754,7 @@ CatalogStats catalog_stats(Io io) {
     CatalogStats st;
     if (auto d = discovery().current()) {
         st.cataloged = d->skills.size();
-        st.installed = d->installed;
+        st.installed = d->skills.size() + d->over_cap;
         st.cap       = d->cap;
     }
     return st;

@@ -138,12 +138,13 @@ struct Skill {
 // shown side by side.
 struct CatalogStats {
     std::size_t cataloged = 0;  // in the catalog (what the model can see)
-    std::size_t installed = 0;  // legal skills found on disk
+    std::size_t installed = 0;  // cataloged + what the cap turned away
     std::size_t cap       = 0;  // the cap applied to this pass
 
-    // Installed but not catalogued: over the cap, or shadowed by a skill of
-    // the same name in an earlier root. Never negative when discovery has
-    // not run yet.
+    // Turned away by the cap — exactly the gap AGENTTY_MAX_SKILLS closes.
+    // Shadowed copies and oversized files are NOT here: they have their own
+    // reports (agentty skill list), and raising the cap would not fix them.
+    // Zero before discovery has run.
     [[nodiscard]] std::size_t skipped() const noexcept {
         return installed > cataloged ? installed - cataloged : 0;
     }

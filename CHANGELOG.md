@@ -20,7 +20,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   cataloged` instead of listing a truncated catalog as if it were the whole
   library — the failure mode where a skill you installed is simply absent.
   The installed count rides along with the cached discovery, so it costs no
-  extra walk, and the panel stays silent when everything fits.
+  extra walk, and the panel stays silent when everything fits. Shadowed and
+  oversized skills are not counted as "not cataloged" — raising the cap
+  cannot bring them back, and they have their own reports (#134, thanks
+  @davidwed).
 - **The Plugins pane shows the tool cap and what it refused.** The header now
   names the per-request maximum (the provider's limit, your
   `AGENTTY_MCP_TOOL_BUDGET`, or "no cap" on providers that defer schemas),

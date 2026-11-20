@@ -507,10 +507,9 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     util::set_workspace_root(::agentty::IoAccess::grant(), work);
 
     // The knob is read per discovery pass, and all() rescans only when its
-    // mtime signature changes — so each sub-case below shifts the sig by
-    // changing how many SKILL.md mtimes the (cap-bounded) walk collects.
-    // Adjacent sub-cases never share a signature while expecting different
-    // results, so no forced cache-buster writes are needed.
+    // mtime signature (plus the cap) changes. Adjacent sub-cases never share
+    // a signature while expecting different results, so no forced
+    // cache-buster writes are needed.
 
     // RAII on the knob itself: restore (or clear) even if a CHECK throws.
     const char* old_raw = std::getenv("AGENTTY_MAX_SKILLS");
@@ -552,8 +551,8 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
             "---\nname: " + slug + "\ndescription: cap test\n---\nB\n");
     }
 
-    // ── Default (unset): kMaxSkills entries survive the walk AND the
-    // catalog slice — the cap applies to the WORK as well as the RESULT.
+    // ── Default (unset): kMaxSkills entries survive the catalog slice.
+    // The walk itself runs to kMaxSkillCount so the rest can be counted.
     unset_env();
     CHECK(skills::all(::agentty::IoAccess::grant()).size() == skills::kMaxSkills);
 
@@ -576,7 +575,7 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
         const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
         CHECK(st.cataloged == 10);
         CHECK(st.cap == 10);
-        CHECK(st.installed >= kSkills);
+        CHECK(st.installed == kSkills);
         CHECK(st.cataloged + st.skipped() == st.installed);
     }
     // …and with room for all of them the gap closes, which is what makes the
@@ -588,6 +587,20 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
         CHECK(st.installed == st.cataloged);
         CHECK(st.skipped() == 0);
     }
+    // A shadowed copy is NOT a cap casualty. The headline tells you to raise
+    // AGENTTY_MAX_SKILLS, which can never bring a shadowed copy back — it has
+    // its own report. Counting it would show "1 not cataloged" under a cap
+    // that was never hit.
+    {
+        const fs::path dup = work / ".agentty/skills/cap-skill-3";
+        write_file_at(dup / "SKILL.md",
+            "---\nname: cap-skill-3\ndescription: project copy\n---\nB\n");
+        const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
+        CHECK(st.cataloged == kSkills);
+        CHECK(st.skipped() == 0);
+        CHECK(!skills::shadowed(::agentty::IoAccess::grant()).empty());
+        fs::remove_all(work / ".agentty", ec);
+    }
 
     // ── Clamp floor: below the floor pins to it.
     set_env("2");
@@ -598,7 +611,7 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     CHECK(skills::all(::agentty::IoAccess::grant()).size() == skills::kMaxSkills);
 
     // ── ONE resolution per discovery pass ───────────────────────────
-    // The cap bounds scan_root's WALK, so it used to be consulted per
+    // The cap used to bound scan_root's WALK, so it was consulted per
     // directory entry — and on the malformed path that emitted the
     // dbglog breadcrumb per entry: measured 120 ERROR-level lines for a
     // single pass over 40 skills. all() runs every turn and dbglog feeds
