@@ -148,6 +148,25 @@ int main() {
             if (s.name == "demo")
                 for (const auto& t : s.tools) if (t.on_demand) any_marked = true;
         check(!any_marked, "a disabled server's tools are never marked on demand");
+
+        // 5b. The cap accounting. Two valid tools are never over any cap, so
+        //     both skip counters must be zero — and the loaded count can
+        //     never exceed the cap that produced it. This is the invariant
+        //     the pane's "N left out by the cap" line is built on.
+        check(m_on.cap.skipped_by_schema == 0,
+              "a server with valid schemas skips none of them (got "
+              + std::to_string(m_on.cap.skipped_by_schema) + ")");
+        check(m_on.cap.skipped_by_budget == 0,
+              "two tools fit any cap, so nothing is left out (got "
+              + std::to_string(m_on.cap.skipped_by_budget) + ")");
+        check(m_on.cap.deferred <= m_on.on_demand_count,
+              "deferred tools are a subset of on-demand (deferred "
+              + std::to_string(m_on.cap.deferred) + " > on demand "
+              + std::to_string(m_on.on_demand_count) + ")");
+        check(m_on.cap.max_tools == 0 || m_on.loaded_count <= m_on.cap.max_tools,
+              "loaded never exceeds the cap (loaded "
+              + std::to_string(m_on.loaded_count) + ", max "
+              + std::to_string(m_on.cap.max_tools) + ")");
         (void)tools::plugin::set_server_disabled(::agentty::IoAccess::grant(), agtest::cap(), cfg, "demo", false);
         (void)tools::reload_mcp_plugins();
     }

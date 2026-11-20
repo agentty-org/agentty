@@ -207,6 +207,19 @@ AGENTTY_VISUAL_MIX_RUNG(9,  m0, m1, m2, m3, m4, m5, m6, m7, m8)
 AGENTTY_VISUAL_MIX_RUNG(10, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9)
 AGENTTY_VISUAL_MIX_RUNG(11, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10)
 AGENTTY_VISUAL_MIX_RUNG(12, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11)
+// Rungs past 12 exist because the panels and PluginModel grew past it: an
+// added field is a normal change, and it should not force a type to hand-
+// write visual_parts (or, worse, look for a nesting trick) just to keep the
+// hash compiling. The ceiling is still a ceiling — a type beyond it still
+// trips the static_assert, which is what keeps the walk honest.
+AGENTTY_VISUAL_MIX_RUNG(13, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12)
+AGENTTY_VISUAL_MIX_RUNG(14, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13)
+AGENTTY_VISUAL_MIX_RUNG(15, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14)
+AGENTTY_VISUAL_MIX_RUNG(16, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15)
+AGENTTY_VISUAL_MIX_RUNG(17, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16)
+AGENTTY_VISUAL_MIX_RUNG(18, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17)
+AGENTTY_VISUAL_MIX_RUNG(19, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18)
+AGENTTY_VISUAL_MIX_RUNG(20, m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19)
 #undef AGENTTY_VISUAL_MIX_RUNG
 template <class>
 inline constexpr bool is_ref = false;

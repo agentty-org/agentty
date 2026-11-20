@@ -70,7 +70,13 @@ namespace agentty::skills_panel {
 inline auto visual_parts(const Open& p) {
     return std::make_tuple(p.index,
                            visual::ref(p.scroll),
-                           visual::exempt);  // rows: snapshot, fixed at open
+                           visual::exempt,   // rows: snapshot, fixed at open
+                           // catalog: the same snapshot, same reason. It is
+                           // read from the Library once in scan(), so it
+                           // cannot change while the panel lives — and the
+                           // header line it feeds is part of the rows' story,
+                           // not a second input.
+                           visual::exempt);
 }
 static_assert(visual::parts_cover_all<Open>);
 

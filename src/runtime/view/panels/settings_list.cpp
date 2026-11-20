@@ -164,6 +164,12 @@ Element settings_list_panel(const Model& m) {
         const std::string mode = pm.loading == "all"       ? "load all"
                                : pm.loading == "on_demand" ? "load on demand"
                                                            : "auto";
+        // The cap, next to the counts. "N tools" alone says nothing about how
+        // many may ride at once, and without it a tool the cap refused is
+        // indistinguishable from one the model simply has to search for.
+        if (total > 0)
+            line1 += pm.cap.max_tools > 0 ? " \xc2\xb7 max " + std::to_string(pm.cap.max_tools)
+                                          : " \xc2\xb7 no cap";
         line2 = mode;
         if (pm.schema_tokens > 0) {
             line2 += " \xc2\xb7 ~" + std::to_string((pm.schema_tokens + 500) / 1000) + "k tokens";
@@ -172,12 +178,26 @@ Element settings_list_panel(const Model& m) {
                        + "% of context)";
         }
         if (pm.on_demand_count > 0) line2 += " \xc2\xb7 the model searches for the rest";
+        if (pm.cap.deferred > 0)
+            line2 += " \xc2\xb7 " + std::to_string(pm.cap.deferred)
+                   + " deferred (addressable by name)";
         cfg.header.push_back(h(text("  "), text(line1, fg_bold(fg))).build());
         cfg.header.push_back(h(text("  "), text(line2, fg_dim(muted))).build());
-        if (pm.capped_by_provider)
-            cfg.header.push_back(h(text("  "),
-                text("this provider takes at most 128 tools at once; pin what you need with p",
-                     fg_of(warn))).build());
+        // Enabled but not on the wire, in two sentences because there are two
+        // reasons: the cap (the user can fix it by pinning) and a schema the
+        // request would fail on (only the server can fix it).
+        if (pm.cap.skipped_by_budget > 0 || pm.cap.skipped_by_schema > 0) {
+            std::string left;
+            if (pm.cap.skipped_by_budget > 0)
+                left = std::to_string(pm.cap.skipped_by_budget) + " left out by the cap"
+                       " \xe2\x80\x94 pin what you need with p";
+            if (pm.cap.skipped_by_schema > 0) {
+                if (!left.empty()) left += "; ";
+                left += std::to_string(pm.cap.skipped_by_schema)
+                      + " left out by an invalid schema";
+            }
+            cfg.header.push_back(h(text("  "), text(left, fg_of(warn))).build());
+        }
     } else {
         cfg.header.push_back(h(
             text("  "), text(se::subtitle(o->concern), fg_dim(muted))

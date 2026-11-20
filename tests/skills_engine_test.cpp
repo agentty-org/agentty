@@ -567,6 +567,28 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     set_env("10");
     CHECK(skills::all(::agentty::IoAccess::grant()).size() == 10);
 
+    // ── The headline: how many are on disk, INDEPENDENT of the cap ──
+    // A capped catalog is indistinguishable from a small library unless the
+    // two numbers are reported side by side, so `installed` must not be
+    // bounded by the cap — counting is why the walk stops at kMaxSkillCount
+    // instead. This is the assertion that keeps the number honest.
+    {
+        const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
+        CHECK(st.cataloged == 10);
+        CHECK(st.cap == 10);
+        CHECK(st.installed >= kSkills);
+        CHECK(st.cataloged + st.skipped() == st.installed);
+    }
+    // …and with room for all of them the gap closes, which is what makes the
+    // number above trustworthy rather than a constant offset.
+    set_env("200");
+    {
+        const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
+        CHECK(st.cataloged == kSkills);
+        CHECK(st.installed == st.cataloged);
+        CHECK(st.skipped() == 0);
+    }
+
     // ── Clamp floor: below the floor pins to it.
     set_env("2");
     CHECK(skills::all(::agentty::IoAccess::grant()).size() == 8);

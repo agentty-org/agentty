@@ -16,6 +16,7 @@ namespace agentty::skills_panel {
 
 Open scan(const Library& lib) {
     Open out;
+    out.catalog = lib.skills_catalog;
 
     const auto& all = lib.skills;
     const auto& approvals = lib.skill_approvals;

@@ -4,6 +4,31 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The Skills panel stays inside the terminal.** Its header and its detail
+  footer are rows the list does not get, and the shared viewport estimate only
+  knew the two-row hint chrome — so on a short terminal the panel grew taller
+  than the screen and painted the list straight over its own footer, which is
+  where the description, the findings and the caveat live. The list budget is
+  now derived from what the panel actually spends, blank spacer rows yield
+  first when it is still too tight, and a footer line that wraps keeps its
+  indent instead of snapping back to column 0.
+
+### Added
+- **The skill catalog says what it is leaving out.** `agentty skills` and the
+  Skills panel (Ctrl+K) now report `N of M cataloged · cap C · K not
+  cataloged` instead of listing a truncated catalog as if it were the whole
+  library — the failure mode where a skill you installed is simply absent.
+  The installed count rides along with the cached discovery, so it costs no
+  extra walk, and the panel stays silent when everything fits.
+- **The Plugins pane shows the tool cap and what it refused.** The header now
+  names the per-request maximum (the provider's limit, your
+  `AGENTTY_MCP_TOOL_BUDGET`, or "no cap" on providers that defer schemas),
+  how many tools are deferred and addressable by name, and how many were left
+  out — split into "by the cap" (pin it with `p`) and "by an invalid schema"
+  (only the server can fix it). Previously a tool the cap refused looked
+  exactly like one the model searches for.
+
 ## [0.9.60] - 2026-11-19
 
 ### Added
