@@ -20,6 +20,15 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   indent instead of snapping back to column 0.
 
 ### Added
+- **The plan is always in view.** The composer footer's empty middle now
+  carries the agent's plan: a task meter, `3/7` and the item in flight
+  (`●`), or the next one up (`○`) between steps — no `^T` needed. It is
+  responsive at every width: the label shortens with `…`, then drops to the
+  meter and the count, and steps aside entirely before it would ever push
+  the model badge or the mode chip off the row. An unfinished plan stays
+  when the agent stops ("stopped at 3/7"); a finished one shows its `✓`
+  for the rest of the turn and then goes quiet. Switching threads swaps in
+  that thread's plan instead of leaving the last one up.
 - **The skill catalog says what it is leaving out.** `agentty skills` and the
   Skills panel (Ctrl+K) now report `N of M cataloged · cap C · K not
   cataloged` instead of listing a truncated catalog as if it were the whole

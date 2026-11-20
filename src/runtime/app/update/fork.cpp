@@ -196,6 +196,7 @@ Cmd fork_update(Model& m, msg::ForkMsg fm) {
             m.ui.view_cache.clear();
             m.d.current = std::move(fork);
             m.d.saved_fps.clear();
+            restore_todo_from_thread(m);
             m.s.reset_usage_for_thread(last_reported_prompt(m.d.current));
             Cmd save_fork = save_current(m);
             m.ui.panel.close<pn::ThreadList>();

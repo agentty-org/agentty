@@ -213,6 +213,7 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{90};
     }
     m.d.current = Thread{};
     m.d.saved_fps.clear();
+    restore_todo_from_thread(m);   // a fresh thread has no plan
     m.d.current.id = persistence::new_id();
     m.d.current.auto_title_ok = true;
     m.d.current.workspace = m.env.cwd;
@@ -945,6 +946,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             };
             m.d.current = std::move(e.thread);
             m.d.saved_fps.clear();
+            restore_todo_from_thread(m);
             // An opened session is a saved agentty thread from here on: its
             // picker row stops being a foreign placeholder, and the scan's
             // copy follows its size so the next open doesn't re-import.

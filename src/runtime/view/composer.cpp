@@ -147,6 +147,59 @@ DisplayText clip_long_lines(DisplayText in) {
     return out;
 }
 
+// Model text bound for the terminal: one line, no escapes. C0 (incl. ESC,
+// CR, LF, TAB), DEL and UTF-8-encoded C1 introducers all fold to a space, and
+// runs of spaces collapse, so a todo cannot break the row or smuggle a
+// sequence into the frame around it.
+std::string one_line(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    auto space = [&] { if (!out.empty() && out.back() != ' ') out += ' '; };
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const auto b = static_cast<unsigned char>(s[i]);
+        if (b < 0x20 || b == 0x7F) { space(); continue; }
+        if (b == 0xC2 && i + 1 < s.size()) {
+            const auto nb = static_cast<unsigned char>(s[i + 1]);
+            if (nb >= 0x80 && nb <= 0x9F) { space(); ++i; continue; }
+        }
+        if (b == ' ') { space(); continue; }
+        out += static_cast<char>(b);
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+// The footer's plan slot. Names the item IN progress, else the next one up.
+// A finished plan stays while the turn that finished it is still running
+// (the ✓ 7/7 is the payoff) and goes quiet once idle: a done plan is not
+// news. An unfinished plan stays when idle — "stopped at 3/7" is exactly
+// what you want to see when you come back.
+maya::Composer::Config::Progress plan_progress(const Model& m) {
+    maya::Composer::Config::Progress p;
+    const auto& items = m.ui.todo.items;
+    if (items.empty()) return p;
+    int done = 0;
+    const TodoItem* active = nullptr;
+    const TodoItem* next   = nullptr;
+    for (const auto& it : items) {
+        if (it.status == TodoStatus::Completed) ++done;
+        else if (it.status == TodoStatus::InProgress && !active) active = &it;
+        else if (it.status == TodoStatus::Pending && !next) next = &it;
+    }
+    const int total = static_cast<int>(items.size());
+    if (done == total && !m.s.active()) return p;
+    p.done   = done;
+    p.total  = total;
+    p.active = active != nullptr;
+    if (const TodoItem* named = active ? active : next)
+        p.label = one_line(named->content);
+    else
+        p.label = one_line(items.back().content);   // all done: the last step
+    p.done_color   = success;
+    p.active_color = info;
+    return p;
+}
+
 } // namespace
 
 // One definition of "does the terminal own the caret this frame". See the
@@ -236,6 +289,11 @@ maya::Composer::Config composer_config(const Model& m) {
     // resurrecting the hints.
     cfg.status          = model_badge_config(m);
     cfg.show_key_hints  = false;
+
+    // The plan, ambient: the meter, "3/7" and the item in flight sit in the
+    // footer's empty middle so progress is visible without ^T. The widget
+    // owns every width decision; this only picks WHICH item to name.
+    cfg.progress = plan_progress(m);
     // While the `/` menu is open its keys take the slot, so you can see
     // how to complete, run and dismiss without guessing.
     if (slash_menu_open(m)) {
@@ -420,6 +478,13 @@ maya::Composer::Config composer_config(const Model& m) {
         .add(std::string_view{m.s.smart_turn_model.value})
         .add(m.d.selection.provider_id())
         .add(static_cast<std::uint64_t>(cfg.hardware_caret ? 1 : 0))
+        // The plan slot: any change in count, label or state must repaint.
+        .add(static_cast<std::uint64_t>(
+            static_cast<std::uint32_t>(cfg.progress.done)))
+        .add(static_cast<std::uint64_t>(
+            static_cast<std::uint32_t>(cfg.progress.total)))
+        .add(std::string_view{cfg.progress.label})
+        .add(static_cast<std::uint64_t>(cfg.progress.active ? 1 : 0))
         .add(static_cast<std::uint64_t>(cfg.min_body_rows))
         .add(static_cast<std::uint64_t>(
             static_cast<std::uint32_t>(cfg.token_estimate)))

@@ -95,6 +95,12 @@ Cmd maybe_auto_title(Model& m);
 // carries no todos array (partial early stream).
 void sync_todo_state_from_args(Model& m, const nlohmann::json& args);
 
+// The plan belongs to a THREAD, but ui.todo is one mirror. Call after
+// m.d.current is replaced (new / loaded / forked thread): rebuilds the mirror
+// from the thread's last todo call, or clears it, so the footer's plan slot
+// never shows another thread's progress. One backward scan per switch.
+void restore_todo_from_thread(Model& m);
+
 // ── Saving settings ───────────────────────────────────────────────────────
 //
 // THE rule: `m.d.persisted` is the record. Saving is handing it over.

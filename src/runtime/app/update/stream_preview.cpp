@@ -375,4 +375,15 @@ void sync_todo_state_from_args(Model& m, const nlohmann::json& args) {
     m.ui.todo.items = std::move(items);
 }
 
+void restore_todo_from_thread(Model& m) {
+    m.ui.todo.items.clear();
+    const auto& msgs = m.d.current.messages;
+    for (auto mit = msgs.rbegin(); mit != msgs.rend(); ++mit)
+        for (auto tit = mit->tool_calls.rbegin(); tit != mit->tool_calls.rend(); ++tit)
+            if (tit->name == "todo") {
+                sync_todo_state_from_args(m, tit->args);
+                return;
+            }
+}
+
 } // namespace agentty::app::detail
