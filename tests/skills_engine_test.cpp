@@ -709,6 +709,73 @@ TEST_CASE("skills: an oversized SKILL.md is reported, not dropped") {
     CHECK(catalog.find("fine") != std::string::npos,
           "the good skill beside it is unaffected");
 
+    // The headline counts it as what it is: not loadable, not "cataloged".
+    const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
+    CHECK(st.oversized == 1);
+    CHECK(st.skipped() == 0);
+
+    fs::current_path(base, ec);
+    fs::remove_all(base, ec);
+}
+
+// Unloadable files must never take a real skill's slot under the cap.
+//
+// Oversized SKILL.md files stay in discovery as reporting stubs. They used to
+// count against AGENTTY_MAX_SKILLS like loadable skills, so three of them at
+// the cap silently pushed three real skills out of the catalog — while the
+// headline said everything fit. Each cause is also counted separately, so the
+// CLI and panel only suggest raising the cap when the cap is the reason.
+TEST_CASE("skills: unloadable files never take a real skill's cap slot") {
+    agtest::ScopedEnvSandbox _env_guard;
+    std::error_code ec;
+    fs::path base = fs::temp_directory_path(ec) / "agentty_skills_slot_test";
+    fs::remove_all(base, ec);
+    fs::path home = base / "home";
+    fs::path work = base / "work";
+    fs::create_directories(home, ec);
+    fs::create_directories(work / ".agentty/skills", ec);
+#if defined(_WIN32)
+    _putenv_s("HOME", home.string().c_str());
+    _putenv_s("AGENTTY_HOME", "");
+    _putenv_s("AGENTTY_MAX_SKILLS", "8");
+#else
+    setenv("HOME", home.string().c_str(), 1);
+    unsetenv("AGENTTY_HOME");
+    setenv("AGENTTY_MAX_SKILLS", "8", 1);   // the floor
+#endif
+    fs::current_path(work, ec);
+
+    // Sorted names put the broken ones FIRST, so they are visited before any
+    // good skill — the order that used to burn the slots.
+    std::string big = "---\nname: x\ndescription: x\n---\n";
+    big.append(skills::kMaxBodyBytes + 1024, 'x');
+    for (const char* n : {"a-big-1", "a-big-2", "a-big-3"})
+        write_file_at(work / ".agentty/skills" / n / "SKILL.md", big);
+    write_file_at(work / ".agentty/skills/a-empty/SKILL.md", "");
+    for (int i = 0; i < 9; ++i) {
+        const std::string n = "good-" + std::to_string(i);
+        write_file_at(work / ".agentty/skills" / n / "SKILL.md",
+                      "---\nname: " + n + "\ndescription: d\n---\nB\n");
+    }
+
+    const auto st = skills::catalog_stats(::agentty::IoAccess::grant());
+    CHECK(st.cataloged == 8);          // the full cap of LOADABLE skills
+    CHECK(st.oversized == 3);
+    CHECK(st.unreadable == 1);
+    CHECK(st.skipped() == 1);          // only good-8 is a cap casualty
+
+    const auto probs = skills::catalog_problems(st);
+    REQUIRE(probs.size() == 3);
+    CHECK(probs[0].fix.find("AGENTTY_MAX_SKILLS") != std::string::npos);
+    CHECK(probs[0].what == "1 skill over the cap of 8");
+    CHECK(probs[1].what == "3 SKILL.md files too large to load");
+    CHECK(probs[2].what == "1 SKILL.md unreadable, empty or nameless");
+
+#if defined(_WIN32)
+    _putenv_s("AGENTTY_MAX_SKILLS", "");
+#else
+    unsetenv("AGENTTY_MAX_SKILLS");
+#endif
     fs::current_path(base, ec);
     fs::remove_all(base, ec);
 }

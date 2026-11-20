@@ -5,6 +5,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **An oversized SKILL.md no longer costs a real skill its place.** Files too
+  large to load are kept so `agentty skills` can name them, but they used to
+  count against `AGENTTY_MAX_SKILLS` — three of them at the cap silently
+  pushed three working skills out of the catalog. Only loadable skills count
+  now.
 - **A buffering gateway no longer hides the status bar.** When a proxy holds
   the model's output back, the whole status row used to turn into "network
   gateway is buffering output — waiting…", re-armed every 15 s, so the
@@ -46,9 +51,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   cataloged` instead of listing a truncated catalog as if it were the whole
   library — the failure mode where a skill you installed is simply absent.
   The installed count rides along with the cached discovery, so it costs no
-  extra walk, and the panel stays silent when everything fits. Shadowed and
-  oversized skills are not counted as "not cataloged" — raising the cap
-  cannot bring them back, and they have their own reports (#134, thanks
+  extra walk, and the panel stays silent when everything fits. Every other
+  reason a skill is missing gets its own line and its own fix — too large to
+  load, unreadable or nameless, hidden by a same-named skill — and the cap
+  knob is only suggested when the cap is the reason (#134, thanks
   @davidwed).
 - **The Plugins pane shows the tool cap and what it refused.** The header now
   names the per-request maximum (the provider's limit, your

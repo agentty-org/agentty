@@ -111,6 +111,10 @@ struct Open {
     [[nodiscard]] bool capped() const noexcept {
         return catalog.skipped() > 0;
     }
+    // Anything on disk the list is not showing, for any reason.
+    [[nodiscard]] bool incomplete() const noexcept {
+        return capped() || catalog.not_loadable() > 0;
+    }
 
     [[nodiscard]] bool empty() const noexcept { return rows.empty(); }
 

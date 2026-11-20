@@ -349,16 +349,23 @@ void enumerate_resources(const fs::path& dir, std::vector<std::string>& out) {
 // Appends each found SKILL.md's mtime into `sig` so an in-place edit
 // (same dir mtime) still invalidates the cache.
 // `shadows` collects the skills this pass hides behind an earlier root.
-// Returns how many legal skills (a SKILL.md that slugs to a name) the CAP
-// turned away — the only gap "raise AGENTTY_MAX_SKILLS" can close. Shadowed
-// copies, oversized files and unparseable frontmatter are not in it: they
-// have their own reports, and counting them sent people to raise a cap that
-// was never hit. `out` receives at most `cap` skills.
-std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
-                      std::size_t cap, std::vector<Skill>& out, std::string& sig,
-                      std::vector<Shadowed>& shadows) {
+// Counts what this root could not catalog, by cause — each has a different
+// remedy, so they are never lumped together:
+//   over_cap    legal skills the CAP turned away: raise AGENTTY_MAX_SKILLS.
+//   unreadable  a SKILL.md that could not be read, was empty, or declared an
+//               empty name: fix the file. Nothing else reports these.
+// Shadowed copies go to `shadows`; oversized files become reporting stubs in
+// `out` (lint names them). Only LOADABLE skills count toward the cap — a stub
+// the model can never be offered must not take a real skill's slot.
+struct ScanCounts {
+    std::size_t over_cap   = 0;
+    std::size_t unreadable = 0;
+};
+ScanCounts scan_root(Io io, const fs::path& root, const std::string& source,
+                     std::size_t cap, std::vector<Skill>& out, std::string& sig,
+                     std::vector<Shadowed>& shadows) {
     std::error_code ec;
-    if (!fs::is_directory(root, ec) || ec) return 0;
+    if (!fs::is_directory(root, ec) || ec) return {};
     auto mt = fs::last_write_time(root, ec);
     // file_time_type's rep is __int128 on Android/bionic — no std::to_string
     // overload matches. long long keeps ~292 years of ns range; a cache-sig
@@ -440,7 +447,11 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
     });
     mds.erase(std::unique(mds.begin(), mds.end()), mds.end());
 
-    std::size_t over_cap = 0;
+    ScanCounts counts;
+    // Loadable skills already in `out` (earlier roots included). Counted once
+    // here and kept current below, never re-scanned per entry.
+    std::size_t loaded = static_cast<std::size_t>(std::ranges::count_if(
+        out, [](const Skill& k) { return k.oversized_bytes == 0; }));
     for (const auto& md : mds) {
         // Slug = path below the root, sanitized to the spec's charset. A
         // SKILL.md sitting directly in the root has no directory of its
@@ -465,8 +476,8 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
         // A legal skill the catalog has no room for. Counted after the slug
         // check (a group folder that names nothing is not a skill); the cap
         // bounds the parse, not the walk, so the count is complete.
-        if (out.size() >= cap) {
-            ++over_cap;
+        if (loaded >= cap) {
+            ++counts.over_cap;
             continue;
         }
         std::error_code mec;
@@ -498,11 +509,13 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
                 skip = true;
             } else {
                 skip = true;   // Absent / Unreadable
+                ++counts.unreadable;
             }
         }, got);
-        if (skip || raw.empty()) continue;
+        if (skip) continue;
+        if (raw.empty()) { ++counts.unreadable; continue; }
         Skill s = parse_skill(raw, slug, source);
-        if (s.name.empty()) continue;
+        if (s.name.empty()) { ++counts.unreadable; continue; }
         // Shadow: earlier roots (project before user, native before
         // interop) — and earlier visit order (shallower before deeper)
         // — win on name collision.
@@ -536,8 +549,9 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
         // boundary. Read-only — the write/edit gate never consults it.
         util::allow_read_root(io, s.dir);
         out.push_back(std::move(s));
+        ++loaded;
     }
-    return over_cap;
+    return counts;
 }
 
 // The last discovery: the skills, what they shadowed, and the signature
@@ -548,12 +562,13 @@ std::size_t scan_root(Io io, const fs::path& root, const std::string& source,
 struct Discovery {
     std::vector<Skill>    skills;
     std::vector<Shadowed> shadows;
-    // Legal skills the cap turned away, and the cap that produced `skills`.
-    // Cached WITH the catalog because they come from the same walk: an
-    // unchanged tree still costs zero, and a reader that wants the headline
-    // never re-walks.
-    std::size_t           over_cap = 0;
-    std::size_t           cap      = 0;
+    // What could not be cataloged, by cause, and the cap that produced
+    // `skills`. Cached WITH the catalog because they come from the same walk:
+    // an unchanged tree still costs zero, and a reader that wants the
+    // headline never re-walks.
+    std::size_t           over_cap   = 0;
+    std::size_t           unreadable = 0;
+    std::size_t           cap        = 0;
     std::string           sig = "\x01uninit";
     std::uint64_t         generation = 0;   // bumped on every rescan
 };
@@ -723,10 +738,12 @@ std::vector<Skill> all(Io io) {
     Discovery fresh;
     std::string parse_sig;
     for (const scope::Source& src : sources) {
-        fresh.over_cap +=
+        const ScanCounts c =
             scan_root(io, src.base / layout.leaf,
                       std::string{scope::to_string(src.locus)},
                       cap, fresh.skills, parse_sig, fresh.shadows);
+        fresh.over_cap   += c.over_cap;
+        fresh.unreadable += c.unreadable;
     }
     fresh.cap = cap;
     fresh.sig = sig;
@@ -753,11 +770,39 @@ CatalogStats catalog_stats(Io io) {
     (void)all(io);
     CatalogStats st;
     if (auto d = discovery().current()) {
-        st.cataloged = d->skills.size();
-        st.installed = d->skills.size() + d->over_cap;
-        st.cap       = d->cap;
+        // Oversized stubs sit in `skills` only so lint can report them; the
+        // model is never offered one, so they are not "cataloged".
+        st.oversized = static_cast<std::size_t>(std::ranges::count_if(
+            d->skills, [](const Skill& k) { return k.oversized_bytes > 0; }));
+        st.cataloged  = d->skills.size() - st.oversized;
+        st.installed  = st.cataloged + d->over_cap;
+        st.cap        = d->cap;
+        st.shadowed   = d->shadows.size();
+        st.unreadable = d->unreadable;
     }
     return st;
+}
+
+std::vector<CatalogProblem> catalog_problems(const CatalogStats& st) {
+    std::vector<CatalogProblem> out;
+    auto n = [](std::size_t k, const char* one, const char* many) {
+        return std::to_string(k) + " " + (k == 1 ? one : many);
+    };
+    if (st.skipped() > 0)
+        out.push_back({n(st.skipped(), "skill", "skills") + " over the cap of "
+                           + std::to_string(st.cap),
+                       "raise it: AGENTTY_MAX_SKILLS=<n>", true});
+    if (st.oversized > 0)
+        out.push_back({n(st.oversized, "SKILL.md", "SKILL.md files") + " too large to load",
+                       "move detail into references/", false});
+    if (st.unreadable > 0)
+        out.push_back({n(st.unreadable, "SKILL.md", "SKILL.md files")
+                           + " unreadable, empty or nameless",
+                       "check the file and its `name:`", false});
+    if (st.shadowed > 0)
+        out.push_back({n(st.shadowed, "skill", "skills") + " hidden by a same-named one",
+                       "see: agentty skill list", false});
+    return out;
 }
 
 bool shadowed_within_scope(Io io, std::string_view name) {
@@ -1125,17 +1170,13 @@ int cmd_skills(Io io) {
         }
     }
     // The headline answers the question the list cannot: how many of the
-    // skills on disk are IN this list. Without it a capped catalog reads as
-    // the whole library — the failure mode that sends people looking for a
-    // skill they installed and cannot see.
+    // skills on disk are IN this list, and for each one that is not, why —
+    // the failure mode that sends people looking for a skill they installed
+    // and cannot see. Every cause names its own fix.
     const auto st = catalog_stats(io);
-    if (st.installed > st.cataloged)
-        std::printf("%zu of %zu skill(s) cataloged \xc2\xb7 cap %zu \xc2\xb7 %zu not cataloged"
-                    " \xc2\xb7 raise it: AGENTTY_MAX_SKILLS=<n>\n",
-                    st.cataloged, st.installed, st.cap, st.skipped());
-    else
-        std::printf("%zu skill(s) cataloged \xc2\xb7 cap %zu \xc2\xb7 all of them fit\n",
-                    st.cataloged, st.cap);
+    std::printf("%zu skill(s) cataloged \xc2\xb7 cap %zu\n", st.cataloged, st.cap);
+    for (const auto& p : catalog_problems(st))
+        std::printf("  %s \xc2\xb7 %s\n", p.what.c_str(), p.fix.c_str());
     std::printf("%zu skill(s), %d warning(s)\n", sk.size(), dirty);
     return dirty ? 1 : 0;
 }

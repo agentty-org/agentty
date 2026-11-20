@@ -196,12 +196,50 @@ int main() {
             std::move(m1), Msg{LibraryLoaded{std::move(capped_lib)}});
         auto [capped, _c7] = app::update(std::move(lm), Msg{OpenSkills{}});
         const auto painted = maya::render_to_string(ui::skills_panel(capped), 100);
-        check(painted.find("not cataloged") != std::string::npos,
-              "the panel says how many skills are not cataloged");
-        check(painted.find("5 not cataloged") != std::string::npos,
-              "…and the exact count it is hiding");
+        check(painted.find("5 skills over the cap of") != std::string::npos,
+              "the panel says how many skills the cap is hiding");
         check(painted.find("AGENTTY_MAX_SKILLS") != std::string::npos,
               "…and names the knob that raises the cap");
+    }
+
+    // ── Broken files are not a cap problem ────────────────────────────
+    // Under the cap, with skills that cannot load: each cause gets its own
+    // line and its own fix, and the cap knob is NOT suggested — raising it
+    // would bring none of them back.
+    {
+        Library lib = agentty::read_library(::agentty::IoAccess::grant());
+        lib.skills_catalog = tools::skills::CatalogStats{
+            .cataloged  = lib.skills.size(),
+            .installed  = lib.skills.size(),
+            .cap        = 64,
+            .oversized  = 2,
+            .unreadable = 1,
+            .shadowed   = 1,
+        };
+        Model mb;
+        auto [lb, _b1] = app::update(std::move(mb), Msg{LibraryLoaded{std::move(lib)}});
+        auto [ob, _b2] = app::update(std::move(lb), Msg{OpenSkills{}});
+        const auto painted = maya::render_to_string(ui::skills_panel(ob), 120);
+        check(painted.find("2 SKILL.md files too large to load") != std::string::npos,
+              "oversized files are named, with their fix");
+        check(painted.find("1 SKILL.md unreadable") != std::string::npos,
+              "unreadable files are reported at all");
+        check(painted.find("1 skill hidden by a same-named one") != std::string::npos,
+              "shadowed copies are reported in the panel too");
+        check(painted.find("AGENTTY_MAX_SKILLS") == std::string::npos,
+              "…and the cap knob is not suggested when the cap is not the cause");
+    }
+    {
+        Library capped_lib = agentty::read_library(::agentty::IoAccess::grant());
+        capped_lib.skills_catalog = tools::skills::CatalogStats{
+            .cataloged = capped_lib.skills.size(),
+            .installed = capped_lib.skills.size() + 5,
+            .cap       = capped_lib.skills.size(),
+        };
+        Model m1;
+        auto [lm, _c6] = app::update(
+            std::move(m1), Msg{LibraryLoaded{std::move(capped_lib)}});
+        auto [capped, _c7] = app::update(std::move(lm), Msg{OpenSkills{}});
 
         // …and it still FITS, with the list long enough that the viewport is
         // what binds. Header rows are stacked above the body, so they are
@@ -275,7 +313,7 @@ int main() {
               "the headline costs the list rows, not the panel its footer");
         check(capped_text.find("Esc") != std::string::npos,
               "…and keeps its footer on the bottom edge");
-        check(capped_text.find("not cataloged") != std::string::npos,
+        check(capped_text.find("over the cap") != std::string::npos,
               "…while still saying what it hides");
     }
 

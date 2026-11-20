@@ -45,19 +45,17 @@ Element skills_panel(const Model& m) {
     cfg.scroll     = &o->scroll;
     cfg.selected   = o->rows.empty() ? -1 : o->index;
 
-    // What this list is NOT showing, before the first row. A capped catalog
-    // and a small library look identical from the rows alone, and the person
-    // scrolling is usually scrolling because a skill went missing. Silence
-    // when everything fits — the healthy case needs no sentence.
-    if (o->capped()) {
-        cfg.header.push_back(h(text("  "), text(
-            std::to_string(o->catalog.cataloged) + " of "
-                + std::to_string(o->catalog.installed) + " cataloged \xc2\xb7 cap "
-                + std::to_string(o->catalog.cap) + " \xc2\xb7 "
-                + std::to_string(o->catalog.skipped()) + " not cataloged",
-            fg_of(warn))).build());
-        cfg.header.push_back(h(text("  "), text(
-            "  raise it: AGENTTY_MAX_SKILLS=<n>", fg_dim(muted))).build());
+    // What this list is NOT showing, before the first row, one line per
+    // cause with its own fix. A capped catalog and a small library look
+    // identical from the rows alone, and the person scrolling is usually
+    // scrolling because a skill went missing. Silence when everything on disk
+    // is loaded — the healthy case needs no sentence.
+    if (o->incomplete()) {
+        for (const auto& p : tools::skills::catalog_problems(o->catalog))
+            cfg.header.push_back(h(
+                text("  "),
+                text(p.what, p.warn ? fg_of(warn) : fg_of(fg)),
+                text("  " + p.fix, fg_dim(muted))).build());
         cfg.header.push_back(text(""));
     }
 

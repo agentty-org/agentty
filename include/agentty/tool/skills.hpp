@@ -137,22 +137,40 @@ struct Skill {
 // catalog looks exactly like a small library unless the two numbers are
 // shown side by side.
 struct CatalogStats {
-    std::size_t cataloged = 0;  // in the catalog (what the model can see)
-    std::size_t installed = 0;  // cataloged + what the cap turned away
-    std::size_t cap       = 0;  // the cap applied to this pass
+    std::size_t cataloged  = 0;  // loadable skills in the catalog
+    std::size_t installed  = 0;  // cataloged + what the cap turned away
+    std::size_t cap        = 0;  // the cap applied to this pass
+
+    // Present on disk but not loadable, each with its own remedy. Kept apart
+    // from skipped() because raising the cap fixes none of them.
+    std::size_t oversized  = 0;  // SKILL.md over kMaxBodyBytes: trim it
+    std::size_t unreadable = 0;  // unreadable, empty, or an empty `name:`
+    std::size_t shadowed   = 0;  // lost a name collision to another skill
 
     // Turned away by the cap — exactly the gap AGENTTY_MAX_SKILLS closes.
-    // Shadowed copies and oversized files are NOT here: they have their own
-    // reports (agentty skill list), and raising the cap would not fix them.
     // Zero before discovery has run.
     [[nodiscard]] std::size_t skipped() const noexcept {
         return installed > cataloged ? installed - cataloged : 0;
+    }
+    [[nodiscard]] std::size_t not_loadable() const noexcept {
+        return oversized + unreadable + shadowed;
     }
 };
 
 // Read the last discovery's numbers. Cheap and side-effect free: the counts
 // ride along with the cached catalog, so this never walks the disk again.
 [[nodiscard]] CatalogStats catalog_stats(Io);
+
+// What the catalog is NOT showing, one line per cause, each naming its own
+// fix — so "raise AGENTTY_MAX_SKILLS" is only ever said when the cap is the
+// reason. Empty when everything on disk is loaded. Plain text (no styling):
+// `agentty skills` prints it and the Skills panel paints it.
+struct CatalogProblem {
+    std::string what;     // "3 over the cap of 64"
+    std::string fix;      // "raise it: AGENTTY_MAX_SKILLS=<n>"
+    bool        warn;     // the cap hides skills you meant to use; the rest are notes
+};
+[[nodiscard]] std::vector<CatalogProblem> catalog_problems(const CatalogStats&);
 
 // Look up one skill by exact name. nullptr if absent. Finds
 // `disable-model-invocation` skills too (explicit lookup is allowed;
