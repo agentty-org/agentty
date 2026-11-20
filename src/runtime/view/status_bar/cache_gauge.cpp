@@ -1,38 +1,20 @@
 #include "agentty/runtime/view/status_bar/cache_gauge.hpp"
 
-#include <chrono>
-
 namespace agentty::ui {
 
+// One percentage for every verdict; the state only picks its colour.
 maya::CacheGauge::Config cache_gauge_config(const Model& m) {
     using V = StreamState::CacheVerdict;
     using S = maya::CacheGauge::State;
     maya::CacheGauge::Config cfg;
-    const auto& s = m.s;
-    switch (s.cache_verdict) {
-    case V::None:
-        break;
-    case V::Hit:
-        cfg.state   = S::Hit;
-        cfg.hit_pct = s.cache_reuse_pct;
-        cfg.tokens  = s.cache_read_tokens;
-        break;
-    case V::Warming:
-        cfg.state  = S::Warming;
-        cfg.tokens = s.cache_creation_tokens;
-        break;
-    case V::Expired:
-        cfg.state     = S::Expired;
-        cfg.idle_secs = static_cast<int>(s.cache_gap.count());
-        break;
-    case V::Miss:
-        cfg.state  = S::Miss;
-        // What was re-priced cold: the prompt minus whatever still hit.
-        cfg.tokens = std::max(0, s.tokens_in - s.cache_read_tokens);
-        break;
-    case V::Unreported:
-        cfg.state = S::Unreported;
-        break;
+    cfg.pct = m.s.cache_reuse_pct;
+    switch (m.s.cache_verdict) {
+    case V::None:       cfg.state = S::Hidden;     break;
+    case V::Hit:        cfg.state = S::Hit;        break;
+    case V::Warming:    cfg.state = S::Warming;    break;
+    case V::Expired:    cfg.state = S::Expired;    break;
+    case V::Miss:       cfg.state = S::Miss;       break;
+    case V::Unreported: cfg.state = S::Unreported; break;
     }
     return cfg;
 }

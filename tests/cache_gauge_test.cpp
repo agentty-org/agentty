@@ -117,21 +117,35 @@ TEST_CASE("cache verdict: providers that never say are n/a, small prompts silent
     CHECK(tiny.cache_verdict == V::None);      // nothing cacheable to report on
 }
 
-TEST_CASE("cache gauge: renders every verdict with the right words") {
+TEST_CASE("cache gauge: the number always, a word only when it needs explaining") {
     using S = maya::CacheGauge::State;
     auto paint = [](maya::CacheGauge::Config c) {
         return ascii_row(maya::CacheGauge{c}.build(), 60);
     };
-    CHECK(paint({.state = S::Hit, .hit_pct = 94, .tokens = 115'000}).find("CACHE 94% 115k")
-          != std::string::npos);
-    CHECK(paint({.state = S::Warming, .tokens = 120'000}).find("CACHE warming +120k")
-          != std::string::npos);
-    CHECK(paint({.state = S::Expired, .idle_secs = 725}).find("CACHE expired idle 12m")
-          != std::string::npos);
-    CHECK(paint({.state = S::Miss, .tokens = 51'000}).find("CACHE MISS 51k cold")
-          != std::string::npos);
+    auto trimmed = [](std::string s) {
+        s.erase(0, s.find_first_not_of(' '));
+        s.erase(s.find_last_not_of(' ') + 1);
+        return s;
+    };
+    // A healthy hit is only the number.
+    CHECK(trimmed(paint({.state = S::Hit, .pct = 94})) == "CACHE 94%");
+    // Everything else says why, so 0% on a fresh thread never reads as broken.
+    CHECK(trimmed(paint({.state = S::Warming, .pct = 0}))  == "CACHE 0% new");
+    CHECK(trimmed(paint({.state = S::Expired, .pct = 3}))  == "CACHE 3% idle");
+    CHECK(trimmed(paint({.state = S::Miss,    .pct = 2}))  == "CACHE 2% miss");
+    // Narrow rungs drop the word; the number and its colour stay.
+    CHECK(trimmed(paint({.state = S::Miss, .pct = 2, .note = false})) == "CACHE 2%");
     CHECK(paint({.state = S::Unreported}).find("CACHE n/a") != std::string::npos);
     CHECK(paint({.state = S::Hidden}).find("CACHE") == std::string::npos);
+}
+
+TEST_CASE("cache verdict: the percentage is honest for misses and warm-ups too") {
+    StreamState s;
+    request(s, 200, 0, 40'000);
+    CHECK(s.cache_reuse_pct == 0);             // warming: nothing to read yet
+    request(s, 41'000, 800, 0, 20s);           // the 40.2k prefix came back cold
+    CHECK(s.cache_verdict == V::Miss);
+    CHECK(s.cache_reuse_pct == 1);
 }
 
 TEST_CASE("cache gauge: the status bar sheds it before phase or ctx") {
@@ -148,7 +162,8 @@ TEST_CASE("cache gauge: the status bar sheds it before phase or ctx") {
     };
     const std::string wide = bar(160);
     INFO(wide);
-    CHECK(wide.find("CACHE 94% 108k") != std::string::npos);
+    CHECK(wide.find("CACHE 94%") != std::string::npos);
+    CHECK(wide.find("94% ") != std::string::npos);   // a hit carries no word
     CHECK(wide.find("CTX") != std::string::npos);
 
     for (int w : {120, 100, 80, 60}) {
@@ -159,7 +174,17 @@ TEST_CASE("cache gauge: the status bar sheds it before phase or ctx") {
         if (row.find("CACHE") != std::string::npos)
             CHECK(row.find("CTX") != std::string::npos);
     }
-    if (std::getenv("CACHE_CHIP_DUMP"))
-        for (int w : {160, 120, 100, 80, 60})
-            std::printf("%3d |%s|\n", w, bar(w).c_str());
+
+    // A miss keeps its word while there is room, and loses it before the
+    // number or anything else on the row.
+    m.s.cache_verdict   = V::Miss;
+    m.s.cache_reuse_pct = 2;
+    CHECK(bar(160).find("CACHE 2% miss") != std::string::npos);
+    if (std::getenv("CACHE_GAUGE_DUMP"))
+        for (auto v : {V::Hit, V::Warming, V::Expired, V::Miss, V::Unreported}) {
+            m.s.cache_verdict   = v;
+            m.s.cache_reuse_pct = v == V::Hit ? 94 : v == V::Warming ? 0 : 3;
+            for (int w : {160, 100, 80, 60})
+                std::printf("%3d |%s|\n", w, bar(w).c_str());
+        }
 }

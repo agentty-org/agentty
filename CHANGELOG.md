@@ -20,16 +20,18 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   indent instead of snapping back to column 0.
 
 ### Added
-- **The prompt cache sits next to the context gauge.** On the status bar:
-  `CACHE 94% 108k` when the request reused the warm prefix, `warming +120k`
-  for an expected cold start (new thread, compaction, a model switch),
-  `expired idle 12m` when the gap outlived the cache, and **`MISS 51k cold`**
-  in amber when a prefix that should have been warm was re-priced from
-  scratch — the one that costs you 10-20x on time-to-first-token and is
-  worth reporting. Hosts that never report cache use read `n/a`. Judged
-  against what the previous request left warm, so a big new tool output
-  does not look like a miss. On narrow terminals the token detail goes
-  first, then the cache readout, before the phase or the context gauge.
+- **The prompt cache sits next to the context gauge.** `CACHE 94%` on the
+  status bar: how much of the prefix the last request left warm was served
+  from cache. A healthy hit is just the number, in green. Anything else says
+  why in one word, so a `0%` never leaves you guessing: `0% new` for an
+  expected cold start (new thread, compaction, a model switch), `3% idle`
+  when a long pause simply outlived the cache, and `2% miss` in amber when a
+  prefix that should have been warm was re-priced from scratch — the one
+  that costs you 10-20x on time-to-first-token. Hosts that never report
+  cache use read `n/a`. Judged against what the previous request left warm,
+  so a big new tool output does not look like a miss. On narrow terminals
+  the word goes first, then the number, before the phase or the context
+  gauge.
 - **The plan is always in view.** The composer footer's empty middle now
   carries the agent's plan: a task meter, `3/7` and the item in flight
   (`●`), or the next one up (`○`) between steps — no `^T` needed. It is

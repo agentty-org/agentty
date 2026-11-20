@@ -78,11 +78,10 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
         // breadcrumb
         k.add(cfg.breadcrumb.title)
          .add(static_cast<std::uint64_t>(cfg.breadcrumb.max_chars));
-        // cache gauge — every field it paints
+        // cache gauge — every field it paints (the note is decided per
+        // rung inside the cached row, from these two)
         k.add(static_cast<std::uint64_t>(cfg.cache.state))
-         .add(static_cast<std::uint64_t>(cfg.cache.hit_pct))
-         .add(static_cast<std::uint64_t>(cfg.cache.tokens))
-         .add(static_cast<std::uint64_t>(cfg.cache.idle_secs));
+         .add(static_cast<std::uint64_t>(cfg.cache.pct));
         // status banner (takes over the slot entirely when non-empty)
         k.add(cfg.status_banner.text)
          .add(static_cast<std::uint64_t>(cfg.status_banner.is_error))

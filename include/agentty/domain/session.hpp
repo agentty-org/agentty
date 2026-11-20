@@ -524,7 +524,9 @@ struct StreamState {
         Unreported,  // the provider never reports cache tokens
     };
     CacheVerdict cache_verdict = CacheVerdict::None;
-    int  cache_reuse_pct     = 0;      // Hit: % of the warm prefix this request reused
+    // % of the warm prefix this request reused (of the whole prompt when
+    // nothing was warm yet). The status bar's one number for every verdict.
+    int  cache_reuse_pct     = 0;
     int  cache_prev_prefix   = 0;      // prefix (input+read+write) last request
     int  cache_priced        = 0;      // cacheable requests priced in this thread
     bool cache_ever_reported = false;  // any read/write ever seen this thread
@@ -582,11 +584,7 @@ struct StreamState {
             cache_verdict = (cold_ok || expired) ? CacheVerdict::None
                                                  : CacheVerdict::Unreported;
         } else if (reused_most || (read > 0 && read * 2 >= prefix)) {
-            cache_verdict   = CacheVerdict::Hit;
-            cache_reuse_pct = cache_prev_prefix > 0
-                ? std::min(100, static_cast<int>(
-                      static_cast<long long>(read) * 100 / cache_prev_prefix))
-                : static_cast<int>(static_cast<long long>(read) * 100 / prefix);
+            cache_verdict = CacheVerdict::Hit;
         } else if (cold_ok) {
             cache_verdict = CacheVerdict::Warming;
         } else if (expired) {
@@ -594,6 +592,9 @@ struct StreamState {
         } else {
             cache_verdict = CacheVerdict::Miss;
         }
+        const int base = cache_prev_prefix > 0 ? cache_prev_prefix : prefix;
+        cache_reuse_pct = std::min(100, static_cast<int>(
+            static_cast<long long>(read) * 100 / base));
         cache_prev_prefix   = prefix;
         cache_model         = std::string{model};
         cache_cold_expected = false;
