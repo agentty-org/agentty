@@ -158,10 +158,18 @@ jobs:
         run: ctest --test-dir cb --output-on-failure --timeout 120 -j"$(nproc)"
       - name: Suite, no user namespaces (live attacks)
         run: |
+          set -o pipefail
+          echo "kernel $(uname -r), landlock abi: $(cat /sys/kernel/security/lsm)"
           bwrap --dev-bind / / --unshare-user --uid "$(id -u)" --gid "$(id -g)" \
                 --disable-userns --cap-drop ALL -- \
             sh -c 'unshare -U true 2>/dev/null && { echo "::error::userns still available"; exit 1; };
-                   ctest --test-dir cb --output-on-failure --timeout 120 -j"$(nproc)"'
+                   ctest --test-dir cb --output-on-failure --timeout 120 -j"$(nproc)" &&
+                   echo "--- the live attack tests, verbatim (they must not say skipped) ---" &&
+                   cb/mask_landlock_test && cb/net_landlock_test' 2>&1 | tee /tmp/live.txt
+          # a pass that skipped its live half proves nothing: fail on it.
+          if grep -qE 'live attacks skipped|^skip ' /tmp/live.txt; then
+            echo "::error::the live attacks did not run on this runner"; exit 1
+          fi
 
   build-test:
     name: build (linux gcc)
