@@ -150,7 +150,34 @@ can be built (`sandbox_claybin.cpp:1041`), not that *this* posture compiles.
 Ordered by risk removed per unit of work. Each step ships on its own, with a
 test that fails before and passes after.
 
-### Step 1 — Make the no-userns path honest and working (fixes F1)
+### Step 1 — Make the no-userns path honest and working (fixes F1)  ✅ *done*
+
+Shipped. What it took, measured under `bwrap --unshare-user --disable-userns`:
+
+- claybin expands every **narrowing** (a mask, or a read-only path under a
+  writable one) into per-entry landlock rules down the chain of directories,
+  siblings granted `O_NOFOLLOW` so a symlinked sibling cannot widen into its
+  target; a directory on the chain drops only the rights its narrowed entries
+  must not inherit. Unlistable directories make compile refuse. Missing
+  components stop the walk (nothing there to protect).
+- An existing host symlink in the mount plan is `approximate`, not
+  `impossible`, so merged-`/usr` hosts compile.
+- `host_proxy_fallback`: without a netns, Full network goes through the same
+  proxy on a host-loopback port; landlock grants TCP connect to that port only
+  (UDP handled, nothing granted, on abi 10+; ICMP ping sockets refused by
+  seccomp). Network None becomes a landlock deny-all. Too-old landlock ⇒
+  refuse.
+- The report names the per-entry form, and drops to `partial` for any
+  narrowing it could not express.
+- agentty's `init()` compiles the shipped posture and the banner names any
+  degraded wall; `--sandbox on` refuses with the reason.
+- Tests: claybin `mask_landlock_test` (12 live attacks + 4 controls) and
+  `net_landlock_test`; agentty `sandbox_parity_test` asks about the shipped
+  posture; `sandbox_live_check` 0 failures in both modes (5 namespace-only
+  checks print `n/a`). CI job **sandbox without user namespaces** runs the
+  claybin suite both ways on every push.
+
+The original plan for this step, kept for the record:
 
 **claybin:**
 

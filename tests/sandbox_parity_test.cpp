@@ -94,6 +94,45 @@ TEST_CASE("sandbox: claybin does not need a user namespace to be useful") {
     // subsystem exists to prevent.
     CHECK(compiled->guarantees.strength(CapId::proc_isolation) == Enforcement::none);
 }
+
+TEST_CASE("sandbox: the SHIPPED posture compiles and masks on a no-userns host") {
+    // The test above builds its own small policy, and that is how it missed
+    // the real failure: agentty's posture adds merged-/usr symlinks (/bin ->
+    // usr/bin) and masks under granted directories, and on a host with no
+    // mount namespace every preset was refused ("creating a symlink would
+    // mutate the host filesystem") while claybin, given a mask it could not
+    // express, dropped it and still reported filesystem.read strong.
+    //
+    // So this asks the question about the posture agentty actually ships.
+    using namespace ::clay;
+    auto host = probe_host();
+    if (host.landlock_abi == 0) return;
+    host.user_namespaces = host.mount_namespaces = host.pid_namespaces =
+        host.net_namespaces = host.uts_namespaces = host.ipc_namespaces =
+        host.cgroup_namespaces = false;
+
+    namespace cb = agentty::tools::util::sandbox::claybin_backend;
+    const auto shipped = ag::claybin_posture_for_test();
+    const auto rep = cb::describe_for_host(shipped, host);
+    INFO(rep.detail);
+    REQUIRE(rep.ok);   // compiles: no preset may be refused for being on Ubuntu
+
+    auto wall = [&](std::string_view name) -> const cb::Wall* {
+        for (const auto& w : rep.walls) if (w.name == name) return &w;
+        return nullptr;
+    };
+    const auto* fs = wall("filesystem.read");
+    REQUIRE(fs != nullptr);
+    // strong only via the per-entry mask form -- never plain "landlock" with
+    // the masks quietly gone.
+    if (!shipped.masked.empty())
+        CHECK(fs->mechanism.find("per-entry") != std::string::npos);
+    // the network is not the open host network: it is pinned by landlock
+    // (proxy port, or nothing), and says so.
+    const auto* net = wall("network.isolation");
+    REQUIRE(net != nullptr);
+    CHECK(net->mechanism.find("landlock net") != std::string::npos);
+}
 #endif  // __linux__
 
 #if defined(__linux__)

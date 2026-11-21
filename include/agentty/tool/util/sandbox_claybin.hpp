@@ -232,6 +232,14 @@ namespace agentty::tools::util::sandbox::claybin_backend {
 // anything.
 [[nodiscard]] Report describe(const Posture& p);
 
+#if defined(__linux__)
+// The same, against a DESCRIBED host rather than this one: what the shipped
+// posture would do on a machine with no user namespaces (Ubuntu 24.04's
+// AppArmor default), asked from a machine that has them. Tests use it; the
+// pane could, to preview "what you lose without userns".
+[[nodiscard]] Report describe_for_host(const Posture& p, const ::clay::HostCapabilities& h);
+#endif
+
 // Fork, apply the sandbox, exec `argv`. stdout_fd/stderr_fd are the CALLER's
 // descriptors (typically both ends of one pipe); they survive the sandbox's
 // close sweep and land on 1 and 2 in the guest. stdin_fd lands on 0; -1

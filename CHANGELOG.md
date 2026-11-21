@@ -4,6 +4,20 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **The sandbox works, and holds, on hosts without user namespaces.** Ubuntu
+  24.04's AppArmor default denies them, and on such a host every sandboxed
+  command failed to start; underneath that, a masked `.env` could be read in
+  full and "network: Full" meant the open host network. Now, with Landlock
+  alone: secrets stay masked, read-only paths like `.vscode/tasks.json` and
+  `.git/hooks` stay read-only, and commands reach the network only through
+  agentty's proxy (private ranges and cloud metadata refused) — or not at
+  all under **None**. Where the kernel is too old to keep a promise, the
+  command is refused with the reason. The startup banner now names any wall
+  this host could not build, and `--sandbox on` refuses to start if the
+  configured posture cannot be built. A new CI job runs the sandbox's attack
+  tests on every push with user namespaces disabled.
+
 ### Fixed
 - **The cache gauge works on every provider, not just Anthropic.** It was
   only armed by an event that OpenAI-compatible hosts (OpenRouter, DeepSeek,

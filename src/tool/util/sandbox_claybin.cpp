@@ -1,25 +1,28 @@
-// agentty::tools::util::sandbox — the claybin backend.
+// agentty::tools::util::sandbox — the claybin backend: how every shell
+// command agentty runs gets its sandbox.
 //
-// Same boundary as the bwrap backend, built through claybin's library API
-// instead of by exec'ing a binary. Kept in its own translation unit so the
-// bwrap path is untouched: bwrap has a decade of hardening and demonstrably
-// works on users' machines, claybin is days old, and the choice between them
-// belongs to the user at runtime rather than to whoever edits this file.
+// This is where a Posture (what sandbox.cpp decided from the user's config)
+// becomes a claybin policy, gets compiled against THIS host, and is spawned:
+// spawn_argv / spawn_shell run the shell tool, diagnostics, git, hooks and
+// ACP terminals. claybin is the only engine; `--sandbox-backend bwrap` is
+// accepted for old scripts and runs claybin too.
 //
-// WHY BOTH, concretely:
-//   - no `bwrap` on PATH requirement, so a host without bubblewrap installed
-//     still gets a sandbox.
-//   - three walls bwrap gives us nothing for today, because we pass it no
-//     --seccomp fd and no cgroup: a syscall filter, landlock as a second
-//     filesystem wall, and real cgroup2 memory/pids caps.
-//   - a guarantee report, so `describe_state()` can say WHICH walls are up
+// What it builds, per host:
+//   - with namespaces: a fresh mount tree (masks are empty mounts), a private
+//     netns whose only route out is agentty's proxy, a pid namespace.
+//   - without them (Ubuntu 24.04's AppArmor default): landlock alone. Masks
+//     become per-entry rules, read-only paths inside the workspace likewise,
+//     and Full network becomes a host-loopback proxy that landlock pins the
+//     command to. claybin refuses rather than drops anything it cannot say.
+//   - everywhere: seccomp-bpf allowlist, cgroup2 caps, a syscall broker, and
+//     a guarantee report so `describe_state()` can say WHICH walls are up
 //     rather than the word "active".
 //
 // WHAT MUST NOT DIVERGE: the read set. kSystemReadRoots, kEtcReadable and
 // kHomeToolSubdirs live in sandbox.cpp and are consumed here by reference --
 // NOT restated. A previous backend restated them by hand and ended up granting
 // read on `/`, which handed ~/.ssh and ~/.aws to any approved bash call while
-// still reporting "sandbox: active". One list, two backends.
+// still reporting "sandbox: active". One list.
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/domain/sandbox_config.hpp"   // env_allowed
 #include "agentty/tool/util/sandbox_broker.hpp"
@@ -281,7 +284,7 @@ namespace {
 // that a workspace living under /tmp is not shadowed by the /tmp tmpfs mounted
 // for it. claybin's mount plan is applied in declaration order for the same
 // reason bubblewrap's is.
-[[nodiscard]] Policy<Sealed> build_policy(const Posture& p) {
+[[nodiscard]] Policy<Sealed> build_policy(const Posture& p, std::uint16_t host_proxy_port = 0) {
     auto d = Policy<Draft>{};
 
     // ── the read set, from the SHARED lists ───────────────────────────────
@@ -444,6 +447,8 @@ namespace {
                 d = std::move(d).connect("", 0).proxied_netns(port);
 #else
             d = std::move(d).connect("", 0).proxied_netns(kProxyPort);
+            if (host_proxy_port)
+                d = std::move(d).host_proxy_fallback(host_proxy_port);
 #endif
             break;  // Full
     }
@@ -1082,10 +1087,17 @@ bool available() {
     return host.landlock_abi > 0 || host.seccomp;
 }
 
-Report describe(const Posture& p) {
+Report describe(const Posture& p) { return describe_for_host(p, host()); }
+
+Report describe_for_host(const Posture& p, const ::clay::HostCapabilities& h) {
     Report r;
-    auto sealed = build_policy(p);
-    auto compiled = compile(sealed, host());
+    // model what spawn_argv will do on THIS host: with no netns, Full
+    // network runs through a host-loopback proxy pinned by landlock. the port
+    // only exists at spawn time; any nonzero value compiles the same plan
+    // shape, so the report describes the real boundary.
+    const bool host_proxy = p.net_mode == 0 /* Full */ && !h.net_namespaces;
+    auto sealed = host_proxy ? build_policy(p, kProxyPort) : build_policy(p);
+    auto compiled = compile(sealed, h);
     if (!compiled) {
         r.ok = false;
         r.detail = std::string{compiled.error().mechanism};
@@ -1120,29 +1132,67 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         return out;
     }
 
-    auto sealed = build_policy(p);
+    // ── No network namespace: the proxy moves to the host's loopback ──
+    //
+    // Full network is "through agentty's proxy, nowhere else". With a netns
+    // the kernel gives the box no other route. Without one (Ubuntu 24.04's
+    // AppArmor default) the box shares the host stack, and the guest used to
+    // get the host network unfiltered: no RFC1918 refusal, no metadata
+    // refusal, no allowlist. So start the SAME proxy on a kernel-chosen
+    // host loopback port and let claybin pin the guest to that one port with
+    // landlock (TCP; UDP too on abi 10+). Fail closed if the listener cannot
+    // be opened: no proxy means no network, never open network.
+    const auto host_now = recent_host();
+    std::shared_ptr<netproxy::Proxy> host_proxy;
+    std::uint16_t host_proxy_port = 0;
+    if (p.net_mode == 0 /* Full */ && !host_now.net_namespaces) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        socklen_t len = sizeof a;
+        if (fd < 0 || ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0
+            || ::listen(fd, 128) != 0
+            || ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len) != 0) {
+            if (fd >= 0) ::close(fd);
+            out.start_error = "sandbox: no network namespace on this host, and the "
+                              "host-side proxy could not start; refusing to run with "
+                              "the network open";
+            return out;
+        }
+        host_proxy_port = ntohs(a.sin_port);
+        host_proxy = std::make_shared<netproxy::Proxy>();
+        if (!host_proxy->start(fd, p.allow_hosts)) {
+            out.start_error = "sandbox: host-side proxy failed to start; refusing to "
+                              "run with the network open";
+            return out;
+        }
+    }
+
+    auto sealed = host_proxy_port ? build_policy(p, host_proxy_port) : build_policy(p);
     // A recent probe, not a fresh one per command: probe_host() forks six
     // throwaway children (userns, mount/net ns, user-notif, cgroup) and was
     // ~15% of every sandboxed `true`. Re-probed every few seconds, so a
     // kernel or cgroup change still reaches the next command promptly; a
     // spawn that then fails on a stale yes is reported, not silent.
-    auto compiled = compile(sealed, recent_host());
+    auto compiled = compile(sealed, host_now);
     if (!compiled) {
         out.start_error = "claybin: compile failed: " + std::string{compiled.error().mechanism};
         return out;
     }
 
     // "No network" is a promise the user chose (the pane's None, the locked
-    // posture, `run --no-network`). claybin keeps it with an empty netns, and
-    // a host that denies unprivileged user namespaces gets none: compile()
-    // still succeeds, it just DEGRADES network.isolation, and the guest would
-    // run with the host's network. Refuse instead -- fail closed, and say why.
+    // posture, `run --no-network`). claybin keeps it with an empty netns, or
+    // without one by handling landlock's TCP+UDP rights and granting none
+    // (abi 10+). On a host that can do neither, compile() succeeds but
+    // reports network.isolation below strong, and the guest would keep some
+    // of the host's network. Refuse instead -- fail closed, and say why.
     if (p.net_mode == 1 /* None */
         && compiled->guarantees.strength(CapId::net_isolation) != Enforcement::strong) {
         out.start_error =
-            "sandbox: network is set to None but this host can't isolate it "
-            "(no network namespace -- unprivileged user namespaces are likely "
-            "disabled); refusing to run with the network open";
+            "sandbox: network is set to None but this host can't fully isolate it "
+            "(no network namespace, and landlock is too old to block both TCP and "
+            "UDP -- needs kernel 6.15+); refusing to run with the network open";
         return out;
     }
 
@@ -1194,7 +1244,8 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         // Full only: under Ports the guest shares the host's network and no
         // proxy exists, so these would point every tool at a dead port.
         if (p.net_mode == 0 /* Full */) {
-            const std::string addr = "http://127.0.0.1:" + std::to_string(kProxyPort);
+            const std::string addr = "http://127.0.0.1:"
+                + std::to_string(host_proxy_port ? host_proxy_port : kProxyPort);
             for (const char* k : {"http_proxy", "https_proxy", "HTTP_PROXY",
                                   "HTTPS_PROXY", "ALL_PROXY", "all_proxy"}) {
                 bool have = false;
@@ -1259,6 +1310,12 @@ SpawnResult spawn_argv(const Posture& p, const std::vector<std::string>& argv_in
         } else {
             AGT_LOG(Tool, Warn, "sandbox.proxy.start_failed", "pid={}", spawned->pid);
         }
+    } else if (host_proxy) {
+        // the host-loopback fallback, started before the spawn so the port
+        // existed for the guest's env and claybin's landlock rule.
+        AGT_LOG(Tool, Debug, "sandbox.proxy.up", "host-loopback port={} pid={}",
+                host_proxy_port, spawned->pid);
+        out.net_proxy = std::move(host_proxy);
     }
 
     // Killing the tree, when the kernel gives us the means (cgroup.kill,

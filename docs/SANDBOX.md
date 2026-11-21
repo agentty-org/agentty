@@ -457,6 +457,44 @@ On Linux with claybin, every wall exists:
   host.kernel_isolation  NONE    process-backend, kvm available
 ```
 
+The same shipped policy on a host with **no user namespaces** — Ubuntu
+24.04's AppArmor default, which denies them to unconfined programs. Real
+`sandbox_audit` output, run under `bwrap --unshare-user --disable-userns`
+(kernel 7.3, landlock abi 11):
+
+```
+  filesystem.read        strong   landlock (per-entry masks)
+  filesystem.write       strong   landlock
+  filesystem.exec        strong   landlock
+  network.isolation      strong   landlock net: proxy port only (tcp+udp)
+  process.isolation      NONE     unavailable
+  syscall.filter         strong   seccomp-bpf: x86_64+i386 (x32 denied)
+  resource.pids          strong   cgroup2 pids.max
+  privilege.drop         strong   no_new_privs+empty bounding set
+  device.isolation       NONE     needs a mount namespace for a /dev allowlist
+```
+
+What changes without namespaces, and what it costs:
+
+- **Secrets stay masked.** Landlock has no "except this file" rule, so a
+  masked `.env` is protected by granting each of its *siblings* instead of
+  its directory. The directory keeps everything but read-file. The one
+  visible cost: a file created directly in a directory that holds a mask is
+  unreadable until the next command, because every command recompiles.
+  `ls` lists a masked file's name (never its content).
+- **Read-only paths inside the workspace stay read-only** (`.vscode/tasks.json`,
+  `.git/hooks`) the same way.
+- **Network goes through the same proxy**, which now listens on the host's
+  loopback; landlock lets the command connect to that one port and nothing
+  else (UDP and ICMP too, on landlock abi 10+). Network **None** becomes a
+  landlock rule that refuses every TCP and UDP connection.
+- **Not available:** process isolation (the command can see your other
+  processes, though it cannot signal or ptrace them), a private `/dev`, a
+  fake hostname, a cgroup namespace.
+- If the kernel is too old to keep a promise (landlock below abi 4 for the
+  network proxy, below abi 10 for network None), the command is **refused**
+  with the reason — never run with the network open.
+
 The same policy on macOS, where several do not — and the report is the only
 reason you would know which. This is real `sandbox_audit` output on darwin 24,
 with every pane row turned up:

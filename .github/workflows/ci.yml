@@ -112,6 +112,57 @@ jobs:
           gh api "repos/$REPO/actions/cache/usage" \
             --jq '"\(.active_caches_count) caches, \(.active_caches_size_in_bytes/1073741824*100|floor/100) GiB"'
 
+  # ── The sandbox, on a host with NO user namespaces ──
+  #
+  # Ubuntu 24.04's AppArmor default denies unprivileged user namespaces, and
+  # that is the host claybin's landlock-only path exists for. It used to fail
+  # there silently: every agentty preset was refused, and at claybin's level a
+  # mask under a granted directory was dropped while the report still said
+  # filesystem.read strong (a masked .env read back in full). Nothing caught
+  # it because every CI runner HAS user namespaces.
+  #
+  # This job builds only claybin (~1 min) and runs its whole suite twice:
+  # normally, and under `bwrap --unshare-user --disable-userns`, which puts the
+  # tests in exactly that position -- they cannot create a user namespace, so
+  # mask_landlock_test and net_landlock_test run their LIVE attacks (read,
+  # rename, hardlink, symlink, /proc/self/root, writes to read-only paths,
+  # TCP/UDP/ICMP egress) against the real kernel, not a model of it.
+  sandbox-no-userns:
+    name: sandbox without user namespaces
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Init claybin
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          for attempt in 1 2 3; do
+            git submodule update --init third_party/claybin && break
+            sleep $((attempt * 10))
+          done
+      - name: Deps
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+            g++ cmake ninja-build bubblewrap
+          # Ubuntu 24.04 itself denies bwrap's own userns via AppArmor; allow
+          # it for THIS bwrap so it can build the no-userns box the tests
+          # run in. (The guests inside still cannot create one: that is
+          # --disable-userns.)
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Build claybin + tests
+        run: |
+          cmake -S third_party/claybin -B cb -GNinja -DCLAYBIN_TESTS=ON \
+                -DCMAKE_BUILD_TYPE=Debug
+          cmake --build cb -j"$(nproc)"
+      - name: Suite, normal host
+        run: ctest --test-dir cb --output-on-failure --timeout 120 -j"$(nproc)"
+      - name: Suite, no user namespaces (live attacks)
+        run: |
+          bwrap --dev-bind / / --unshare-user --uid "$(id -u)" --gid "$(id -g)" \
+                --disable-userns --cap-drop ALL -- \
+            sh -c 'unshare -U true 2>/dev/null && { echo "::error::userns still available"; exit 1; };
+                   ctest --test-dir cb --output-on-failure --timeout 120 -j"$(nproc)"'
+
   build-test:
     name: build (linux gcc)
     runs-on: ubuntu-latest

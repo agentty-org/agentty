@@ -14,6 +14,8 @@
 #include "agentty/domain/sandbox_config.hpp"   // kAlwaysMasked*
 #include "agentty/util/io.hpp"
 
+#include <claybin/plan/compile.hpp>   // probe_host: which walls this host has
+
 #include <cstdio>
 #include <cstdlib>
 #include <cerrno>
@@ -46,6 +48,20 @@ int failures = 0;
 void expect(bool ok, const char* what) {
     std::printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
     if (!ok) ++failures;
+}
+
+// A check whose wall only exists with namespaces (a fake hostname, a sized
+// /dev, a cgroup namespace, an empty core_pattern mount). On a host without
+// them it is not a failure -- the wall cannot exist, and the guarantee report
+// already says so -- but it is printed, never silently dropped, so a run
+// shows exactly which walls this host lacks.
+bool has_namespaces() {
+    static const bool v = ::clay::probe_host().mount_namespaces;
+    return v;
+}
+void expect_ns(bool ok, const char* what) {
+    if (has_namespaces()) return expect(ok, what);
+    std::printf("  n/a  %s (needs namespaces; this host has none)\n", what);
 }
 
 // The read set agentty grants by default, enough for /bin/sh + python3.
@@ -580,10 +596,13 @@ int main() {
         agentty::sandbox_cfg::Config cfg;
         cfg.configured = true;            // defaults = the Balanced posture
         sb::set_config(cfg);
-        sb::init(sb::Mode::On);
+        // On, not Auto: the shipped posture must COMPILE on this host. init
+        // now compiles it, so a refusal here (the no-userns failure) is a
+        // failed check, not a quiet skip.
+        expect(sb::init(sb::Mode::On), "the shipped posture is buildable on this host");
 
         if (!sb::is_active()) {
-            std::printf("  no backend on this host -- skipped\n");
+            std::printf("  %s\n", sb::describe_state().c_str());
         } else {
             std::printf("  %s\n", sb::describe_state().c_str());
 
@@ -636,12 +655,13 @@ int main() {
             hr.configured = true;
             hr.fs_scope = agentty::sandbox_cfg::FsScope::HostReadable;
             sb::set_config(hr);
-            sb::init(sb::Mode::On);
+            expect(sb::init(sb::Mode::On), "host-readable is buildable on this host");
             auto h = sb::run_shell_command(
                 "cat .env " + fake + "/.ssh/id_ed25519 2>&1; echo ---; head -c 4 /etc/os-release",
                 64 * 1024, std::chrono::seconds{30});
             ::setenv("HOME", saved_home.c_str(), 1);
             std::filesystem::remove_all(fake);
+            if (!h.started) std::printf("  not started: %s\n", h.start_error.c_str());
             expect(h.started, "host-readable starts a command");
             expect(h.output.find("should_never") == std::string::npos,
                    "host-readable still masks .env and ~/.ssh");
@@ -650,7 +670,7 @@ int main() {
                    "host-readable can read outside the toolchain dirs");
             sb::reset_config_for_test();
             sb::set_config(agentty::sandbox_cfg::Config{});
-            sb::init(sb::Mode::Auto);
+            (void)sb::init(sb::Mode::Auto);
         }
 
         // The Hardened preset must still run a command (Strict once had no
@@ -670,7 +690,7 @@ int main() {
             hard.fs_scope = agentty::sandbox_cfg::FsScope::Minimal;
             hard.read_paths = {"~/.agentty-live-read"};
             sb::set_config(hard);
-            sb::init(sb::Mode::On);
+            expect(sb::init(sb::Mode::On), "Hardened is buildable on this host");
             auto r = sb::run_shell_command("cat ~/.agentty-live-read/x",
                                            64 * 1024, std::chrono::seconds{30});
             expect(r.output.find("tilde-read-ok") != std::string::npos,
@@ -678,7 +698,7 @@ int main() {
             std::filesystem::remove_all(dir);
             sb::reset_config_for_test();
             sb::set_config(agentty::sandbox_cfg::Config{});
-            sb::init(sb::Mode::Auto);
+            (void)sb::init(sb::Mode::Auto);
         }
 
         // ── why the handoff gate cannot be a sandbox wall ───────────────
@@ -837,8 +857,8 @@ int main() {
         out.clear();
         run(p, "uname -n", out);
         std::printf("  child(on)=%s", out.c_str());
-        expect(out.find("sandbox") != std::string::npos,
-               "fake_hostname=true shows `sandbox`");
+        expect_ns(out.find("sandbox") != std::string::npos,
+                  "fake_hostname=true shows `sandbox`");
     }
     {
         // #1: a handoff ro bind must not uncover a mask. Workspace = a fake
@@ -900,9 +920,10 @@ int main() {
         // #2: /dev/shm is its own tmpfs with a cap, /dev itself is tiny.
         run(p, "df -B1 --output=size,target /dev/shm /dev 2>&1 | tail -n +2", out);
         std::printf("  df: %s", out.c_str());
-        expect(out.find("67108864 /dev/shm") != std::string::npos,
-               "/dev/shm is capped at 64 MiB (#2)");
-        expect(out.find("1048576 /dev") != std::string::npos, "/dev is capped at 1 MiB (#2)");
+        expect_ns(out.find("67108864 /dev/shm") != std::string::npos,
+                  "/dev/shm is capped at 64 MiB (#2)");
+        expect_ns(out.find("1048576 /dev") != std::string::npos,
+                  "/dev is capped at 1 MiB (#2)");
         out.clear();
         // #3: the box is the OOM killer's first pick.
         run(p, "cat /proc/self/oom_score_adj", out);
@@ -933,7 +954,8 @@ int main() {
         // #7: own cgroup namespace, no core dumps.
         run(p, "cat /proc/self/cgroup; ulimit -c", out);
         std::printf("  cgroup/core: %s", out.c_str());
-        expect(out.find("0::/\n") != std::string::npos, "cgroup namespace hides the host path (#7)");
+        expect_ns(out.find("0::/\n") != std::string::npos,
+                  "cgroup namespace hides the host path (#7)");
         expect(out.find("\n0\n") != std::string::npos || out.ends_with("0\n"),
                "RLIMIT_CORE is 0 (#7)");
         out.clear();
@@ -942,16 +964,24 @@ int main() {
         ::setenv("WAYLAND_DISPLAY", "wayland-1", 1);
         ::setenv("GROQ_API_KEY", "gsk_should_never", 1);
         ::setenv("MY_BUILD_FLAG", "kept", 1);
+        ::setenv("CC", "cc-kept", 1);
         run(p, "env", out);
         expect(out.find("DBUS_SESSION_BUS_ADDRESS") == std::string::npos &&
                    out.find("WAYLAND_DISPLAY") == std::string::npos,
                "desktop/session sockets are not inherited (#4)");
         expect(out.find("gsk_should_never") == std::string::npos,
                "provider API keys are not inherited (#4)");
-        expect(out.find("MY_BUILD_FLAG=kept") != std::string::npos,
-               "ordinary env vars still are (#4)");
+        // The shipped scope is Toolchain: the variables builds read pass
+        // (CC, CARGO_*, VIRTUAL_ENV, ...), an unknown name does not -- it
+        // could be a token named anything. MY_BUILD_FLAG passing used to be
+        // asserted here, from before the scope existed.
+        expect(out.find("CC=cc-kept") != std::string::npos,
+               "toolchain env vars still are (#4)");
+        expect(out.find("MY_BUILD_FLAG") == std::string::npos,
+               "unknown env vars are not, under the Toolchain scope (#4)");
         ::unsetenv("GROQ_API_KEY");
         ::unsetenv("MY_BUILD_FLAG");
+        ::unsetenv("CC");
     }
 
     // ── the network boundary (audit #1) ──────────────────────────────────
@@ -977,11 +1007,16 @@ int main() {
             && ::listen(hostsrv, 4) == 0;
 
         // Its own namespace: a fresh one has loopback and nothing else.
+        // Without a netns the box shares the host's interfaces, and the wall
+        // is landlock pinning it to the proxy port -- checked below by the
+        // direct connect being refused, so this one is skipped there.
+        if (::clay::probe_host().net_namespaces) {
         run(p, "cat /proc/net/dev | awk 'NR>2 {print $1}' | tr -d ' :' | sort | tr '\\n' ' '", out);
         expect(out.find("lo") != std::string::npos && out.find("eth") == std::string::npos
                    && out.find("wl") == std::string::npos,
                "the box has its own netns: loopback only (#1)");
         out.clear();
+        }
         // The proxy env the toolchain reads, in every spelling.
         run(p, "env | grep -c -i '^\\(http\\|https\\|all\\)_proxy=127\\|^\\(HTTP\\|HTTPS\\|ALL\\)_PROXY=http'", out);
         expect(out.find("6") != std::string::npos,
@@ -995,19 +1030,21 @@ int main() {
                        || out.find("Could not connect") != std::string::npos,
                    "a host loopback service is unreachable from the box (#1)");
             out.clear();
-            // Through the proxy: refused on the resolved address.
+            // Through the proxy: refused on the resolved address. `-x
+            // "$http_proxy"` rather than a literal: without a netns the proxy
+            // is on a kernel-chosen host-loopback port, not 3128.
             run(p, "curl -sS --max-time 5 -o /dev/null -w loop=%{http_code} "
-                   "-x http://127.0.0.1:3128 http://127.0.0.1:48231/ 2>&1", out);
+                   "-x \"$http_proxy\" http://127.0.0.1:48231/ 2>&1", out);
             expect(out.find("loop=403") != std::string::npos,
                    "the proxy refuses the host's loopback (#1)");
             out.clear();
         }
         run(p, "curl -sS --max-time 5 -o /dev/null -w lan=%{http_code} "
-               "-x http://127.0.0.1:3128 http://192.168.1.1/ 2>&1", out);
+               "-x \"$http_proxy\" http://192.168.1.1/ 2>&1", out);
         expect(out.find("lan=403") != std::string::npos, "the proxy refuses RFC1918 (#1)");
         out.clear();
         run(p, "curl -sS --max-time 5 -o /dev/null -w meta=%{http_code} "
-               "-x http://127.0.0.1:3128 http://169.254.169.254/latest/meta-data/ 2>&1", out);
+               "-x \"$http_proxy\" http://169.254.169.254/latest/meta-data/ 2>&1", out);
         expect(out.find("meta=403") != std::string::npos,
                "the proxy refuses cloud metadata (#1)");
         out.clear();
@@ -1164,7 +1201,7 @@ int main() {
         expect(sys.find("SYS_WRITABLE") == std::string::npos &&
                    sys.find("CORE_WRITABLE") == std::string::npos,
                "/proc/sys is read-only");
-        expect(sys.rfind("0\n", 0) == 0, "core_pattern still masked");
+        expect_ns(sys.rfind("0\n", 0) == 0, "core_pattern still masked");
     }
 
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");

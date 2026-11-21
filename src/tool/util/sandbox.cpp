@@ -116,6 +116,13 @@ maya::published<const sandbox_cfg::Config> g_cfg;
 // through whenever the first happened to publish something falsy.
 std::atomic<bool> g_cfg_sealed{false};
 
+// What init() learned compiling the SHIPPED posture on this host: why it was
+// refused (empty when it compiled), and which load-bearing walls came out
+// below strong. Read by describe_state() so the banner reports this host, not
+// "a backend exists". Published values, not locks (the concurrency banlist).
+maya::published<const std::string> g_posture_error;
+maya::published<const std::string> g_posture_degraded;
+
 // Only the macOS sandbox-exec backend needs the "can we run this binary?"
 // probe: Linux asks bwrap for a real namespace instead (see below), and the
 // Windows/unsupported branch just hard-codes Backend::None.
@@ -1184,6 +1191,29 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 bool init(Mode requested) {
     g_mode.store(requested, std::memory_order_release);
     auto found = (requested == Mode::Off) ? Backend::None : probe();
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+    // "A backend exists" is not "the posture we ship compiles here". A host
+    // that can build SOME wall but refuses THIS policy (a mask that cannot be
+    // expressed, a network promise that cannot be kept) used to report
+    // `sandbox: active` and then fail every command. Compile the real
+    // posture once, now: a refusal is a startup fact, stated in the banner,
+    // and under On it stops startup with the reason.
+    if (found == Backend::Claybin) {
+        const auto rep = claybin_backend::describe(build_claybin_posture());
+        g_posture_error.publish(std::make_shared<const std::string>(rep.ok ? "" : rep.detail));
+        std::string degraded;
+        if (rep.ok)
+            for (const auto& w : rep.walls)
+                if ((w.name == "filesystem.read" || w.name == "filesystem.write"
+                     || w.name == "network.isolation" || w.name == "process.isolation")
+                    && w.strength != "strong") {
+                    if (!degraded.empty()) degraded += ", ";
+                    degraded += w.name + " " + w.strength;
+                }
+        g_posture_degraded.publish(std::make_shared<const std::string>(std::move(degraded)));
+        if (!rep.ok) found = Backend::None;
+    }
+#endif
     g_backend.store(found, std::memory_order_release);
     if (requested == Mode::On && found == Backend::None) {
         // Strict mode + no backend = init failure. Caller decides
@@ -1345,8 +1375,18 @@ std::string describe_state() {
         if (ws == ws.root_path())
             return std::string{"sandbox: degraded ("} + tag
                  + ", --workspace / gives no filesystem containment)";
+        // The walls this host could not build for the shipped posture, by
+        // name -- "active" alone was true on a host enforcing far less.
+        if (const auto deg = g_posture_degraded.current(); deg && !deg->empty())
+            return std::string{"sandbox: active ("} + tag + "; this host: " + *deg + ")";
         return std::string{"sandbox: active ("} + tag + ")";
     }
+    // The engine exists but refused the posture we ship. Name the reason:
+    // "no backend" sent people to install things that were already there.
+    if (const auto err = g_posture_error.current(); err && !err->empty())
+        return std::string{m == Mode::On ? "sandbox: requested but the posture cannot be built here ("
+                                         : "sandbox: unavailable, running unsandboxed ("}
+             + *err + ")";
     if (m == Mode::On)
         return "sandbox: requested but no backend "
 #if defined(__linux__)

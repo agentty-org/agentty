@@ -155,23 +155,37 @@ with `user_namespaces = false`:
 
 | capability | with userns | without |
 |---|---|---|
-| `filesystem.read` | strong (mount-ns) | **strong (landlock)** |
+| `filesystem.read` | strong (mount-ns) | **strong (landlock, per-entry masks)** |
 | `filesystem.write` | strong (mount-ns) | **strong (landlock)** |
 | `filesystem.exec` | strong (landlock) | **strong (landlock)** |
 | `syscall.filter` | strong (seccomp-bpf) | **strong (seccomp-bpf)** |
 | `resource.memory` | strong (cgroup2) | **strong (cgroup2)** |
 | `privilege.drop` | strong | **strong** |
-| `network.isolation` | strong (netns) | none |
+| `network.isolation` | strong (netns) | **strong (landlock net: proxy port only)** on abi 10+ |
 | `process.isolation` | strong (userns+pidns) | none |
+
+> **Correction (2026-11, see [sandbox-roadmap.md](sandbox-roadmap.md)).** The
+> first version of this table said `filesystem.read: strong (landlock)` and
+> was measured on a SMALL policy. On agentty's real posture two things were
+> wrong. Every preset was refused outright (the merged-`/usr` symlinks were
+> `Fidelity::impossible` without a mount namespace), so every command failed.
+> And at claybin's level, a mask under a granted directory became a landlock
+> deny that landlock cannot express — compile skipped it and still reported
+> `strong`; a masked `.env` read back in full. Network was the open host
+> stack. All three are fixed: masks and read-only paths are expanded into
+> per-entry rules (or compile refuses), existing host symlinks are accepted,
+> and Full network is pinned by landlock to a host-loopback proxy. CI's
+> "sandbox without user namespaces" job runs claybin's live attacks in that
+> position on every push.
 
 The plan drops from 29 ops to 9 and emits no `unshare` at all, so there is
 nothing left to fail.
 
 That is a **real sandbox where bwrap has none**: the filesystem boundary — the
 one that keeps an approved command out of `~/.ssh` — survives intact, as does
-the syscall filter. Losing network and pid isolation is a genuine downgrade,
-and the wall report says so per capability, which is the honest way to ship a
-partial boundary.
+the syscall filter and (on landlock abi 10+) the network boundary. Losing pid
+isolation is a genuine downgrade, and the wall report says so per capability,
+which is the honest way to ship a partial boundary.
 
 ### Two changes this needed
 
