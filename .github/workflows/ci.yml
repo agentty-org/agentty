@@ -584,6 +584,32 @@ jobs:
     container: archlinux:base-devel
     steps:
       - uses: actions/checkout@v5
+      - name: FetchContent pins match the PKGBUILD
+        # The PKGBUILD feeds nlohmann_json / simdjson / mimalloc through
+        # FETCHCONTENT_SOURCE_DIR_* from sha256-checked tarballs. If a commit
+        # moves a pin in cmake/AgenttySubmodules.cmake without updating the
+        # PKGBUILD, every from-source AUR build breaks on users' machines — and
+        # the configure step below would not notice, since it uses whatever
+        # tarball the PKGBUILD names. Fix = update the tags AND sha256sums
+        # (`curl -sL <tarball-url> | sha256sum`), deliberately by hand.
+        shell: sh
+        run: |
+          cm=cmake/AgenttySubmodules.cmake; pb=packaging/arch/agentty-git/PKGBUILD
+          pin_of() { awk -v n="$1" '$0 ~ "^[[:space:]]*" n "$" {f=1} f&&/GIT_TAG/{print $2; exit}' "$cm"; }
+          fail=0
+          check() {
+            if [ -z "$2" ] || [ "$2" != "$3" ]; then
+              echo "::error::$1 pin drifted: cmake=$2 pkgbuild=$3 -- update $pb (tag + sha256sums)"
+              fail=1
+            else
+              echo "ok: $1 $2"
+            fi
+          }
+          check nlohmann_json "$(pin_of nlohmann_json)" "$(sed -nE 's/^_json_tag=(.*)/\1/p' "$pb")"
+          check simdjson      "$(pin_of simdjson)"      "$(sed -nE 's/^_simdjson_tag=(.*)/\1/p' "$pb")"
+          check mimalloc "$(sed -nE 's/.*AGENTTY_MIMALLOC_TAG "([^"]+)".*/\1/p' "$cm" | head -1)" \
+                         "$(sed -nE 's/^_mimalloc_tag=(.*)/\1/p' "$pb")"
+          exit $fail
       - name: Deps
         run: pacman -Syu --noconfirm --needed git cmake ninja openssl libnghttp2   # -Syu: Arch has no partial upgrades
       - name: makepkg --nobuild (fetch + prepare + configure)

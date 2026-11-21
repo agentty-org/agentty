@@ -74,7 +74,7 @@ so they swap cleanly):
 | Version | last tagged release | whatever master is at build time |
 | Security updates for deps | wait for our next release | arrive via normal `pacman -Syu` |
 | AUR account | `0xBAAAAAAD` | `1ay1` (key: `~/.ssh/neowall_aur`, override `AUR_GIT_KEY`) |
-| Updated by | CI `publish-aur` on tag push / `bump.sh` step 6 | `bump.sh` step 6b |
+| Updated by | CI `publish-aur` on tag push | by hand (see below) |
 
 `arch/agentty-git/PKGBUILD` design notes (read before touching it):
 
@@ -98,21 +98,21 @@ so they swap cleanly):
 ### What a release means for agentty-git
 
 Nothing breaks for users — their next build simply picks up the new HEAD.
-Two maintenance concerns exist, and `scripts/bump.sh` step **6b** handles
-both between the agentty-bin sync and the tap/bucket pushes:
+Two maintenance concerns exist:
 
 1. **Pin drift (the real hazard).** The PKGBUILD's `_json_tag` /
    `_simdjson_tag` / `_mimalloc_tag` must equal the tags pinned in
    `cmake/AgenttySubmodules.cmake` (`GIT_TAG` lines + `AGENTTY_MIMALLOC_TAG`).
    If a release moves a pin without updating the PKGBUILD, **every**
-   from-source AUR build fails on users' machines. bump.sh extracts both
-   sides and hard-stops the release on mismatch — updating the tags *and*
-   recomputing the tarball `sha256sums` is deliberately a human step
-   (`curl -sL <tarball-url> | sha256sum`).
+   from-source AUR build fails on users' machines. CI's "AUR agentty-git
+   configures" job compares both sides on every push and fails on mismatch —
+   updating the tags *and* recomputing the tarball `sha256sums` is
+   deliberately a human step (`curl -sL <tarball-url> | sha256sum`).
 2. **Stale AUR page.** The version shown on aur.archlinux.org comes from the
-   last-pushed `.SRCINFO`. bump.sh regenerates it at the fresh tag and
-   pushes, and commits the same `pkgver=` back to
-   `packaging/arch/agentty-git/PKGBUILD` so the two never diverge.
+   last-pushed `.SRCINFO`. It is cosmetic (`pkgver()` tracks HEAD anyway);
+   refresh it after a release with the manual resync below, setting the same
+   `pkgver=` in `packaging/arch/agentty-git/PKGBUILD` so the two never
+   diverge.
 
 Manual resync (rarely needed — e.g. a PKGBUILD-only fix between releases):
 
