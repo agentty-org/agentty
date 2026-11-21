@@ -61,6 +61,20 @@ using json = nlohmann::json;
         const auto& d = u["prompt_tokens_details"];
         cached  = d.value("cached_tokens", 0);
         written = d.value("cache_write_tokens", 0);
+        su.cache_reported = d.contains("cached_tokens") || d.contains("cache_write_tokens");
+    }
+    // Hosts that report the cache outside prompt_tokens_details, both as a
+    // part of prompt_tokens: DeepSeek's prompt_cache_hit_tokens, and a
+    // top-level cached_tokens (Moonshot/Kimi). Only consulted when the
+    // standard field is absent, so nothing is counted twice.
+    if (!su.cache_reported) {
+        if (u.contains("prompt_cache_hit_tokens")) {
+            cached = u.value("prompt_cache_hit_tokens", 0);
+            su.cache_reported = true;
+        } else if (u.contains("cached_tokens")) {
+            cached = u.value("cached_tokens", 0);
+            su.cache_reported = true;
+        }
     }
     cached  = std::clamp(cached, 0, prompt);
     written = std::clamp(written, 0, prompt - cached);
@@ -95,6 +109,7 @@ using json = nlohmann::json;
         const auto& d = u["input_tokens_details"];
         cached  = d.value("cached_tokens", 0);
         written = d.value("cache_write_tokens", 0);
+        su.cache_reported = d.contains("cached_tokens") || d.contains("cache_write_tokens");
     }
     cached  = std::clamp(cached, 0, prompt);
     written = std::clamp(written, 0, prompt - cached);
@@ -112,14 +127,24 @@ using json = nlohmann::json;
 }
 
 // Ollama native /api/chat final frame:
-//   {"done":true, "prompt_eval_count":N, "eval_count":N, ...}
+//   {"done":true, "prompt_eval_count":N, "prompt_eval_cached_count":N,
+//    "eval_count":N, ...}
 // The counts are top-level fields on the DONE frame, not a nested `usage`
-// object — so this reads from the frame directly. No cache-token concept
-// (local KV cache is prefix-automatic and unreported).
+// object — so this reads from the frame directly. prompt_eval_count is the
+// WHOLE prompt, cached part included; Ollama 0.40+ reports that part as
+// prompt_eval_cached_count (78-token prompt sent twice: 78 both times, 0 then
+// 77 cached). Older Ollama omits it, which leaves cache_reported false.
 [[nodiscard]] inline std::optional<StreamUsage> from_ollama(const json& frame) {
     if (!frame.is_object()) return std::nullopt;
     StreamUsage su;
-    su.input_tokens  = frame.value("prompt_eval_count", 0);
+    const int prompt = std::max(frame.value("prompt_eval_count", 0), 0);
+    int cached = 0;
+    if (frame.contains("prompt_eval_cached_count")) {
+        cached = std::clamp(frame.value("prompt_eval_cached_count", 0), 0, prompt);
+        su.cache_reported = true;
+    }
+    su.input_tokens            = prompt - cached;
+    su.cache_read_input_tokens = cached;
     su.output_tokens = frame.value("eval_count", 0);
     return any(su) ? std::optional{su} : std::nullopt;
 }

@@ -298,6 +298,8 @@ void dispatch_event(StreamCtx& ctx, std::string_view name, std::string_view data
                 su.output_tokens               = u.value("output_tokens", 0);
                 su.cache_creation_input_tokens = u.value("cache_creation_input_tokens", 0);
                 su.cache_read_input_tokens     = u.value("cache_read_input_tokens", 0);
+                su.cache_reported = u.contains("cache_read_input_tokens")
+                                 || u.contains("cache_creation_input_tokens");
                 ctx.sink(su);
             }
             break;
@@ -411,6 +413,8 @@ void dispatch_event(StreamCtx& ctx, std::string_view name, std::string_view data
                 su.output_tokens               = u.value("output_tokens", 0);
                 su.cache_creation_input_tokens = u.value("cache_creation_input_tokens", 0);
                 su.cache_read_input_tokens     = u.value("cache_read_input_tokens", 0);
+                su.cache_reported = u.contains("cache_read_input_tokens")
+                                 || u.contains("cache_creation_input_tokens");
                 ctx.sink(su);
             }
             if (j.contains("delta") && j["delta"].contains("stop_reason")

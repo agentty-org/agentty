@@ -512,6 +512,7 @@ json message_to_json(const Message& m) {
         if (t.reasoning_tokens)    tj["reasoning"] = t.reasoning_tokens;
         if (t.cache_read)          tj["cache_r"]   = t.cache_read;
         if (t.cache_creation)      tj["cache_w"]   = t.cache_creation;
+        if (t.cache_reported)      tj["cache_rep"] = true;
         if (t.transient_retries)   tj["retries"]   = t.transient_retries;
         if (t.mid_stream_failures) tj["mid_fail"]  = t.mid_stream_failures;
         if (t.no_progress_failures) tj["stall"]    = t.no_progress_failures;
@@ -789,6 +790,8 @@ std::expected<Message, DeserializeError> message_from_json(const json& j) {
         t.reasoning_tokens    = u32("reasoning");
         t.cache_read          = u32("cache_r");
         t.cache_creation      = u32("cache_w");
+        if (auto it = tj.find("cache_rep"); it != tj.end() && it->is_boolean())
+            t.cache_reported = it->get<bool>();
         t.transient_retries   = u16("retries");
         t.mid_stream_failures = u16("mid_fail");
         t.no_progress_failures = u16("stall");
@@ -2193,6 +2196,7 @@ static std::uint64_t message_fingerprint(const Message& m) {
         f.num(t.ttft_ms); f.num(t.stream_ms); f.num(t.input_tokens);
         f.num(t.output_tokens); f.num(t.reasoning_tokens); f.num(t.cache_read);
         f.num(t.cache_creation); f.num(t.transient_retries);
+        f.num(t.cache_reported ? 1 : 0);
         f.num(t.mid_stream_failures); f.num(t.no_progress_failures);
         f.num(t.wire_bytes);
     }

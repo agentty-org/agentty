@@ -24,7 +24,9 @@
 #include "agentty/domain/stats/unit.hpp"
 
 #include <chrono>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using agentty::Message;
@@ -399,6 +401,49 @@ TEST_CASE("stats: the cache split accounts for every prefix token") {
     CHECK(f.cache.misses == 300);
     CHECK(f.context.peak_input == 1000);
     CHECK(f.cache.turns_with_cache == 1);
+}
+
+namespace {
+// The value a section shows for `label`, or -1 if it is not emitted.
+double shown(const st::Facts& f, std::span<const st::Section> secs,
+             std::string_view label) {
+    std::vector<st::Metric> out;
+    for (const auto& sec : secs) sec.extract(f, out);
+    for (const auto& mt : out)
+        if (mt.label == label) return mt.value;
+    return -1;
+}
+}  // namespace
+
+TEST_CASE("stats: 'In' counts the whole prompt, cached tokens included") {
+    // Telemetry input_tokens is only the UNCACHED part. On a warm session
+    // "In" used to show that alone — 300 here instead of 1000 — and "Total"
+    // inherited the same 700-token hole.
+    const auto f = rebuild(thread_of({with_usage(300, 100, 600, 100)}));
+    CHECK(shown(f, st::sections::tokens, "In") == 1000);
+    CHECK(shown(f, st::sections::tokens, "Total") == 1100);
+}
+
+TEST_CASE("stats: turns with no cache report never count as misses") {
+    // A thread that switched from a caching host to one with no cache
+    // concept: the second turn says nothing about a cache, so it must not
+    // add 5000 "uncached" tokens and halve the hit rate.
+    Message silent = with_usage(5000, 10);
+    const auto f = rebuild(thread_of({with_usage(100, 10, 900), silent}));
+    CHECK(f.cache.turns_with_cache == 1);
+    CHECK(f.cache.misses == 100);
+    CHECK(shown(f, st::sections::cache, "Hit rate") == doctest::Approx(0.9));
+
+    // …but a host that REPORTED "cached: 0" did miss, and that counts.
+    Message reported_miss = with_usage(5000, 10);
+    reported_miss.telemetry->cache_reported = true;
+    const auto g = rebuild(thread_of({with_usage(100, 10, 900), reported_miss}));
+    CHECK(g.cache.turns_with_cache == 2);
+    CHECK(g.cache.misses == 5100);
+
+    // And a thread that never reported a cache has no cache tab to show.
+    const auto none = rebuild(thread_of({with_usage(5000, 10)}));
+    CHECK(shown(none, st::sections::cache, "Hit rate") == -1);
 }
 
 // ── The incremental fold ─────────────────────────────────────────────────

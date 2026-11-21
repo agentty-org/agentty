@@ -134,3 +134,35 @@ TEST_CASE("stream clock: StreamStarted still moves the origin forward") {
     const auto& t = seal(m, T0 + milliseconds{35});
     CHECK(t.ttft_ms == 5);   // the 30 ms before StreamStarted is excluded
 }
+
+TEST_CASE("cache gauge: armed by launch_stream, so OpenAI-chat and Ollama get one") {
+    install_stub_deps();
+    using V = StreamState::CacheVerdict;
+
+    // OpenAI-chat / OpenRouter / DeepSeek / Ollama send usage with NO
+    // StreamStarted. The verdict used to be armed only by StreamStarted, so on
+    // those transports it was never decided and the gauge stayed blank.
+    Model m = streaming_since(std::chrono::seconds{0});
+    (void)cmd::launch_stream(m);
+    StreamUsage first;
+    first.cache_creation_input_tokens = 40'000;   // cold write
+    first.input_tokens = 200;
+    first.cache_reported = true;
+    m = step(std::move(m), first, T0 + milliseconds{10});
+    CHECK(m.s.cache_verdict == V::Warming);
+
+    // The next request on the same transport: still no StreamStarted.
+    (void)cmd::launch_stream(m);
+    StreamUsage second;
+    second.cache_read_input_tokens = 40'000;
+    second.input_tokens = 900;
+    second.cache_reported = true;
+    m = step(std::move(m), second, T0 + milliseconds{30});
+    CHECK(m.s.cache_verdict == V::Hit);
+    CHECK(m.s.cache_reuse_pct == 99);
+
+    // A repeated usage frame for the SAME request (Anthropic sends one at
+    // message_start and again at message_delta) must not re-judge it.
+    m = step(std::move(m), second, T0 + milliseconds{40});
+    CHECK(m.s.cache_priced == 2);
+}

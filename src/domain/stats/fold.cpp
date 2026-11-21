@@ -159,12 +159,20 @@ void Facts::fold(const Message& msg) {
     // Cache: the three-way split a band renders. `input_tokens` excludes
     // the cache fields on the wire, so it IS the miss term — no arithmetic
     // needed, and none invented.
-    if (t.cache_read || t.cache_creation) ++cache.turns_with_cache;
-    cache.hits   += t.cache_read;
-    cache.writes += t.cache_creation;
-    cache.misses += t.input_tokens;
-    if (const double r = t.cache_hit_ratio(); r >= 0.0)
-        push_capped(cache.ratio_series, r);
+    //
+    // Only turns whose host reported a cache count toward it (a reported 0 is
+    // a real miss and IS counted). A turn from a host with no cache concept
+    // (old Ollama, ACP agents) would otherwise add its whole prompt as
+    // "misses" and drag the hit rate down for a thread that switched
+    // providers — a 0% nobody measured.
+    if (t.cache_counted()) {
+        ++cache.turns_with_cache;
+        cache.hits   += t.cache_read;
+        cache.writes += t.cache_creation;
+        cache.misses += t.input_tokens;
+        if (const double r = t.cache_hit_ratio(); r >= 0.0)
+            push_capped(cache.ratio_series, r);
+    }
 
     // Context: the true prefix is input + both cache terms.
     const std::uint64_t prefix = static_cast<std::uint64_t>(t.input_tokens)

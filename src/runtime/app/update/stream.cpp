@@ -1296,16 +1296,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // (soon-to-be-small) prefix too, so it legitimately resets the
             // idle timer.
             m.s.last_wire_at = now;
-            // Cache verdict: one per request. The idle gap is measured from
-            // the END of the previous request (its last usage frame), and a
-            // compaction's summary request is not a turn the gauge judges.
-            if (!m.s.compacting) {
-                m.s.cache_gap = m.s.cache_last_at.time_since_epoch().count() == 0
-                    ? std::chrono::seconds{0}
-                    : std::chrono::duration_cast<std::chrono::seconds>(
-                          now - m.s.cache_last_at);
-                m.s.cache_pending = true;
-            }
+            // The cache verdict is armed in launch_stream, which every
+            // transport passes through; most never send StreamStarted.
             // The phase variant guarantees a non-null ctx when active;
             // StreamStarted only fires after submit_message / retry has
             // already moved us into Streaming.
@@ -1975,7 +1967,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                         e.input_tokens, e.cache_read_input_tokens,
                         e.cache_creation_input_tokens,
                         !m.s.smart_turn_model.empty() ? m.s.smart_turn_model.value
-                                                      : m.d.model_id.value);
+                                                      : m.d.model_id.value,
+                        e.cache_reported);
                 }
                 m.s.cache_last_at = m.now;
                 AGT_LOG(Perf, Debug, "turn.cache",
@@ -2036,6 +2029,10 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                             static_cast<std::uint32_t>(e.cache_read_input_tokens);
                         t.cache_creation =
                             static_cast<std::uint32_t>(e.cache_creation_input_tokens);
+                        // Sticky within the turn: once the host has said
+                        // anything about its cache, a later frame that
+                        // omits the field can't unsay it.
+                        t.cache_reported = t.cache_reported || e.cache_reported;
                     }
                     if (e.output_tokens)
                         t.output_tokens = static_cast<std::uint32_t>(e.output_tokens);

@@ -788,6 +788,15 @@ struct Message {
         std::uint32_t reasoning_tokens = 0;
         std::uint32_t cache_read       = 0;
         std::uint32_t cache_creation   = 0;
+        // The host sent a cache field this turn, even if both counts were 0.
+        // OpenAI reports only reads, so a total miss there is read=0, write=0
+        // — identical to a host with no cache at all, except for this flag.
+        // Threads saved before it existed read as "reported" when either
+        // count is non-zero (see cache_counted()).
+        bool          cache_reported   = false;
+        [[nodiscard]] bool cache_counted() const noexcept {
+            return cache_reported || cache_read || cache_creation;
+        }
 
         // Transport health. Non-zero means the turn survived something.
         std::uint16_t transient_retries    = 0;

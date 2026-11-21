@@ -269,7 +269,40 @@ TEST_CASE("usage extractors") {
         CHECK(su.has_value());
         CHECK(su->input_tokens == 300);
         CHECK(su->output_tokens == 80);
-        CHECK(su->cache_read_input_tokens == 0);  // no cache concept for local
+        CHECK(su->cache_read_input_tokens == 0);
+        CHECK(!su->cache_reported);   // older Ollama: says nothing about the cache
+    }
+    // Ollama 0.40+: prompt_eval_count is the WHOLE prompt and the cached part
+    // is reported beside it. Counting all 300 as fresh input used to inflate
+    // "sent uncached" and hide every local cache hit.
+    {
+        auto frame = json::parse(R"({"done":true,"prompt_eval_count":300,
+                                     "prompt_eval_cached_count":277,"eval_count":5})");
+        auto su = usage::from_ollama(frame);
+        REQUIRE(su.has_value());
+        CHECK(su->input_tokens == 23);
+        CHECK(su->cache_read_input_tokens == 277);
+        CHECK(su->cache_reported);
+        CHECK(su->input_tokens + su->cache_read_input_tokens == 300);  // prompt intact
+    }
+    // DeepSeek reports its cache as a top-level part of prompt_tokens.
+    {
+        auto u = json::parse(R"({"prompt_tokens":1000,"completion_tokens":10,
+                                 "prompt_cache_hit_tokens":900,
+                                 "prompt_cache_miss_tokens":100})");
+        auto su = usage::from_openai(u);
+        REQUIRE(su.has_value());
+        CHECK(su->cache_read_input_tokens == 900);
+        CHECK(su->input_tokens == 100);
+        CHECK(su->cache_reported);
+    }
+    // "cached_tokens": 0 is a REPORT (a real miss), not silence.
+    {
+        auto u = json::parse(R"({"prompt_tokens":5000,"completion_tokens":1,
+                                 "prompt_tokens_details":{"cached_tokens":0}})");
+        CHECK(usage::from_openai(u)->cache_reported);
+        auto silent = json::parse(R"({"prompt_tokens":5000,"completion_tokens":1})");
+        CHECK(!usage::from_openai(silent)->cache_reported);
     }
     CHECK(!usage::from_ollama(json::parse(R"({"done":true})")).has_value());
 }

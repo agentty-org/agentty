@@ -310,6 +310,11 @@ struct StreamUsage {
     // context math, they are already included there. 0 when the wire omits
     // the detail (non-reasoning model, or a provider that doesn't report it).
     int reasoning_output_tokens    = 0;
+    // The host SENT a cache field, even if its value was 0. Separates "this
+    // provider reports its cache and nothing hit" (a real miss) from "this
+    // provider says nothing about caching" (n/a) — which zero counts alone
+    // cannot. Display only; never affects token math.
+    bool cache_reported            = false;
 };
 // Why the stream ended. Maps Anthropic's wire string
 // (`message_delta.delta.stop_reason`: "end_turn" | "tool_use" |

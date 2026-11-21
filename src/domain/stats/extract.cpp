@@ -177,8 +177,13 @@ void smart_by_model(const Facts& f, std::vector<Metric>& out) {
 // ── Tokens ──────────────────────────────────────────────────────────────
 
 void tokens_totals(const Facts& f, std::vector<Metric>& out) {
-    const double total = static_cast<double>(f.tokens.input + f.tokens.output);
-    kv(out, "In",  Unit::Tokens, static_cast<double>(f.tokens.input));
+    // "In" is every prompt token sent, cached or not. tokens.input alone is
+    // only the UNCACHED part (the wire's convention), so on a warm session it
+    // read ~10x low and "Total" with it. The cache split lives on its own tab.
+    const std::uint64_t in = f.tokens.input + f.tokens.cache_read
+                           + f.tokens.cache_creation;
+    const double total = static_cast<double>(in + f.tokens.output);
+    kv(out, "In",  Unit::Tokens, static_cast<double>(in));
     kv(out, "Out", Unit::Tokens, static_cast<double>(f.tokens.output));
     if (f.tokens.reasoning)
         kv(out, "…of which reasoning", Unit::Tokens,
@@ -210,6 +215,9 @@ void tokens_plot(const Facts& f, std::vector<Metric>& out) {
 // ── Cache ───────────────────────────────────────────────────────────────
 
 void cache_band(const Facts& f, std::vector<Metric>& out) {
+    // A host that never reported a cache would otherwise draw a ring that is
+    // 100% "uncached" and a 0% hit rate — a claim nobody measured.
+    if (f.cache.turns_with_cache == 0) return;
     const double total = static_cast<double>(f.cache.hits + f.cache.writes
                                            + f.cache.misses);
     if (total <= 0) return;
@@ -237,6 +245,7 @@ void cache_band(const Facts& f, std::vector<Metric>& out) {
 }
 
 void cache_rates(const Facts& f, std::vector<Metric>& out) {
+    if (f.cache.turns_with_cache == 0) return;   // never reported: no rate to show
     const double prefix = static_cast<double>(f.cache.hits + f.cache.writes
                                             + f.cache.misses);
     if (prefix <= 0) return;
@@ -259,7 +268,7 @@ void cache_rates(const Facts& f, std::vector<Metric>& out) {
 // "93k" is one nobody finishes reading — and because these three share a
 // unit, so they get a common bar scale here and can be compared exactly.
 void cache_tokens(const Facts& f, std::vector<Metric>& out) {
-    if (f.cache.hits + f.cache.writes + f.cache.misses == 0) return;
+    if (f.cache.turns_with_cache == 0) return;
     // Cache reads are ~10% the price of fresh input on every provider that
     // offers them, so this first row is the single biggest lever on a long
     // thread's cost.

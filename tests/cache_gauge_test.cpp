@@ -106,10 +106,24 @@ TEST_CASE("cache verdict: expected cold starts warm instead of missing") {
 }
 
 TEST_CASE("cache verdict: providers that never say are n/a, small prompts silent") {
+    {
+        // A host that sends "cached_tokens": 0 every turn IS reporting: the
+        // second request should have hit and did not. That is a miss, never
+        // n/a — n/a would hide exactly the failure the gauge exists for.
+        StreamState s;
+        s.cache_gap = 0s;
+        s.note_cache_usage(30'000, 0, 0, "m", /*reported=*/true);
+        CHECK(s.cache_verdict == V::Warming);
+        s.cache_gap = 5s;
+        s.note_cache_usage(31'000, 0, 0, "m", /*reported=*/true);
+        CHECK(s.cache_verdict == V::Miss);
+    }
     StreamState s;
-    request(s, 30'000, 0, 0);
+    s.cache_gap = 0s;
+    s.note_cache_usage(30'000, 0, 0, "opus", /*reported=*/false);
     CHECK(s.cache_verdict == V::None);         // first request: maybe just cold
-    request(s, 31'000, 0, 0, 5s);
+    s.cache_gap = 5s;
+    s.note_cache_usage(31'000, 0, 0, "opus", /*reported=*/false);
     CHECK(s.cache_verdict == V::Unreported);   // a second silence: it never says
 
     StreamState tiny;

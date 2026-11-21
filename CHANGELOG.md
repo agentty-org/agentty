@@ -4,6 +4,22 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The cache gauge works on every provider, not just Anthropic.** It was
+  only armed by an event that OpenAI-compatible hosts (OpenRouter, DeepSeek,
+  Groq, …) and Ollama never send, so on those it stayed blank.
+- **A provider that reports `cached_tokens: 0` every turn now shows `miss`,
+  not `n/a`.** Zero counts were mistaken for "doesn't report a cache".
+- **Ollama's cache is counted.** Ollama 0.40+ reports
+  `prompt_eval_cached_count`; it was ignored, so every local cache hit read
+  as fresh input. DeepSeek's `prompt_cache_hit_tokens` and a top-level
+  `cached_tokens` are read too.
+- **Stats → Tokens "In" counts the whole prompt.** It showed only the
+  uncached part, so on a warm session "In" and "Total" read several times
+  too low.
+- **Turns from a host with no cache no longer drag down the hit rate.** A
+  thread that switched providers counted those prompts as cache misses.
+
 ## [0.9.61] - 2026-11-21
 
 ### Fixed

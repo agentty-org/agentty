@@ -831,6 +831,22 @@ Cmd launch_stream(Model& m) {
         if (a->cancel && a->cancel != cancel) a->cancel->cancel();
         a->cancel = cancel;
 
+        // Arm the prompt-cache verdict: exactly one per REQUEST, decided by
+        // the first usage frame that request produces. Armed here because
+        // only Anthropic and the Responses codec emit StreamStarted — on
+        // OpenAI-chat (OpenRouter, DeepSeek, Groq, …) and Ollama the gauge
+        // was never armed and stayed blank. A retry re-arms it, so a failed
+        // attempt's frame can't stand for the one that succeeded. The idle
+        // gap runs from the END of the previous response. A compaction's
+        // summary request is not a turn the gauge judges.
+        if (!m.s.compacting) {
+            m.s.cache_gap = m.s.cache_last_at.time_since_epoch().count() == 0
+                ? std::chrono::seconds{0}
+                : std::chrono::duration_cast<std::chrono::seconds>(
+                      m.now - m.s.cache_last_at);
+            m.s.cache_pending = true;
+        }
+
         // Start the per-stream clock HERE, at the one point every stream
         // launch passes through -- submit, retry, truncation retry, the
         // post-tool continuation, proactive-context release, compaction.

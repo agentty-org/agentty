@@ -555,7 +555,7 @@ struct StreamState {
     // Fold one request's usage into the verdict. Pure state transition, so
     // the whole decision table is unit-testable without a stream.
     void note_cache_usage(int input, int read, int write,
-                          std::string_view model) {
+                          std::string_view model, bool reported = true) {
         const int prefix = input + read + write;
         if (prefix < kMinCacheablePrefix) {
             // Too small to cache. Says nothing about the provider, and
@@ -565,7 +565,11 @@ struct StreamState {
             cache_model       = std::string{model};
             return;
         }
-        if (read > 0 || write > 0) cache_ever_reported = true;
+        // `reported`: the host sent a cache field at all (even 0). Without
+        // it, a provider that says "cached_tokens: 0" every turn — a real,
+        // persistent miss — would be indistinguishable from one that never
+        // reports, and read as n/a.
+        if (reported || read > 0 || write > 0) cache_ever_reported = true;
         const bool model_changed = !cache_model.empty() && cache_model != model;
         const bool expired = cache_gap >= kPrefixCacheTtl;
         const bool cold_ok = cache_cold_expected || cache_prev_prefix == 0
