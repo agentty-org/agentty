@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.61] - 2026-11-21
+
 ### Fixed
 - **An oversized SKILL.md no longer costs a real skill its place.** Files too
   large to load are kept so `agentty skills` can name them, but they used to
