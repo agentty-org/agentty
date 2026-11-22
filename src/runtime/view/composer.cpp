@@ -326,7 +326,8 @@ maya::Composer::Config composer_config(const Model& m) {
     else if (m.s.active() && !m.ui.composer.text.empty()) {
         cfg.status = maya::dsl::h(
             model_badge_config(m),
-            maya::dsl::text("  \xe2\x86\xb5 queues",
+            maya::dsl::text(m.d.pending_question ? "  \xe2\x86\xb5 answers the question"
+                                                 : "  \xe2\x86\xb5 queues",
                             maya::Style{}.with_fg(muted).with_dim())).build();
     }
 

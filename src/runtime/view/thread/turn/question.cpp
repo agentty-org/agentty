@@ -127,16 +127,43 @@ Element tab_row(const question::State& s, Color accent) {
     return std::move(l).build(TextWrap::NoWrap);
 }
 
-// The hint row: the keys that do something HERE, primary first.
+// The hint row: the keys that do something HERE, primary first. Wraps
+// between hints (never inside one) when the card is narrow, so "esc stop"
+// is never cut off on a small terminal.
 Element keys_row(std::vector<std::pair<std::string, std::string>> keys) {
-    Line l;
-    l.put(" ", {});
-    for (std::size_t i = 0; i < keys.size(); ++i) {
-        if (i) l.put(kDot, fg(ThemeSlot::Muted));
-        l.put(keys[i].first, fg(ThemeSlot::Text).with_bold());
-        l.put(" " + keys[i].second, fg(ThemeSlot::Muted));
-    }
-    return std::move(l).build(TextWrap::NoWrap);
+    std::vector<std::pair<std::string, std::string>> owned = std::move(keys);
+    return Element{maya::ComponentElement{
+        .render = [keys = owned](int w, int) -> Element {
+            std::vector<Element> lines;
+            Line l;
+            l.put(" ", {});
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                const int need = maya::string_width(keys[i].first) + 1 +
+                                 maya::string_width(keys[i].second) + (i ? 3 : 0);
+                if (i && w > 0 && l.width() + need > w) {
+                    lines.push_back(std::move(l).build(TextWrap::NoWrap));
+                    l = Line{};
+                    l.put(" ", {});
+                } else if (i) {
+                    l.put(kDot, fg(ThemeSlot::Muted));
+                }
+                l.put(keys[i].first, fg(ThemeSlot::Text).with_bold());
+                l.put(" " + keys[i].second, fg(ThemeSlot::Muted));
+            }
+            lines.push_back(std::move(l).build(TextWrap::NoWrap));
+            return maya::dsl::v(std::move(lines)).build();
+        },
+        .measure = [keys = owned](int mw) -> maya::Size {
+            int rows = 1, used = 1;
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                const int need = maya::string_width(keys[i].first) + 1 +
+                                 maya::string_width(keys[i].second) + (i ? 3 : 0);
+                if (i && mw > 0 && used + need > mw) { ++rows; used = 1 + need - 3; }
+                else used += need;
+            }
+            return maya::Size{maya::Columns(mw), maya::Rows(rows)};
+        },
+    }};
 }
 
 void question_page(const question::State& s, bool drafting, std::vector<Element>& rows,
@@ -265,6 +292,42 @@ Element question_card(const question::State& s, bool drafting) {
     }
     if (s.reviewing) review_page(s, rows, accent);
     else             question_page(s, drafting, rows, accent);
+
+    // One height for every page. Moving to a shorter question (or the review)
+    // used to shrink the card under a live frame, and the rows it gave up
+    // were left blank between the card and the message box. The body is
+    // padded to the tallest page instead, measured at the card's width, so
+    // stepping through the questions never moves anything else on screen.
+    {
+        const int inner = std::max(1, maya::available_width() - 6);
+        auto height_of = [&](auto&& build) {
+            std::vector<Element> page;
+            if (many) { page.push_back(tab_row(s, accent)); page.push_back(blank()); }
+            build(page);
+            int h = 0;
+            for (const auto& e : page) h += maya::measure_element(e, inner).height.value;
+            return h;
+        };
+        int tallest = 0;
+        for (std::size_t i = 0; i < s.questions.size(); ++i) {
+            question::State probe = s;
+            probe.current = i;
+            probe.reviewing = false;
+            tallest = std::max(tallest, height_of([&](auto& p) {
+                question_page(probe, drafting, p, accent); }));
+        }
+        if (many)
+            tallest = std::max(tallest, height_of([&](auto& p) { review_page(s, p, accent); }));
+        int have = 0;
+        for (const auto& e : rows) have += maya::measure_element(e, inner).height.value;
+        // Padding goes ABOVE the hint row, so the keys stay at the bottom.
+        if (have < tallest && !rows.empty()) {
+            auto hint = std::move(rows.back());
+            rows.pop_back();
+            for (int k = have; k < tallest; ++k) rows.push_back(blank());
+            rows.push_back(std::move(hint));
+        }
+    }
 
     // Title: what this is. Progress is the tab row's job.
     std::string title = " ? ";
