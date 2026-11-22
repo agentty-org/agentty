@@ -243,9 +243,10 @@ http::Headers build_request_headers(const AuthHeader& auth,
 // NOT shape it to look like Claude Code's `user_<hash>_account_<uuid>_...`
 // identifier; it's just a derived-from-machine-id opaque hex string.
 std::string machine_id_hex(int nibbles) {
-    static std::string cached;
-    static std::once_flag once;
-    maya::once(once, [] {
+    // Built once on first use, read-only after (maya::lazy: Sync, so any
+    // worker may read it without a lock).
+    static const maya::lazy<std::string> id;
+    const std::string& cached = id.get([] {
         std::string seed;
         for (auto path : {"/etc/machine-id", "/var/lib/dbus/machine-id"}) {
             std::ifstream f(path);
@@ -266,7 +267,7 @@ std::string machine_id_hex(int nibbles) {
         char buf[33];
         std::snprintf(buf, sizeof(buf), "%016llx%016llx",
                       (unsigned long long)a, (unsigned long long)b);
-        cached.assign(buf, 32);
+        return std::string(buf, 32);
     });
     return cached.substr(0, std::min<size_t>(nibbles, cached.size()));
 }
@@ -277,9 +278,8 @@ std::string make_user_id() {
     // stays constant across turns of one agentty run). This is agentty's own
     // honest client identity for Anthropic's abuse-signal bucketing — NOT a
     // copy of Claude Code's `T7H()` shape and with no fake account_uuid.
-    static std::string cached;
-    static std::once_flag once;
-    maya::once(once, []{
+    static const maya::lazy<std::string> id;
+    return id.get([] {
         auto device_id = machine_id_hex(32);
         auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
         uint64_t s1 = 0xcbf29ce484222325ull;
@@ -289,12 +289,11 @@ std::string make_user_id() {
         std::snprintf(buf, sizeof(buf), "%016llx%016llx",
                       (unsigned long long)s1, (unsigned long long)s2);
         auto session_id = std::string(buf, 32);
-        cached = nlohmann::json{
+        return nlohmann::json{
             {"device_id",  device_id},
             {"session_id", session_id},
         }.dump();
     });
-    return cached;
 }
 
 } // namespace

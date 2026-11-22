@@ -44,14 +44,15 @@ std::vector<ModelInfo> seed_models(const provider::Selection& sel) {
 }
 } // namespace
 
-std::pair<Model, Cmd> init() {
+std::pair<Model, Cmd> init(const LaunchFlags& flags) {
     startup::mark("init");
     Model m;
-    // The launch environment, captured once. Every reducer reads m.env;
-    // none calls getenv (enforced by the elm_purity lint).
-    // init() is the host's one launch read: env, settings, credentials.
+    // The launch environment, read by main() and handed in as the program's
+    // Flags. Every reducer reads m.env; none calls getenv (enforced by the
+    // elm_purity lint), and init doesn't either.
+    // init() is the host's one launch read: settings, credentials.
     const Io io = IoAccess::grant();
-    m.env = read_launch_env(io);
+    m.env = flags.env;
     startup::mark("  launch env");
     // Anchor the calendar to the steady clock, once. Every fold derives its
     // wall time (Model::wall_now) from this pair and the step time jaal

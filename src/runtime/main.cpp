@@ -93,6 +93,7 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/view/palette.hpp"   // ui::status_warn — themed banner
 #include "agentty/runtime/app/program.hpp"
+#include "agentty/runtime/app/env.hpp"   // read_launch_env: the program's Flags
 #include "agentty/auth/auth.hpp"
 #include "agentty/auth/cred_crypt.hpp"
 #include "agentty/io/persistence.hpp"
@@ -2592,7 +2593,10 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         maya::Options cfg{.title = title, .fps = 0,
                           .mode = maya::Mode::Inline, .backend = backend};
         startup::mark("maya::run");
-        if (const int rc = maya::run<app::AgenttyApp, app::Host>(cfg);
+        // The launch environment, read here once and handed to init() as the
+        // program's Flags (jaal: the data a run starts with is passed in).
+        app::LaunchFlags flags{app::read_launch_env(::agentty::IoAccess::grant())};
+        if (const int rc = maya::run<app::AgenttyApp, app::Host>(cfg, {}, std::move(flags));
             rc == 70) {
             // Couldn't take the terminal (or a fault stopped the program).
             // The why went to stderr.log; say so where the user is looking.

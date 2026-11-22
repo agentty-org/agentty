@@ -175,23 +175,20 @@ std::optional<std::string> prompt_passphrase() {
 // The result (present-or-absent) is cached so we prompt at most once per run
 // and every seal/unseal in the session agrees.
 const std::optional<std::string>& resolve_passphrase() {
-    static std::once_flag once;
-    static std::optional<std::string> cached;
-    maya::once(once, [] {
-        if (const char* p = std::getenv("AGENTTY_PASSPHRASE"); p && *p) {
-            cached = std::string{p};
-            return;
-        }
+    // Built once (maya::lazy: the prompt runs at most once, every caller after
+    // that reads the same value without a lock).
+    static const maya::lazy<std::optional<std::string>> cached;
+    return cached.get([]() -> std::optional<std::string> {
+        if (const char* p = std::getenv("AGENTTY_PASSPHRASE"); p && *p)
+            return std::string{p};
         const char* want = std::getenv("AGENTTY_ENCRYPT_PASSPHRASE");
         const bool truthy = want && *want
             && std::strcmp(want, "0") != 0
             && std::strcmp(want, "false") != 0;
-        if (truthy) {
-            if (auto pw = prompt_passphrase(); pw && !pw->empty())
-                cached = std::move(pw);
-        }
+        if (truthy)
+            if (auto pw = prompt_passphrase(); pw && !pw->empty()) return pw;
+        return std::nullopt;
     });
-    return cached;
 }
 
 // Fold a passphrase into 32 bytes of memory-hard key material via scrypt,

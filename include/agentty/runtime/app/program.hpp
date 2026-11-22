@@ -31,7 +31,14 @@ namespace agentty::app {
 
 namespace pn = agentty::ui::panel;   // the exclusive overlay slot's alternatives
 
-[[nodiscard]] std::pair<Model, Cmd> init();
+// What a run starts with, read by main() and handed in (jaal Flags): the
+// process environment as a value. init() reads nothing from the outside world
+// that it was not given, so a test or a sim runs it on a known environment.
+struct LaunchFlags {
+    Model::Env env;
+};
+
+[[nodiscard]] std::pair<Model, Cmd> init(const LaunchFlags& flags);
 
 // Log any loop step (an update arm, view, subscribe) that took longer than a
 // frame. Free when fast: one clock read and a compare. Lands in agentty.log
@@ -64,8 +71,12 @@ struct AgenttyApp {
     // Model::now, which is how it reaches the helpers.
     using Clock = maya::platform::steady_clock;
 
-    // jaal's init is `Cmd init(Model&)` — it fills the model IN PLACE and
-    // returns only the first Cmd (core/program.hpp, `has_init`).
+    // jaal's init is `Cmd init(Model&, const Flags&)` for a program with
+    // Flags — it fills the model IN PLACE and returns only the first Cmd
+    // (core/program.hpp, `has_init_flags`). The launch environment is the
+    // Flags: main() reads it once and maya::run passes it here, so init never
+    // reads the process environment itself and a sim or test hands it a known
+    // one (value-initialised Flags: no env overrides).
     //
     // This used to be `static std::pair<Model, Cmd> init()`, the old runtime's
     // shape. That is not an error anyone reports: `has_init` is a `requires`
@@ -74,12 +85,14 @@ struct AgenttyApp {
     // init() loads — settings, the thread list, the active provider — was
     // built and then dropped on the floor, which presents as agentty
     // remembering nothing across restarts and showing the first-run card on
-    // every launch.
+    // every launch. With Flags declared, jaal now REFUSES a wrong init at
+    // compile time instead.
     //
     // The free function still returns a pair (init.cpp builds a Model and its
-    // Cmd together, and the tests call it that way), so this adapts.
-    static Cmd init(Model& m) {
-        auto [built, cmd] = ::agentty::app::init();
+    // Cmd together), so this adapts.
+    using Flags = LaunchFlags;
+    static Cmd init(Model& m, const Flags& flags) {
+        auto [built, cmd] = ::agentty::app::init(flags);
         m = std::move(built);
         return std::move(cmd);
     }

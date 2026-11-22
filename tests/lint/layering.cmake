@@ -15,8 +15,8 @@
 # block comments included, so prose that wraps onto a line by itself is not
 # mistaken for code.
 #
-# cmake/ is not scanned: the build is the one place that has to name jaal's
-# tree, to run jaal's own lints over agentty.
+# cmake/ is scanned for LINKS and include paths only (below): the build has to
+# name jaal's tree to run jaal's own lints over agentty, and that is all.
 #
 # Run with: cmake -DROOT=<agentty source dir> -P layering.cmake
 
@@ -111,6 +111,26 @@ endfunction()
 set(hits "")
 scan("src;include;tests" "jaal|JAAL_[A-Za-z0-9_]+"
      "#[ \t]*include[ \t]*[<\"]([^>\"]*/)?jaal/" "agentty->jaal")
+
+# The build, too: agentty links maya::app / maya::runtime and nothing of jaal.
+# A target_link_libraries(... jaal ...) or an include path into jaal's tree
+# would let code reach past maya without naming jaal in C++ at all. The one
+# allowed mention is running jaal's own lints over the tree (a -P script path
+# or ROOT=), which links nothing.
+file(GLOB cmake_files ${ROOT}/CMakeLists.txt ${ROOT}/cmake/*.cmake)
+foreach(f IN LISTS cmake_files)
+    file(STRINGS ${f} lines REGEX "jaal")
+    file(RELATIVE_PATH rel ${ROOT} ${f})
+    foreach(l IN LISTS lines)
+        string(REGEX REPLACE "#.*$" "" code "${l}")
+        if(code MATCHES "jaal::jaal"
+           OR code MATCHES "target_link_libraries[^)]*[ \t(]jaal([ \t)]|$)"
+           OR code MATCHES "jaal/include")
+            string(STRIP "${l}" s)
+            list(APPEND hits "${rel}: ${s}")
+        endif()
+    endforeach()
+endforeach()
 
 if(hits)
     list(JOIN hits "\n  " msg)

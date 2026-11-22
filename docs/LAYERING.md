@@ -96,7 +96,15 @@ All are static ctest entries (label `static`), no build needed:
   `jaal :: x`, `using namespace jaal;`, `namespace j = jaal;`) or a `JAAL_`
   macro in agentty's `src/`, `include/` or `tests/`. Comments and strings,
   block comments included, are stripped per file first
-  (tests/lint/layering.cmake).
+  (tests/lint/layering.cmake). The build is checked too: no
+  `target_link_libraries` of `jaal`/`jaal::jaal` and no include path into
+  jaal's tree in `CMakeLists.txt` or `cmake/`; agentty links `maya::app` or
+  `maya::runtime`. Running jaal's own lints over agentty is the one allowed
+  mention of its tree.
+- **The data a run starts with** — the launch environment is the program's
+  jaal Flags (`AgenttyApp::Flags`): `main` reads it and passes it to
+  `maya::run`, which hands it to `init(Model&, const Flags&)`. init reads no
+  process environment of its own.
 - **spawn_via_jaal** — every child starts through `maya::platform::
   native_process`: no fork/exec/popen/system, and on Windows no
   CreateProcess/_popen/_spawn. Windows-only code is scanned too; that is

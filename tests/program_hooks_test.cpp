@@ -27,15 +27,18 @@ using P = agentty::app::AgenttyApp;
 // ── init ─────────────────────────────────────────────────────────────────
 // THE regression. Must be callable as jaal calls it: fills in place, returns
 // the first Cmd.
-static_assert(requires(P::Model& m) {
-                  { P::init(m) } -> std::convertible_to<P::Cmd>;
+static_assert(requires(P::Model& m, const P::Flags& f) {
+                  { P::init(m, f) } -> std::convertible_to<P::Cmd>;
               },
-              "AgenttyApp::init must be `Cmd init(Model&)`. jaal detects init "
-              "with a requires-test, so a different signature silently means "
-              "'no init' — the kernel hands the app a blank Model and every "
-              "saved setting and thread is dropped at startup.");
+              "AgenttyApp::init must be `Cmd init(Model&, const Flags&)`. With "
+              "Flags declared jaal refuses any other init, and the launch "
+              "environment reaches init only through them.");
 
 // ── the rest of the contract ─────────────────────────────────────────────
+// A Msg crosses from workers to the loop through a Sink, so it must be
+// Postable: Sendable, with no loop-only callable a worker could smuggle in.
+static_assert(maya::Postable<P::Msg>,
+              "every Msg must be Postable (jaal core/sendable.hpp)");
 static_assert(maya::RuntimeProgram<P>,
               "AgenttyApp must satisfy maya::RuntimeProgram.");
 static_assert(maya::Program<P>,
