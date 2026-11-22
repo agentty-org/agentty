@@ -809,6 +809,50 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     p.broker = cfg.syscall_mode != sandbox_cfg::SyscallMode::Off;
     return p;
 }
+
+// Role::Command's posture for ONE command: the sealed config, W^X lifted when
+// `command_line` starts a JIT, then this call's cwd and extra roots (an editor
+// session's other folders, writable like the workspace). Every command spawn
+// path builds through here, and posture_for() starts from it, so the shell
+// tool, hooks, ACP terminals and long-lived children cannot drift apart again.
+//
+// `command_line` is the line the shell will see: the string itself for a
+// shell command, join_argv() for an argv. The JIT check reads command
+// position from it, and a joined argv loses the quoting a shell string keeps.
+[[nodiscard]] claybin_backend::Posture command_posture(
+        std::string_view command_line, std::string_view cwd = {},
+        const std::vector<std::string>& extra_roots = {},
+        const handoff::TrustedSnapshot* trusted = nullptr) {
+    auto p = build_claybin_posture(trusted);
+    relax_wx_for_jit(p, command_line);
+    if (!cwd.empty()) p.cwd = std::string{cwd};
+    for (const auto& r : extra_roots)
+        if (!r.empty()) p.write_paths.push_back(r);
+    return p;
+}
+
+// claybin's spawn result, as the runner adopts it. ALL of it, every time: the
+// copies of this used to differ per platform, and Windows' shell arm dropped
+// the network proxy that its argv arm kept alive.
+//   pidfd          Linux: jaal reaps by it, no pid-reuse race. Windows: the
+//                  process HANDLE, the waitable exit.
+//   supervisor_fd  the syscall broker, polled beside the output pipe for the
+//                  child's whole life (a brokered call blocks until answered)
+//   keepalive      the filtered network proxy; it must outlive the child
+//   kill_tree      cgroup.kill / the job object, when the posture got one;
+//                  empty means the runner falls back to the process group
+[[maybe_unused]] [[nodiscard]] SubprocessOptions::SpawnedChild adopt_spawn(
+        claybin_backend::SpawnResult r) {
+    SubprocessOptions::SpawnedChild out;
+    if (!r.started) { out.error = std::move(r.start_error); return out; }
+    out.pid           = r.pid;
+    out.pidfd         = r.pidfd;
+    out.supervisor_fd = r.supervisor_fd;
+    out.service       = std::move(r.service_broker);
+    out.keepalive     = std::move(r.net_proxy);
+    out.kill_tree     = std::move(r.kill_tree);
+    return out;
+}
 #endif  // __linux__ || __APPLE__ || _WIN32
 
 // Back into the per-platform arm the posture builder interrupted.
@@ -848,30 +892,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         std::string shell_cmd{cmd};
         opts.spawner = [shell_cmd](const SubprocessOptions&, int out_fd, int err_fd,
                                    int in_fd) -> SubprocessOptions::SpawnedChild {
-            SubprocessOptions::SpawnedChild out;
-            auto posture = build_claybin_posture();
-            relax_wx_for_jit(posture, shell_cmd);
-            auto r = claybin_backend::spawn_shell(posture, shell_cmd, out_fd, err_fd, in_fd);
-            if (!r.started) {
-                out.error = r.start_error;
-                return out;
-            }
-            out.pid   = r.pid;
-            out.pidfd = r.pidfd;   // jaal reaps by it: no pid-reuse race
-            // Hand the syscall supervisor to the runner, which polls it beside
-            // the output pipe. It must be polled for the child's whole life: a
-            // brokered syscall blocks in the kernel until someone answers.
-            out.supervisor_fd = r.supervisor_fd;
-            out.service = std::move(r.service_broker);
-            // The filtered network proxy owns the listening socket inside the
-            // guest's netns. Nothing below needs to know that; it just has to
-            // outlive the child, or the guest's connections start failing.
-            out.keepalive = std::move(r.net_proxy);
-            // Empty unless the posture actually got a cgroup with
-            // cgroup.kill. The runner falls back to the process group then,
-            // which is weaker (setsid escapes it) but is all there is.
-            out.kill_tree = std::move(r.kill_tree);
-            return out;
+            return adopt_spawn(claybin_backend::spawn_shell(
+                command_posture(shell_cmd), shell_cmd, out_fd, err_fd, in_fd));
         };
         return Subprocess::run(std::move(opts));
     }
@@ -911,18 +933,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         std::vector<std::string> argv = user_argv;
         opts.spawner = [argv](const SubprocessOptions&, int out_fd, int err_fd,
                               int in_fd) -> SubprocessOptions::SpawnedChild {
-            SubprocessOptions::SpawnedChild out;
-            auto posture = build_claybin_posture();
-            relax_wx_for_jit(posture, join_argv(argv));
-            auto r = claybin_backend::spawn_argv(posture, argv, out_fd, err_fd, {}, in_fd);
-            if (!r.started) { out.error = r.start_error; return out; }
-            out.pid           = r.pid;
-            out.pidfd         = r.pidfd;
-            out.supervisor_fd = r.supervisor_fd;
-            out.service       = std::move(r.service_broker);
-            out.keepalive     = std::move(r.net_proxy);
-            out.kill_tree     = std::move(r.kill_tree);
-            return out;
+            return adopt_spawn(claybin_backend::spawn_argv(
+                command_posture(join_argv(argv)), argv, out_fd, err_fd, {}, in_fd));
         };
         return Subprocess::run(std::move(opts));
     }
@@ -1129,19 +1141,10 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         opts.spawner = [shell_cmd = std::string{cmd}](
                            const SubprocessOptions&, int out_fd, int err_fd,
                            int in_fd) -> SubprocessOptions::SpawnedChild {
-            SubprocessOptions::SpawnedChild out;
-            auto posture = build_claybin_posture();
-            relax_wx_for_jit(posture, shell_cmd);
             // The window HANDLEs arrive as ints (the runner's pipes were
             // HANDLEs); the adapter maps them onto the child's std streams.
-            auto r = claybin_backend::spawn_shell(posture, shell_cmd, out_fd, err_fd, in_fd);
-            if (!r.started) { out.error = r.start_error; return out; }
-            out.pid = r.pid;
-            // HANDLES, not descriptors: the process handle is the waitable
-            // exit, the job the kill switch. The runner's adopt consumes both.
-            out.pidfd = r.pidfd;
-            out.kill_tree = std::move(r.kill_tree);
-            return out;
+            return adopt_spawn(claybin_backend::spawn_shell(
+                command_posture(shell_cmd), shell_cmd, out_fd, err_fd, in_fd));
         };
     }
     return Subprocess::run(std::move(opts));
@@ -1167,16 +1170,8 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
         opts.spawner = [argv = user_argv](
                            const SubprocessOptions&, int out_fd, int err_fd,
                            int in_fd) -> SubprocessOptions::SpawnedChild {
-            SubprocessOptions::SpawnedChild out;
-            auto posture = build_claybin_posture();
-            relax_wx_for_jit(posture, join_argv(argv));
-            auto r = claybin_backend::spawn_argv(posture, argv, out_fd, err_fd, {}, in_fd);
-            if (!r.started) { out.error = r.start_error; return out; }
-            out.pid = r.pid;
-            out.pidfd = r.pidfd;
-            out.keepalive = std::move(r.net_proxy);
-            out.kill_tree = std::move(r.kill_tree);
-            return out;
+            return adopt_spawn(claybin_backend::spawn_argv(
+                command_posture(join_argv(argv)), argv, out_fd, err_fd, {}, in_fd));
         };
     }
     return Subprocess::run(std::move(opts));
@@ -1755,15 +1750,9 @@ claybin_backend::SpawnResult spawn_in_sandbox(
         int err_fd, int in_fd) {
 #if defined(__linux__) || defined(_WIN32)
     if (detected_backend() == Backend::Claybin) {
-        auto posture = build_claybin_posture(trusted);
-        relax_wx_for_jit(posture, join_argv(argv));
-        if (!cwd.empty()) posture.cwd = std::string{cwd};
-        // A call scoped to more folders (an editor session's extra roots)
-        // may write there too, like the workspace.
-        for (const auto& r : extra_roots)
-            if (!r.empty()) posture.write_paths.push_back(r);
-        return claybin_backend::spawn_argv(posture, argv, out_fd,
-                                           err_fd >= 0 ? err_fd : out_fd, env, in_fd);
+        return claybin_backend::spawn_argv(
+            command_posture(join_argv(argv), cwd, extra_roots, trusted), argv, out_fd,
+            err_fd >= 0 ? err_fd : out_fd, env, in_fd);
     }
 #else
     (void)argv; (void)cwd; (void)out_fd; (void)extra_roots; (void)trusted; (void)env;
@@ -1783,11 +1772,7 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
     std::string profile;
     std::vector<std::string> proxy_env;
     if (detected_backend() == Backend::Claybin) {
-        auto posture = build_claybin_posture();
-        relax_wx_for_jit(posture, join_argv(argv));
-        if (!cwd.empty()) posture.cwd = std::string{cwd};
-        for (const auto& r : extra_roots)
-            if (!r.empty()) posture.write_paths.push_back(r);
+        const auto posture = command_posture(join_argv(argv), cwd, extra_roots);
         std::string err;
         profile = claybin_backend::compile_profile(posture, err);
         if (profile.empty()) return std::unexpected(std::move(err));
@@ -1859,8 +1844,8 @@ constexpr std::string_view kRunnerCaches[] = {
 
 claybin_backend::Posture posture_for(Role role, const std::vector<std::string>& argv) {
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
-    auto p = build_claybin_posture();
-    if (!argv.empty()) relax_wx_for_jit(p, join_argv(argv));
+    // Role::Command's posture, then what the role changes.
+    auto p = command_posture(argv.empty() ? std::string{} : join_argv(argv));
 #if defined(_WIN32)
     const char* home_env = std::getenv("USERPROFILE");
 #else
