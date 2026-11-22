@@ -74,7 +74,9 @@ TEST_CASE("question: a single choice is one enter; answers come back by label") 
     q::toggle(s);                                      // tick auth
     q::move(s, +2);
     q::toggle(s);                                      // tick search
-    CHECK(q::choose(s) == q::Step::Done);
+    CHECK(q::choose(s) == q::Step::Stay);              // several questions: review first
+    CHECK(s.reviewing);
+    CHECK(q::choose(s) == q::Step::Done);              // enter on review sends
     const auto out = q::answered(s);
     CHECK(out.find("Which database?") != std::string::npos);
     CHECK(out.find("Postgres") != std::string::npos);
@@ -93,6 +95,7 @@ TEST_CASE("question: digits pick, the typed answer is always there, esc skips") 
     q::type(s, "auth\xc3\xa9");
     q::backspace(s);                                   // a whole code point
     CHECK(s.a().typed == "only auth");
+    CHECK(q::choose(s) == q::Step::Stay);              // review
     CHECK(q::choose(s) == q::Step::Done);
     CHECK(q::answered(s).find("(in their own words) only auth") != std::string::npos);
 
@@ -110,7 +113,57 @@ TEST_CASE("question: enter on an empty text row does not send nothing") {
     CHECK(s.typing);                                   // no options: type
     CHECK(q::choose(s) == q::Step::Stay);
     q::type(s, "agentty");
-    CHECK(q::choose(s) == q::Step::Done);
+    CHECK(q::choose(s) == q::Step::Done);             // one question: no review
+}
+
+TEST_CASE("question: the cursor starts on the model's suggestion") {
+    auto p = q::parse(json{{"question", "Which?"}, {"options", json::array({
+        {{"label", "a"}}, {{"label", "b"}, {"recommended", true}},
+        {{"label", "c"}, {"recommended", true}}})}});
+    REQUIRE(p.error.empty());
+    CHECK(p.questions[0].options[1].recommended);
+    CHECK_FALSE(p.questions[0].options[2].recommended);   // one pick only
+    CHECK(q::start(p.questions).cursor == 1);
+    // Claude Code's spelling in the label is taken as the mark, and dropped.
+    auto cc = q::parse(json{{"question", "Which?"}, {"options", json::array({
+        "x", "y (Recommended)"})}});
+    CHECK(cc.questions[0].options[1].label == "y");
+    CHECK(cc.questions[0].options[1].recommended);
+}
+
+TEST_CASE("question: review lets you change one answer, tabs move between questions") {
+    auto s = started(two_questions());
+    CHECK(q::pick_number(s, 1) == q::Step::Stay);      // SQLite
+    q::forward(s);                                     // already on 2: no review yet
+    CHECK_FALSE(s.reviewing);
+    q::back(s);
+    CHECK(s.current == 0);
+    CHECK(s.cursor == 0);                              // remembers SQLite
+    q::forward(s);
+    CHECK(s.current == 1);
+    q::toggle(s);
+    CHECK(q::choose(s) == q::Step::Stay);
+    REQUIRE(s.reviewing);
+    CHECK(q::pick_number(s, 1) == q::Step::Stay);      // change question 1
+    CHECK_FALSE(s.reviewing);
+    CHECK(s.current == 0);
+    CHECK(q::pick_number(s, 2) == q::Step::Stay);      // Postgres; all answered
+    CHECK(s.reviewing);
+    CHECK_FALSE(q::escape(s));                         // esc on review: back, not skip
+    CHECK_FALSE(s.reviewing);
+
+    // answers_in reads the result back for the transcript card.
+    auto t = started(two_questions());
+    (void)q::pick_number(t, 2);
+    q::toggle(t);
+    q::move(t, 2);
+    q::toggle(t);
+    (void)q::choose(t);
+    const auto back = q::answers_in(q::answered(t));
+    REQUIRE(back.size() == 2);
+    CHECK(back[0] == "Postgres");
+    CHECK(back[1] == "auth, search");
+    CHECK(q::answers_in(q::dismissed()).empty());
 }
 
 TEST_CASE("question: the tool exists only where someone can answer and wants to") {

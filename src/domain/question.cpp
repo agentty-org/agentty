@@ -32,13 +32,15 @@ namespace {
     return std::nullopt;
 }
 
+void show(State& s, std::size_t i);
+
+// After an answer: the next open question, else the review page (several
+// questions: one look at everything before it goes), else done.
 [[nodiscard]] Step advance(State& s) {
     s.typing = false;
-    const auto n = next_open(s, s.current);
-    if (!n) return Step::Done;
-    s.current = *n;
-    s.cursor = 0;
-    return Step::Stay;
+    if (const auto n = next_open(s, s.current)) { show(s, *n); return Step::Stay; }
+    if (s.questions.size() > 1) { s.reviewing = true; return Step::Stay; }
+    return Step::Done;
 }
 
 }  // namespace
@@ -83,7 +85,16 @@ Parsed parse(const nlohmann::json& args) {
                     else {
                         opt.label = str(o, "label");
                         opt.description = str(o, "description");
+                        if (const auto r = o.find("recommended"); r != o.end() && r->is_boolean())
+                            opt.recommended = r->get<bool>();
                     }
+                    // Claude Code's convention, which models carry over: the
+                    // pick is marked in the label. Take the mark, drop the noise.
+                    for (std::string_view mark : {" (Recommended)", " (recommended)"})
+                        if (opt.label.size() > mark.size() && opt.label.ends_with(mark)) {
+                            opt.label.resize(opt.label.size() - mark.size());
+                            opt.recommended = true;
+                        }
                     if (!opt.label.empty()) parsed.options.push_back(std::move(opt));
                 }
             }
@@ -93,9 +104,38 @@ Parsed parse(const nlohmann::json& args) {
                         " options per question; the user can always type their own answer";
             return out;
         }
+        // At most one pick per question: the first marked one wins.
+        bool seen_pick = false;
+        for (auto& o : parsed.options) {
+            if (o.recommended && seen_pick) o.recommended = false;
+            seen_pick |= o.recommended;
+        }
         out.questions.push_back(std::move(parsed));
     }
     return out;
+}
+
+namespace {
+// Show question `i`: the cursor on the model's pick (or the first option), or
+// on what the user already chose when they come back to it.
+void show(State& s, std::size_t i) {
+    s.current = i;
+    s.reviewing = false;
+    s.cursor = 0;
+    const auto& q = s.questions[i];
+    const auto& a = s.answers[i];
+    for (std::size_t k = 0; k < q.options.size(); ++k)
+        if (q.options[k].recommended) { s.cursor = k; break; }
+    for (std::size_t k = 0; k < a.chosen.size(); ++k)
+        if (a.chosen[k]) { s.cursor = k; break; }
+    if (!a.typed.empty() && std::ranges::none_of(a.chosen, [](bool b) { return b; }))
+        s.cursor = q.options.size();
+    s.typing = q.options.empty();
+}
+}  // namespace
+
+bool State::all_answered() const {
+    return std::ranges::all_of(answers, [](const Answer& a) { return a.answered; });
 }
 
 State start(std::vector<Question> qs) {
@@ -103,13 +143,12 @@ State start(std::vector<Question> qs) {
     s.answers.resize(qs.size());
     for (std::size_t i = 0; i < qs.size(); ++i) s.answers[i].chosen.assign(qs[i].options.size(), false);
     s.questions = std::move(qs);
-    // No options at all: the only way to answer is to type.
-    if (!s.questions.empty() && s.questions[0].options.empty()) s.typing = true;
+    if (!s.questions.empty()) show(s, 0);
     return s;
 }
 
 void move(State& s, int delta) {
-    if (s.questions.empty()) return;
+    if (s.questions.empty() || s.reviewing) return;
     const auto n = static_cast<long>(s.rows());
     long c = static_cast<long>(s.cursor) + delta;
     c = ((c % n) + n) % n;
@@ -118,7 +157,7 @@ void move(State& s, int delta) {
 }
 
 void toggle(State& s) {
-    if (s.questions.empty()) return;
+    if (s.questions.empty() || s.reviewing) return;
     if (s.on_text_row()) { s.typing = true; return; }
     auto& chosen = s.a().chosen;
     if (s.q().multiple) {
@@ -132,6 +171,7 @@ void toggle(State& s) {
 
 Step choose(State& s) {
     if (s.questions.empty()) return Step::Done;
+    if (s.reviewing) return Step::Done;               // send everything
     auto& a = s.a();
     if (s.on_text_row()) {
         if (!s.typing) { s.typing = true; return Step::Stay; }
@@ -155,6 +195,11 @@ Step choose(State& s) {
 }
 
 Step pick_number(State& s, int n) {
+    if (s.reviewing) {                                // change that answer
+        if (n >= 1 && static_cast<std::size_t>(n) <= s.questions.size())
+            show(s, static_cast<std::size_t>(n - 1));
+        return Step::Stay;
+    }
     if (s.questions.empty() || n < 1 || static_cast<std::size_t>(n) > s.q().options.size())
         return Step::Stay;
     s.cursor = static_cast<std::size_t>(n - 1);
@@ -164,7 +209,7 @@ Step pick_number(State& s, int n) {
 }
 
 void type(State& s, std::string_view utf8) {
-    if (s.questions.empty()) return;
+    if (s.questions.empty() || s.reviewing) return;
     s.cursor = s.q().options.size();
     s.typing = true;
     auto& t = s.a().typed;
@@ -179,6 +224,7 @@ void backspace(State& s) {
 }
 
 bool escape(State& s) {
+    if (s.reviewing) { show(s, s.questions.size() - 1); return false; }
     if (s.typing && !s.questions.empty() && !s.q().options.empty()) {
         s.typing = false;
         return false;
@@ -187,10 +233,16 @@ bool escape(State& s) {
 }
 
 void back(State& s) {
+    if (s.questions.empty()) return;
+    if (s.reviewing) { show(s, s.questions.size() - 1); return; }
     if (s.current == 0) return;
-    --s.current;
-    s.cursor = 0;
-    s.typing = s.q().options.empty();
+    show(s, s.current - 1);
+}
+
+void forward(State& s) {
+    if (s.questions.empty() || s.reviewing) return;
+    if (s.current + 1 < s.questions.size()) { show(s, s.current + 1); return; }
+    if (s.questions.size() > 1 && s.all_answered()) { s.typing = false; s.reviewing = true; }
 }
 
 std::string answered(const State& s) {
@@ -226,6 +278,34 @@ std::string dismissed() {
 std::string unavailable() {
     return "No one can answer questions in this session. Carry on with your best "
            "judgement and say what you assumed.";
+}
+
+std::vector<std::string> answers_in(std::string_view result) {
+    std::vector<std::string> out;
+    if (!result.starts_with("The user answered your question")) return out;
+    constexpr std::string_view kArrow = "   \xe2\x86\x92 ";
+    constexpr std::string_view kOwn = "(in their own words) ";
+    bool in_question = false;
+    std::size_t pos = result.find('\n');
+    while (pos != std::string_view::npos && pos + 1 < result.size()) {
+        const std::size_t start = pos + 1;
+        pos = result.find('\n', start);
+        auto line = result.substr(start, pos == std::string_view::npos ? std::string_view::npos
+                                                                      : pos - start);
+        if (line.starts_with(kArrow)) {
+            auto ans = line.substr(kArrow.size());
+            if (ans.starts_with(kOwn)) ans.remove_prefix(kOwn.size());
+            if (ans == "(no answer)") ans = {};
+            if (!in_question) out.emplace_back();
+            auto& cur = out.back();
+            if (!cur.empty() && !ans.empty()) cur += ", ";
+            cur += ans;
+            in_question = true;
+        } else {
+            in_question = false;
+        }
+    }
+    return out;
 }
 
 }  // namespace agentty::question

@@ -40,9 +40,10 @@ const ToolDef& def() {
             "small choices you can make and mention. Ask everything you need in ONE "
             "call (up to " + std::to_string(question::kMaxQuestions) + " questions). "
             "Give 2-" + std::to_string(question::kMaxOptions) + " short, distinct "
-            "options per question, the recommended one first; the user can always "
-            "type their own answer instead, so do not add an \"Other\" option. The "
-            "result is the user's answers, or a note that they skipped.";
+            "options per question and mark the one you would choose as recommended; "
+            "the user can always type their own answer instead, so do not add an "
+            "\"Other\" option. The result is the user's answers, or a note that they "
+            "skipped.";
         const nlohmann::json option = {
             {"type", "object"},
             {"properties", {
@@ -50,6 +51,8 @@ const ToolDef& def() {
                            {"description", "The choice, 1-5 words."}}},
                 {"description", {{"type", "string"},
                                  {"description", "What picking it means, one short sentence."}}},
+                {"recommended", {{"type", "boolean"},
+                                 {"description", "Your suggestion; at most one per question. The picker starts on it."}}},
             }},
             {"required", {"label"}},
         };

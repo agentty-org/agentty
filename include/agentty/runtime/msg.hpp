@@ -530,7 +530,8 @@ struct QuestionChoose {};                 // enter
 struct QuestionNumber { int n = 0; };     // 1-9 shortcut
 struct QuestionType   { std::string utf8; };
 struct QuestionBackspace {};
-struct QuestionBack   {};                 // shift+tab: previous question
+struct QuestionBack   {};                 // shift+tab / ←: previous question
+struct QuestionForward {};                // tab / →: next question, then review
 struct QuestionEscape {};                 // leave typing, or skip all
 
 // ── Model catalog ────────────────────────────────────────────────────────
@@ -1549,7 +1550,7 @@ using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolExecChildren, ToolTimeoutCheck, PreToolHooksDone,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
     QuestionMove, QuestionToggle, QuestionChoose, QuestionNumber, QuestionType,
-    QuestionBackspace, QuestionBack, QuestionEscape>;
+    QuestionBackspace, QuestionBack, QuestionForward, QuestionEscape>;
 
 // The tool-output viewer PANEL's messages — split from ToolMsg so the
 // panel's reducer lives in its own file (update/tool_output.cpp), leaving

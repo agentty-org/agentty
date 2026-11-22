@@ -50,6 +50,7 @@
 #include "agentty/runtime/fused_models.hpp"
 #include "agentty/domain/ui_theme.hpp"
 #include "agentty/domain/question.hpp"   // --question
+#include "agentty/runtime/view/thread/turn/question.hpp"
 
 #include <format>
 #include <maya/runtime.hpp>
@@ -269,7 +270,8 @@ void render_question(int cols) {
         {{"question", "Which database should the cache use?"}, {"header", "Database"},
          {"options", nlohmann::json::array({
              {{"label", "SQLite"}, {"description", "one file, nothing to run"}},
-             {{"label", "Postgres"}, {"description", "the server the app already uses"}},
+             {{"label", "Postgres"}, {"description", "the server the app already uses"},
+              {"recommended", true}},
              {{"label", "Redis"}}})}},
         {{"question", "Which endpoints should be cached?"}, {"header", "Scope"},
          {"multiple", true},
@@ -297,7 +299,7 @@ void render_question(int cols) {
         emit_element(tag, maya::Conversation{ui::conversation_config(m)}.build(), cols);
     };
     show("question \xc2\xb7 first", [](question::State&) {});
-    show("question \xc2\xb7 cursor on 2", [](question::State& s) { question::move(s, 1); });
+    show("question \xc2\xb7 cursor moved", [](question::State& s) { question::move(s, -1); });
     show("question \xc2\xb7 typing", [](question::State& s) { question::type(s, "memcached"); });
     show("question \xc2\xb7 2 of 2, two ticked", [](question::State& s) {
         (void)question::choose(s);
@@ -305,6 +307,53 @@ void render_question(int cols) {
         question::move(s, 2);
         question::toggle(s);
     });
+    show("question \xc2\xb7 review", [](question::State& s) {
+        (void)question::choose(s);
+        question::toggle(s);
+        question::move(s, 2);
+        question::toggle(s);
+        (void)question::choose(s);
+    });
+    {
+        Model m;
+        m.d.pending_question = Model::Domain::PendingQuestion{ToolCallId{"q1"},
+            question::start(question::parse(nlohmann::json{
+                {"question", "Delete the 3 migrations that are already applied?"},
+                {"header", "Migrations"},
+                {"options", nlohmann::json::array({
+                    {{"label", "Keep them"}, {"description", "safer; they cost nothing"},
+                     {"recommended", true}},
+                    {{"label", "Delete them"}, {"description", "the schema dump covers them"}}})}}).questions)};
+        emit_element("question \xc2\xb7 just one", ui::question_card(m.d.pending_question->state), cols);
+    }
+
+    // Settled: the tool card keeps question → answer once the picker is gone.
+    {
+        Model m;
+        Message user;
+        user.role = Role::User;
+        user.text = "add a cache in front of the slow endpoints";
+        m.d.current.messages.push_back(std::move(user));
+        Message asst;
+        asst.role = Role::Assistant;
+        ToolUse tc;
+        tc.id = ToolCallId{"q"};
+        tc.name = ToolName{"question"};
+        tc.args = args;
+        auto st = question::start(question::parse(args).questions);
+        (void)question::choose(st);
+        question::toggle(st);
+        question::move(st, 2);
+        question::toggle(st);
+        (void)question::choose(st);
+        const auto now = std::chrono::steady_clock::now();
+        tc.status = ToolUse::Pending{now};
+        tc.settle_done(now, question::answered(st));
+        asst.tool_calls.push_back(std::move(tc));
+        asst.text = "Postgres it is, for /search and /feed.";
+        m.d.current.messages.push_back(std::move(asst));
+        emit_element("question \xc2\xb7 answered", maya::Conversation{ui::conversation_config(m)}.build(), cols);
+    }
 }
 
 // --agents: the subagent (`task`) card in the states a user actually sees,

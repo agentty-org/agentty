@@ -1013,6 +1013,10 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             if (m.d.pending_question) question::back(m.d.pending_question->state);
             return Cmd::none();
         },
+        [&](QuestionForward) -> Cmd {
+            if (m.d.pending_question) question::forward(m.d.pending_question->state);
+            return Cmd::none();
+        },
         [&](QuestionEscape) -> Cmd {
             if (!m.d.pending_question) return Cmd::none();
             if (question::escape(m.d.pending_question->state))

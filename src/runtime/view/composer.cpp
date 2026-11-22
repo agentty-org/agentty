@@ -251,6 +251,7 @@ maya::Composer::Config composer_config(const Model& m) {
     cfg.text            = std::move(disp.text);
     cfg.cursor          = disp.cursor;
     cfg.state           = composer_state(m);
+    if (m.d.pending_question) cfg.awaiting_text = "answer the question above";
     cfg.active_color    = phase_color(m.s.phase);
     cfg.text_color      = fg;
     cfg.accent_color    = accent;

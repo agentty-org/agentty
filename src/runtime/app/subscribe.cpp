@@ -179,9 +179,10 @@ std::optional<Msg> on_question(const Model& m, const KeyEvent& ev) {
         switch (*sk) {
             case SpecialKey::Up:        return QuestionMove{-1};
             case SpecialKey::Down:      return QuestionMove{+1};
-            case SpecialKey::Tab:       return QuestionMove{+1};
+            case SpecialKey::Tab:       return QuestionForward{};
             case SpecialKey::BackTab:   return QuestionBack{};
             case SpecialKey::Left:      return typing ? std::optional<Msg>{} : Msg{QuestionBack{}};
+            case SpecialKey::Right:     return typing ? std::optional<Msg>{} : Msg{QuestionForward{}};
             case SpecialKey::Enter:     return QuestionChoose{};
             case SpecialKey::Escape:    return QuestionEscape{};
             case SpecialKey::Backspace: return QuestionBackspace{};

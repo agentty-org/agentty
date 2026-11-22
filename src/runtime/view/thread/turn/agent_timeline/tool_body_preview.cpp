@@ -19,6 +19,7 @@
 #include <cctype>
 
 #include "agentty/tool/util/utf8.hpp"
+#include "agentty/domain/question.hpp"   // a settled question's record
 
 namespace agentty::ui {
 
@@ -267,6 +268,26 @@ maya::ToolBodyPreview::Config tool_body_preview_config(
     if (n == "todo" && detail::todo_body(tc, out)) {
         generic_lifecycle_body(tc, out);
         return out;
+    }
+    // A settled question: what was asked and what you chose, as a checked
+    // list. The picker is gone by now; this is the transcript's record.
+    if (n == "question" && tc.is_done()) {
+        if (const auto answers = question::answers_in(card_output(tc)); !answers.empty()) {
+            using Status = maya::ToolBodyPreview::TodoItem::Status;
+            out.kind = maya::ToolBodyPreview::Kind::TodoList;
+            const auto parsed = question::parse(tc.args);
+            for (std::size_t i = 0; i < answers.size(); ++i) {
+                std::string asked = i < parsed.questions.size()
+                    ? (parsed.questions[i].header.empty() ? parsed.questions[i].question
+                                                          : parsed.questions[i].header)
+                    : std::string{};
+                std::string row = asked.empty() ? answers[i]
+                                                : asked + "  \xe2\x86\x92  " + (answers[i].empty() ? "no answer" : answers[i]);
+                out.todos.push_back({std::move(row), answers[i].empty() ? Status::Pending
+                                                                        : Status::Completed});
+            }
+            return out;
+        }
     }
 
     generic_lifecycle_body(tc, out);

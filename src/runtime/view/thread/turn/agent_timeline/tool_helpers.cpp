@@ -34,6 +34,7 @@ std::string tool_display_name(const std::string& n) {
     if (n == "list_dir")        return "List";
     if (n == "repo_map")        return "Repo Map";
     if (n == "todo")            return "Todo";
+    if (n == "question")        return "Ask";
     if (n == "web_fetch")       return "Fetch";
     if (n == "web_search")      return "Search";
     if (n == "find_definition") return "Definition";
@@ -129,6 +130,7 @@ maya::Color tool_category_color(const std::string& n) {
         || n.rfind("process_", 0) == 0)
         return code_text;
     if (n == "todo")                  return status_warn;
+    if (n == "question")              return role_info;
     if (n == "task")                  return role_brand_alt;   // agent identity
     if (n.rfind("git_", 0) == 0)      return role_info;
     return code_path;
@@ -142,6 +144,7 @@ std::string_view tool_category_label(const std::string& n) {
         || n.rfind("process_", 0) == 0)
         return "execute";
     if (n == "todo")                  return "plan";
+    if (n == "question")              return "ask";
     if (n == "task")                  return "agent";
     if (n.rfind("git_", 0) == 0)      return "vcs";
     return "inspect";
@@ -418,30 +421,30 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         return path_pp;
     }
     if (n == "question") {
-        // What was asked, then (settled) what came back: the first answer
-        // line of the result. The picker itself is the card below the turn.
+        // The question in words (one), or how many (several). Settled, the
+        // body lists question → answer; the header only adds the outcome.
         std::string asked;
+        std::size_t count = 0;
         if (tc.args.is_object()) {
             if (const auto qs = tc.args.find("questions"); qs != tc.args.end()
                 && qs->is_array() && !qs->empty()) {
-                asked = safe_arg((*qs)[0], "header");
-                if (asked.empty()) asked = safe_arg((*qs)[0], "question");
-                if (qs->size() > 1) asked += "  \xc2\xb7  " + std::to_string(qs->size()) + " questions";
+                count = qs->size();
+                asked = count > 1 ? std::to_string(count) + " questions"
+                                  : safe_arg((*qs)[0], "question");
             } else {
                 asked = safe("question");
+                count = asked.empty() ? 0 : 1;
             }
         }
         if (asked.empty()) asked = "\xe2\x80\xa6";
         if (tc.is_done()) {
             const auto& out = card_output(tc);
             if (out.find("dismissed") != std::string::npos) return asked + "  \xc2\xb7  skipped";
-            if (const auto at = out.find("\xe2\x86\x92 "); at != std::string::npos) {
-                auto ans = out.substr(at + 4, out.find('\n', at) - (at + 4));
-                return asked + "  \xe2\x86\x92  " + ans;
-            }
-        } else if (tc.is_pending()) {
-            return asked + "  \xc2\xb7  waiting for your answer";
+            if (out.find("switched clarifying questions off") != std::string::npos)
+                return asked + "  \xc2\xb7  questions are off";
+            return asked + "  \xc2\xb7  answered";
         }
+        if (tc.is_pending()) return asked + "  \xc2\xb7  waiting for you";
         return asked;
     }
     if (n == "move") {
