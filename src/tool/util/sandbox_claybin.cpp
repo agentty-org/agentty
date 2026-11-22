@@ -45,10 +45,12 @@
 // three spawn paths differ because the mechanisms differ; the POLICY does not.
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -278,6 +280,28 @@ std::vector<std::string> proxy_env(const Posture& p) {
 
 namespace {
 
+// The own_config_ro entries a writable bind reaches: under the workspace (when
+// it is writable) or a write path, or containing one. Component-wise, so
+// ~/.agentty-old is not under ~/.agentty.
+[[nodiscard]] std::vector<std::string> own_config_exposed(const Posture& p) {
+    namespace fs = std::filesystem;
+    auto norm = [](const std::string& s) {
+        fs::path p = fs::path{s}.lexically_normal();
+        return p.has_filename() ? p : p.parent_path();
+    };
+    auto nested = [&](const std::string& a, const std::string& b) {   // a within b
+        const fs::path pa = norm(a), pb = norm(b);
+        return std::mismatch(pb.begin(), pb.end(), pa.begin(), pa.end()).first == pb.end();
+    };
+    std::vector<std::string> writable = p.write_paths;
+    if (!p.workspace.empty() && !p.workspace_read_only) writable.push_back(p.workspace);
+    std::vector<std::string> out;
+    for (const auto& r : p.own_config_ro)
+        for (const auto& w : writable)
+            if (!w.empty() && (nested(r, w) || nested(w, r))) { out.push_back(r); break; }
+    return out;
+}
+
 // Build the sealed policy that mirrors build_bwrap_argv()'s posture.
 //
 // Order matters exactly as it does for bwrap: the workspace bind goes LAST so
@@ -434,6 +458,17 @@ namespace {
         if (p.workspace_read_only || !p.handoff_ro.empty() || !p.handoff_anchor.empty())
             for (const auto& m : p.masked)
                 if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
+    }
+
+    // agentty's own config, read-only, over whichever writable bind exposed
+    // it (the workspace at $HOME, or a write path). After the workspace block
+    // because a write path can be the workspace's parent, and then its masks
+    // again: the masked memory and credential files live INSIDE ~/.agentty,
+    // and this bind just covered their masks.
+    for (const auto& r : own_config_exposed(p)) {
+        d = std::move(d).bind_try(r, r, /*ro=*/true);
+        for (const auto& m : p.masked)
+            if (m == r || m.starts_with(r + "/")) d = std::move(d).mask(m);
     }
 
     // ── network ─────────────────────────────────────────────────────────

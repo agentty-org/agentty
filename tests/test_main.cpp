@@ -70,14 +70,18 @@ int main(int argc, char** argv) {
         sandbox = fs::temp_directory_path() /
             ("agentty_tests_home_" + std::to_string(pid) + "_" + std::to_string(stamp));
         std::error_code ec;
-        fs::create_directories(sandbox, ec);
+        fs::create_directories(sandbox / "home", ec);
+        // The per-user root is a CHILD of the sandbox, beside tmp/ below,
+        // never its parent: agentty refuses writes into its own config
+        // (handoff::is_own_config), so a TMPDIR inside the root made every
+        // test workspace read as agentty's config.
 #if defined(_WIN32)
-        _putenv_s("AGENTTY_HOME", sandbox.string().c_str());
+        _putenv_s("AGENTTY_HOME", (sandbox / "home").string().c_str());
         _putenv_s("AGENTTY_UNDER_TEST", "1");
         _putenv_s("AGENTTY_NO_PREWARM", "1");
         _putenv_s("AGENTTY_NO_UPDATE_CHECK", "1");
 #else
-        ::setenv("AGENTTY_HOME", sandbox.string().c_str(), 1);
+        ::setenv("AGENTTY_HOME", (sandbox / "home").string().c_str(), 1);
         ::setenv("AGENTTY_UNDER_TEST", "1", 1);
         // A prewarm is a background TLS dial to a real host. A test that runs
         // init() starts one, and it can outlive main() and race libcrypto's

@@ -699,6 +699,53 @@ to see what the agent is authoring.
 
 `--sandbox off` disables this too. "Off" has to mean off.
 
+### Paths the gate covers
+
+Editor tasks, git config and hooks, venv interpreters, shell and login init,
+build scripts, daemon sockets, and **other agents' config**: a project
+`.mcp.json` or `~/.claude.json` (Claude Code), `.codex/`, `.gemini/`,
+`.junie/`. Each of those names commands the other agent starts, outside any
+sandbox of ours, the next time it opens the folder.
+
+---
+
+## The agent cannot loosen its own box
+
+A sandbox that the sandboxed agent can reconfigure is a suggestion. Ona showed
+the chain against Claude Code in 2026: the denylist matched a *command name*,
+the agent ran the same binary under another path, and when that was blocked too
+it turned the sandbox off with the tool parameter that existed for retrying
+unsandboxed. agentty closes each link:
+
+- **No wall looks at names.** Landlock, seccomp and the mount tree act on the
+  file and the syscall, so `/proc/self/root/bin/sh`, `ld.so /bin/sh` and a copy
+  of `sh` in `/tmp` hit the same rules as `sh`. `sandbox_live_check` runs each
+  spelling against a write outside the workspace.
+- **No way out for the model.** No tool has a "run unsandboxed" argument
+  (`toolset_e2e_test` fails if one appears). A blocked command is reported as
+  blocked; only you change the posture, in the Sandbox pane, and it applies on
+  restart.
+- **agentty's own config is read-only to everything it runs.** `~/.agentty`
+  (`$AGENTTY_HOME`) holds `settings.json` — the sandbox policy itself — and
+  `mcp.json`, `hooks.json` and `acp-agents.json`, which run without an approval
+  prompt because of where they are. `state/` is the approval store. The native
+  tools (`write`, `edit`, `apply_patch`, `move`, `replace`, `remove`, …) refuse
+  to write, delete or move anything in there **under every Trust handoff
+  setting, `allow` included**, through a symlink too; so do the stores and
+  files `$AGENTTY_STATE_DIR`, `$AGENTTY_CREDENTIALS_DIR`, `$AGENTTY_MCP_CONFIG`
+  and `$AGENTTY_ACP_AGENTS` point at. Inside the box it is read-only (or
+  invisible) wherever a writable bind would otherwise reach it — the workspace
+  at `$HOME`, a write path you added — with the memory and credential masks
+  inside it kept.
+
+The project's `.agentty/` is not in that list. What can *run* from it (servers,
+hooks, agents) is gated by a content-hash approval that lives in the user
+store, so a cloned repo cannot vouch for itself; it stays an ordinary
+trust-handoff path.
+
+Without a mount namespace the in-box read-only bind is absent (the same caveat
+as the handoff binds); the native gate and handoff detection still run there.
+
 ---
 
 ## Telling the model

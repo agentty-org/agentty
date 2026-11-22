@@ -22,6 +22,7 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -352,4 +353,122 @@ TEST_CASE("handoff: a symlinked directory cannot hide a trusted shape") {
                                "write", Policy::Refuse).is_handoff);
 
     fs::remove_all(root, ec);
+}
+
+// ── step 4: the agent cannot loosen its own box ──────────────────────────────
+
+#if !defined(_WIN32)   // setenv/getpid/symlinks; the logic is not platform code
+namespace {
+// A private $AGENTTY_HOME for one case, restored on the way out.
+struct OwnRoot {
+    std::filesystem::path dir;
+    std::string saved;
+    bool had = false;
+    OwnRoot() {
+        namespace fs = std::filesystem;
+        if (const char* h = std::getenv("AGENTTY_HOME")) { saved = h; had = true; }
+        dir = fs::temp_directory_path() /
+              ("agentty_own_cfg_" + std::to_string(static_cast<long long>(::getpid())));
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "state", ec);
+        dir = fs::canonical(dir, ec);
+        ::setenv("AGENTTY_HOME", dir.c_str(), 1);
+    }
+    ~OwnRoot() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        if (had) ::setenv("AGENTTY_HOME", saved.c_str(), 1);
+        else ::unsetenv("AGENTTY_HOME");
+    }
+};
+}  // namespace
+
+TEST_CASE("handoff: agentty's own config is refused under EVERY policy") {
+    Fresh fresh;
+    OwnRoot own;
+
+    // Allow is the case that matters: the user said the agent may author
+    // host-run files, and that must still not include the file that says what
+    // the sandbox is. settings.json holds the policy; mcp.json and hooks.json
+    // there run without an approval prompt; state/ is the approval store.
+    for (const char* leaf : {"settings.json", "mcp.json", "hooks.json",
+                             "acp-agents.json", "state/mcp_approvals.json"}) {
+        const auto p = (own.dir / leaf).string();
+        INFO(p);
+        for (auto pol : {Policy::Allow, Policy::Warn, Policy::Refuse}) {
+            auto v = hg::check_with(p, "write", pol);
+            CHECK_FALSE(v.allowed);
+            CHECK(v.kind == Kind::OwnConfig);
+            // The message names the way that works, so the model stops.
+            CHECK(v.reason.find("Show the user") != std::string::npos);
+        }
+    }
+    // The root itself (a move ONTO it) and a relative spelling of a file in it.
+    CHECK_FALSE(hg::check_with(own.dir.string(), "move", Policy::Allow).allowed);
+    CHECK_FALSE(hg::check_with((own.dir / "x" / ".." / "settings.json").string(),
+                               "write", Policy::Allow).allowed);
+
+    // Component-wise, not a string prefix: a sibling that merely starts with
+    // the same name is an ordinary path.
+    const auto sibling = own.dir.string() + "-old/settings.json";
+    CHECK(hg::check_with(sibling, "write", Policy::Allow).allowed);
+    CHECK_FALSE(hg::is_own_config(sibling));
+}
+
+TEST_CASE("handoff: a workspace symlink cannot point a write into the own config") {
+    Fresh fresh;
+    OwnRoot own;
+    namespace fs = std::filesystem;
+    const fs::path ws = own.dir.parent_path() /
+        ("agentty_own_ws_" + std::to_string(static_cast<long long>(::getpid())));
+    std::error_code ec;
+    fs::remove_all(ws, ec);
+    fs::create_directories(ws, ec);
+    fs::create_symlink(own.dir, ws / "cfg", ec);
+    REQUIRE_FALSE(ec);
+
+    auto v = hg::check_with((ws / "cfg" / "settings.json").string(), "write", Policy::Allow);
+    CHECK_FALSE(v.allowed);
+    CHECK(v.kind == Kind::OwnConfig);
+    CHECK(hg::check_with((ws / "plain.txt").string(), "write", Policy::Allow).allowed);
+    fs::remove_all(ws, ec);
+}
+
+TEST_CASE("handoff: removing or moving the own config aside is refused") {
+    Fresh fresh;
+    OwnRoot own;
+    namespace sb = tools::util::sandbox;
+    if (sb::requested_mode() == sb::Mode::Off) return;   // off means off
+
+    // Deleting settings.json puts the shipped default back over a stricter
+    // choice; removing a directory ABOVE the root takes all of it.
+    CHECK_FALSE(hg::check_own_removal((own.dir / "settings.json").string(), "remove").allowed);
+    CHECK_FALSE(hg::check_own_removal(own.dir.string(), "move").allowed);
+    CHECK_FALSE(hg::check_own_removal(own.dir.parent_path().string(), "remove").allowed);
+    // An unrelated path is not.
+    CHECK(hg::check_own_removal((own.dir.parent_path() / "unrelated-xyz").string(),
+                                "remove").allowed);
+}
+#endif  // !_WIN32
+
+TEST_CASE("handoff: another agent's server list is a handoff, not ordinary") {
+    Fresh fresh;
+    // Claude Code runs the commands in a project .mcp.json, and Codex those in
+    // .codex/config.toml, outside any sandbox of ours, the next time it opens
+    // the folder. The project's own .agentty stays an ordinary handoff path:
+    // what can run from it is gated by a content-hash approval.
+    for (const char* p : {"/work/.mcp.json", "/home/u/.claude.json",
+                          "/work/.codex/config.toml", "/work/.gemini/settings.json",
+                          "/work/.junie/mcp/mcp.json"}) {
+        INFO(p);
+        auto v = hg::check_with(p, "write", Policy::Refuse);
+        CHECK_FALSE(v.allowed);
+        CHECK(v.kind == Kind::AgentConfig);
+    }
+    // .claude/settings.json keeps the hook reason: it carries hooks.
+    CHECK(hg::check_with("/work/.claude/settings.json", "write", Policy::Refuse).kind ==
+          Kind::HookConfig);
+    CHECK(hg::check_with("/work/.agentty/mcp.json", "write", Policy::Allow).allowed);
+    CHECK_FALSE(hg::check_with("/work/.agentty/mcp.json", "write", Policy::Refuse).allowed);
 }

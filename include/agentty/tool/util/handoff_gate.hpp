@@ -81,6 +81,27 @@ struct Verdict {
 [[nodiscard]] Verdict check_with(std::string_view path, std::string_view tool,
                                  sandbox_cfg::HandoffPolicy policy);
 
+// Is `path` inside agentty's own per-user config (util::trust_roots():
+// ~/.agentty, the approval and credential stores wherever they were moved,
+// $AGENTTY_MCP_CONFIG, $AGENTTY_ACP_AGENTS)? Spelled path and resolved path
+// both count, so a symlink in the workspace cannot point a write in there.
+//
+// check_with refuses these under EVERY policy, Allow included. The handoff
+// policy is about files a host tool runs later, which the user may well want
+// the agent to author; this is the file that says what the sandbox is and
+// which servers, hooks and agents run unasked. Everything in it is trusted by
+// PLACEMENT -- no approval prompt stands between a write and its effect -- so
+// an agent that could write it would choose its own box for the next run.
+// The project's .agentty is different: what can run from it is gated by a
+// content-hash approval, so it stays an ordinary handoff path.
+[[nodiscard]] bool is_own_config(std::string_view path);
+
+// The other direction: removing or renaming AWAY a path that is, or contains,
+// a trust root. Deleting settings.json puts the shipped default back in place
+// of a stricter one the user chose; moving ~/.agentty aside does the same for
+// everything. Off under --sandbox off, like check().
+[[nodiscard]] Verdict check_own_removal(std::string_view path, std::string_view tool);
+
 // Every handoff the gate has seen this session, newest last, bounded.
 //
 // Same shape and the same reasoning as the broker's blocked feed: written from

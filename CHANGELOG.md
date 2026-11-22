@@ -13,6 +13,14 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   own); retrieval helpers get a read-only workspace and no network. With the
   sandbox on, a server that cannot be sandboxed is refused with the reason,
   never started without one. Linux; macOS and Windows next.
+- **Nothing agentty runs can change agentty's own config.** `~/.agentty`
+  holds the sandbox policy, the MCP servers, hooks and agents that start
+  without asking, and the approval store. The agent's file tools now refuse
+  to write, delete or move anything there under every Trust handoff setting,
+  `allow` included, and through symlinks; sandboxed commands see it
+  read-only even with the workspace at `$HOME`. Writing another agent's
+  server list (`.mcp.json`, `~/.claude.json`, `.codex/`, `.gemini/`,
+  `.junie/`) is now a trust handoff too.
 - **The sandbox works, and holds, on hosts without user namespaces.** Ubuntu
   24.04's AppArmor default denies them, and on such a host every sandboxed
   command failed to start; underneath that, a masked `.env` could be read in

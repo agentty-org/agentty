@@ -83,6 +83,10 @@ enum class TrustKind : std::uint8_t {
     BuildScript,    // Makefile, package.json scripts, build.rs
     DaemonSocket,   // docker.sock and friends -- a second execution env
     SessionStart,   // autostart, systemd user units, WM config -- run at login
+    // Appended, never inserted: the values are compared, not persisted, but
+    // there is no reason to renumber the ones above.
+    AgentConfig,    // .mcp.json, .codex/, .gemini/ -- another agent runs these
+    OwnConfig,      // agentty's own settings, approvals and credentials
 };
 
 [[nodiscard]] constexpr std::string_view explain(TrustKind k) noexcept {
@@ -103,6 +107,11 @@ enum class TrustKind : std::uint8_t {
             return "a privileged daemon -- it can act outside the sandbox entirely";
         case TrustKind::SessionStart:
             return "session start -- runs at your next login, outside the sandbox";
+        case TrustKind::AgentConfig:
+            return "another agent's config -- it starts the commands named here, unsandboxed";
+        case TrustKind::OwnConfig:
+            return "agentty's own config -- it decides what agentty trusts and how this "
+                   "sandbox is built";
     }
     return "";
 }

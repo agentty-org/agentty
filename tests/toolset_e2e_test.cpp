@@ -16,6 +16,7 @@
 // forget/wipe_memory land in the sandbox, never in the user's real store.
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -155,6 +156,26 @@ int main() {
         // Recall-bias ordering: read/edit lead, host shells trail.
         check(!reg->empty() && reg->front().name.value == "read",
               "wire order: 'read' listed first");
+
+        // Roadmap step 4: there is no "retry unsandboxed" path for the model.
+        // Codex and Claude Code both ship one (sandbox_permissions /
+        // dangerouslyDisableSandbox), and the Ona chain used exactly that to
+        // finish an escape. Here only the user changes the posture, by
+        // restart. So no tool may grow an argument that asks for less of it.
+        for (const auto& t : *reg) {
+            const auto props = t.input_schema.contains("properties")
+                ? t.input_schema["properties"] : json::object();
+            for (const auto& [k, _] : props.items()) {
+                std::string lk = k;
+                for (auto& c : lk) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                const bool escape_hatch = lk.find("sandbox") != std::string::npos
+                    || lk.find("unconfined") != std::string::npos
+                    || lk.find("dangerous") != std::string::npos
+                    || lk.find("escalat") != std::string::npos;
+                check(!escape_hatch, t.name.value + ": argument '" + k +
+                                         "' must not offer a way out of the sandbox");
+            }
+        }
     }
 
     // The model can reach native and third-party MCP executors. No exception

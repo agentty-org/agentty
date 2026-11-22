@@ -51,12 +51,13 @@ int main(int argc, char** argv) {
         sandbox = fs::temp_directory_path() /
             ("agentty_stests_home_" + std::to_string(stamp));
         std::error_code ec;
-        fs::create_directories(sandbox, ec);
+        fs::create_directories(sandbox / "home", ec);
+        // home/ beside tmp/, never tmp/ inside the root: see test_main.cpp.
 #if defined(_WIN32)
-        _putenv_s("AGENTTY_HOME", sandbox.string().c_str());
+        _putenv_s("AGENTTY_HOME", (sandbox / "home").string().c_str());
         _putenv_s("AGENTTY_UNDER_TEST", "1");
 #else
-        ::setenv("AGENTTY_HOME", sandbox.string().c_str(), 1);
+        ::setenv("AGENTTY_HOME", (sandbox / "home").string().c_str(), 1);
         ::setenv("AGENTTY_UNDER_TEST", "1", 1);
 #endif
     }

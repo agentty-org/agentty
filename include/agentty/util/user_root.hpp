@@ -57,6 +57,7 @@
 // in user_root.cpp.
 
 #include <filesystem>
+#include <vector>
 
 namespace agentty::util {
 
@@ -109,5 +110,19 @@ namespace agentty::util {
 [[nodiscard]] std::filesystem::path user_cache_dir();        // refetchable
 [[nodiscard]] std::filesystem::path user_logs_dir();         // diagnostics
 [[nodiscard]] std::filesystem::path user_threads_dir();      // conversation history
+
+// Every per-user path whose contents decide what agentty trusts or allows:
+// the root itself (settings.json holds the sandbox policy; mcp.json,
+// hooks.json and acp-agents.json there are trusted by PLACEMENT), the
+// approval store, the credential store, and the two config files an
+// environment variable can point anywhere ($AGENTTY_MCP_CONFIG,
+// $AGENTTY_ACP_AGENTS). Absolute, lexically normal, NOT created and not
+// canonicalised -- this is a pure read of the environment, so a write gate can
+// call it per write. Empty when there is no home and no $AGENTTY_HOME.
+//
+// The sandbox makes these read-only to anything it confines and the native
+// write tools refuse them: an agent that could edit them could loosen its own
+// box for the next run (docs/design/sandbox-roadmap.md, step 4).
+[[nodiscard]] std::vector<std::filesystem::path> trust_roots();
 
 }  // namespace agentty::util

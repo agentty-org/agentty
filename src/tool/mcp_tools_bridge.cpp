@@ -685,6 +685,18 @@ std::vector<ToolDef> build_mcp_tool_defs() {
                     break;   // one path per call; first key present wins
                 }
             }
+            // Removing agentty's own config, or moving it aside, resets the
+            // policy in it to the shipped default. GatedFiles refuses that at
+            // the syscall too; this is where the model gets the reason.
+            if (tool_name == "remove" || tool_name == "move") {
+                const char* key = tool_name == "move" ? "source" : "path";
+                if (auto it = args.find(key); it != args.end() && it->is_string()) {
+                    auto v = tools::util::handoff::check_own_removal(
+                        it->get_ref<const std::string&>(), tool_name);
+                    if (!v.allowed)
+                        return std::unexpected(ToolError::denied(std::move(v.reason)));
+                }
+            }
 
             // SHELL-PATH DETECTION. The gate above needs a path argument, and
             // `shell` has none -- it hands over an opaque string, which is how

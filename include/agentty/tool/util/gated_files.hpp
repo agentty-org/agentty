@@ -1,5 +1,6 @@
 #pragma once
-// DiskFiles with the trust-handoff gate on every write, rename and copy.
+// DiskFiles with the trust-handoff gate on every write, rename and copy, and
+// the own-config gate on every remove.
 //
 // write/edit/apply_patch/move are also gated up front on their path argument,
 // which gives the model a better message; this layer is what covers replace
@@ -58,12 +59,16 @@ public:
     bool create_directories(const fs::path& p, std::error_code& ec) override {
         return disk_.create_directories(p, ec);
     }
-    bool remove(const fs::path& p, std::error_code& ec) override { return disk_.remove(p, ec); }
+    bool remove(const fs::path& p, std::error_code& ec) override {
+        if (!removable(p, ec)) return false;
+        return disk_.remove(p, ec);
+    }
     std::uintmax_t remove_all(const fs::path& p, std::error_code& ec) override {
+        if (!removable(p, ec)) return 0;
         return disk_.remove_all(p, ec);
     }
     void rename(const fs::path& from, const fs::path& to, std::error_code& ec) override {
-        if (!allowed(to, ec)) return;
+        if (!removable(from, ec) || !allowed(to, ec)) return;
         disk_.rename(from, to, ec);
     }
     void copy(const fs::path& from, const fs::path& to, std::error_code& ec) override {
@@ -74,6 +79,13 @@ public:
 private:
     [[nodiscard]] static bool allowed(const fs::path& to, std::error_code& ec) {
         if (handoff::check(to.string(), "move").allowed) return true;
+        ec = std::make_error_code(std::errc::permission_denied);
+        return false;
+    }
+    // agentty's own config cannot be deleted or moved aside either: that
+    // resets a stricter policy the user chose to the shipped default.
+    [[nodiscard]] static bool removable(const fs::path& p, std::error_code& ec) {
+        if (handoff::check_own_removal(p.string(), "remove").allowed) return true;
         ec = std::make_error_code(std::errc::permission_denied);
         return false;
     }

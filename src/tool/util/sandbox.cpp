@@ -5,6 +5,7 @@
 #include "agentty/tool/util/subprocess.hpp"   // host_git_identity
 #include "agentty/util/home_dir.hpp"   // git_global_stamp
 #include "agentty/util/logx.hpp"   // AGT_LOG — the sealed-policy refusal
+#include "agentty/util/user_root.hpp"   // trust_roots: own config read-only
 
 #include <algorithm>
 #include <atomic>
@@ -761,6 +762,21 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             }
             p.handoff_ro.push_back(e.path);
         }
+    }
+
+    // ── agentty's own config: never writable from inside ────────────
+    //
+    // Not subject to the handoff policy, and not only when the workspace is
+    // $HOME: a write path the user added can reach it too, and so can an
+    // agent's own home. build_policy keeps only the roots some writable bind
+    // reaches. Resolved paths as well as spelled ones, because the bind acts
+    // on whatever the path resolves to.
+    for (const auto& r : ::agentty::util::trust_roots()) {
+        std::error_code ec;
+        if (!fs::exists(r, ec)) continue;
+        p.own_config_ro.push_back(r.string());
+        if (const auto c = fs::canonical(r, ec); !ec && c != r)
+            p.own_config_ro.push_back(c.string());
     }
 
     // ── network ──────────────────────────────────────────────────────────

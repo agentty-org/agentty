@@ -755,6 +755,52 @@ int main() {
             std::error_code rec;
             std::filesystem::remove(victim, rec);
 
+            // The Ona chain (2026): Claude Code's sandbox matched the COMMAND
+            // (a denylist on `npx`), and the agent walked round it by naming
+            // the same binary another way, then turned the sandbox off. None
+            // of these spellings may matter here, because no wall looks at
+            // names: each must hit the same landlock rule as a plain `sh`.
+            std::printf("  the same write, the binary spelled another way:\n");
+            struct Spelling { const char* label; std::string cmd; };
+            const std::string write = "echo escaped > " + victim;
+            const Spelling spellings[] = {
+                {"via /proc/self/root", "/proc/self/root/bin/sh -c '" + write + "'"},
+                {"via the dynamic loader",
+                 "for l in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 "
+                 "/usr/lib/ld-linux-x86-64.so.2; do [ -x $l ] && exec $l /bin/sh -c '" +
+                     write + "'; done; echo no-loader"},
+                {"copied to /tmp and run",
+                 "cp /bin/sh /tmp/xsh && chmod +x /tmp/xsh && /tmp/xsh -c '" + write + "'"},
+                {"copied into the workspace and run",
+                 "cp /bin/sh ./xsh && ./xsh -c '" + write + "'; rm -f ./xsh"},
+            };
+            for (const auto& s : spellings) {
+                auto r = sb::run_shell_command(s.cmd + "; echo rc=$?", 4096,
+                                               std::chrono::seconds{15});
+                std::error_code e2;
+                const bool hit = std::filesystem::exists(victim, e2);
+                std::filesystem::remove(victim, e2);
+                if (hit) std::printf("  ESCAPED %s: %s", s.label, r.output.c_str());
+                std::string what = std::string{"a write outside, "} + s.label + ", is still denied";
+                expect(!hit, what.c_str());
+            }
+            // And the posture has no off switch the guest can reach: agentty's
+            // own config is outside the workspace, so it is read-only (or
+            // invisible) like the rest of $HOME. Probed by CREATING a file
+            // there, never by touching settings.json: if this wall ever fails
+            // the probe must not have edited the real policy. The
+            // workspace-at-$HOME case, where it is inside, is further down.
+            {
+                const std::string probe = std::string{home ? home : "/root"} +
+                                          "/.agentty/agentty-live-check-probe";
+                (void)sb::run_shell_command("echo x > " + probe, 4096,
+                                            std::chrono::seconds{15});
+                std::error_code pe;
+                const bool wrote = std::filesystem::exists(probe, pe);
+                std::filesystem::remove(probe, pe);
+                expect(!wrote, "agentty's own config dir is not writable from the box");
+            }
+
             // INSIDE the workspace: the sandbox ALLOWS it, and must. There is
             // no wall here to lean on, which is exactly why the handoff gate
             // is a separate mechanism.
@@ -915,6 +961,39 @@ int main() {
             }
             expect_ns(after.find("PWNED") == std::string::npos,
                       "an autostart entry is read-only (#3)");
+
+            // Step 4: the workspace IS $HOME, so ~/.agentty is inside it and
+            // the workspace bind made it writable. The box must not be able
+            // to rewrite the policy it runs under, or the server list, or the
+            // approvals -- and the read-only bind over it must not uncover
+            // the masked memory file inside.
+            (void)sb::run_shell_command(
+                "echo '{\"sandbox\":{}}' > .agentty/settings.json; "
+                "echo '{}' > .agentty/mcp.json; "
+                "mkdir -p .agentty/state && echo x > .agentty/state/mcp_approvals.json",
+                4096, std::chrono::seconds{15});
+            std::error_code oe;
+            expect_ns(!std::filesystem::exists(fake_home + "/.agentty/settings.json", oe)
+                          && !std::filesystem::exists(fake_home + "/.agentty/mcp.json", oe),
+                      "~/.agentty is read-only with the workspace at $HOME (step 4)");
+            // Only where the read-only bind exists: without namespaces the
+            // move would succeed (that wall is absent, and the native gate is
+            // what covers it there) and the mask check below would pass on a
+            // missing file instead of a masked one.
+            if (has_namespaces())
+                (void)sb::run_shell_command("mv .agentty .agentty-moved", 4096,
+                                            std::chrono::seconds{15});
+            expect_ns(std::filesystem::exists(fake_home + "/.agentty", oe),
+                      "...and cannot be moved aside (step 4)");
+            auto mem = sb::run_shell_command("cat .agentty/memory.jsonl; echo END", 4096,
+                                             std::chrono::seconds{15});
+            expect(mem.output.find("MEMORY_SHOULD_NEVER_APPEAR") == std::string::npos,
+                   "...and its masked memory file is still masked under the read-only bind");
+            // An ordinary dotfile next to it is untouched: the bind is exact.
+            auto plain = sb::run_shell_command("echo ok > .plainfile && echo wrote || echo denied",
+                                               4096, std::chrono::seconds{15});
+            expect(plain.output.find("wrote") != std::string::npos,
+                   "...while an ordinary file in $HOME is still writable");
         } else {
             std::printf("  no backend -- skipped\n");
         }

@@ -296,7 +296,19 @@ release, with the Plugins pane listing which servers run sandboxed; then
 default on. Document in SANDBOX.md what is and is not sandboxed — a table,
 not a sentence.
 
-### Step 4 — The agent cannot loosen its own box (hardening against F2-style escapes)
+### Step 4 — The agent cannot loosen its own box (hardening against F2-style escapes)  *(done)*
+
+Done: agentty's own per-user config (`util::trust_roots()`: `$AGENTTY_HOME`,
+the state and credential stores wherever they were moved, `$AGENTTY_MCP_CONFIG`,
+`$AGENTTY_ACP_AGENTS`) is refused by every native write/remove/move under every
+handoff policy (`handoff::is_own_config`), and bound read-only in the box
+wherever a writable bind reaches it (`Posture::own_config_ro`). Other agents'
+config (`.mcp.json`, `.claude.json`, `.codex/`, `.gemini/`, `.junie/`) is the
+new `TrustKind::AgentConfig`. The project `.agentty` stays an ordinary handoff
+path: what runs from it is approval-gated. Pinned by `handoff_gate_test`,
+`sandbox_parity_test`, `toolset_e2e_test` (no tool argument offers a way out)
+and `sandbox_live_check` (the Ona spellings, and `~/.agentty` with the workspace
+at `$HOME`). The original plan:
 
 Already mostly true (the seal, `HandoffPolicy`). Make it complete and tested:
 

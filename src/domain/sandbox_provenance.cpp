@@ -117,8 +117,17 @@ constexpr std::array kRules{
     ShapeRule{".local/bin", tag(TrustKind::Interpreter), ShapeMatch::Component},
 
     // ── other agents: config that names commands they run unsandboxed ───
-    ShapeRule{".codex", tag(TrustKind::HookConfig), ShapeMatch::Component},
-    ShapeRule{".gemini", tag(TrustKind::HookConfig), ShapeMatch::Component},
+    //
+    // .mcp.json is Claude Code's project server list and .claude.json its
+    // user one (servers nested per project); .junie/mcp/mcp.json is Junie's.
+    // Each starts the commands it names, outside any sandbox of ours, the
+    // next time that agent opens this folder. The settings under .claude/
+    // stay HookConfig above -- they carry hooks as well.
+    ShapeRule{".mcp.json", tag(TrustKind::AgentConfig), ShapeMatch::Basename},
+    ShapeRule{".claude.json", tag(TrustKind::AgentConfig), ShapeMatch::Basename},
+    ShapeRule{".junie", tag(TrustKind::AgentConfig), ShapeMatch::Component},
+    ShapeRule{".codex", tag(TrustKind::AgentConfig), ShapeMatch::Component},
+    ShapeRule{".gemini", tag(TrustKind::AgentConfig), ShapeMatch::Component},
 
     // ── build scripts: run on the next build, which is soon ─────────────
     ShapeRule{"Makefile", tag(TrustKind::BuildScript), ShapeMatch::Basename},

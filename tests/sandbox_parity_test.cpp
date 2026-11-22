@@ -18,6 +18,7 @@
 #include <claybin/plan/compile.hpp>
 #include <claybin/policy/policy.hpp>
 #include <claybin/policy/profiles.hpp>
+#include <unistd.h>   // getpid: a private home per run
 #endif
 
 #include <cstdlib>
@@ -94,6 +95,52 @@ TEST_CASE("sandbox: claybin does not need a user namespace to be useful") {
     // subsystem exists to prevent.
     CHECK(compiled->guarantees.strength(CapId::proc_isolation) == Enforcement::none);
 }
+
+#if defined(__linux__)
+TEST_CASE("sandbox: agentty's own config is read-only in the box (roadmap step 4)") {
+    // The workspace at $HOME exposes ~/.agentty through the workspace bind:
+    // settings.json (the policy itself), mcp.json and the approval store. The
+    // posture has to carry them as read-only binds, and the result has to
+    // compile on both host shapes -- a wall that makes the posture refuse on
+    // Ubuntu would turn "read-only config" into "no sandbox".
+    namespace fs = std::filesystem;
+    namespace cb = agentty::tools::util::sandbox::claybin_backend;
+    const char* prev = std::getenv("AGENTTY_HOME");
+    const std::string saved = prev ? prev : "";
+    const fs::path home = fs::temp_directory_path() /
+        ("agentty_own_posture_" + std::to_string(static_cast<long long>(::getpid())));
+    std::error_code ec;
+    fs::create_directories(home / ".agentty" / "state", ec);
+    { std::ofstream(home / ".agentty" / "settings.json") << "{}\n"; }
+    ::setenv("AGENTTY_HOME", (home / ".agentty").c_str(), 1);
+
+    ag::reset_config_for_test();
+    ag::set_config(sandbox_cfg::Config{});
+    auto p = ag::claybin_posture_for_test();
+    const std::string own = fs::canonical(home / ".agentty", ec).string();
+    CHECK(std::ranges::find(p.own_config_ro, own) != p.own_config_ro.end());
+    CHECK(std::ranges::find(p.own_config_ro, own + "/state") != p.own_config_ro.end());
+
+    // Workspace = the home that holds it, the case where it matters.
+    p.workspace = p.cwd = fs::canonical(home, ec).string();
+    auto host = ::clay::probe_host();
+    if (host.landlock_abi > 0) {
+        const auto with_ns = cb::describe_for_host(p, host);
+        INFO(with_ns.detail);
+        CHECK(with_ns.ok);
+        host.user_namespaces = host.mount_namespaces = host.pid_namespaces =
+            host.net_namespaces = host.uts_namespaces = host.ipc_namespaces =
+            host.cgroup_namespaces = false;
+        const auto no_ns = cb::describe_for_host(p, host);
+        INFO(no_ns.detail);
+        CHECK(no_ns.ok);
+    }
+
+    if (prev) ::setenv("AGENTTY_HOME", saved.c_str(), 1); else ::unsetenv("AGENTTY_HOME");
+    ag::reset_config_for_test();
+    fs::remove_all(home, ec);
+}
+#endif
 
 TEST_CASE("sandbox: the SHIPPED posture compiles and masks on a no-userns host") {
     // The test above builds its own small policy, and that is how it missed

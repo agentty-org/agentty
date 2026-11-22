@@ -25,7 +25,9 @@
 #endif
 
 #include "agentty/tool/util/sandbox.hpp"
+#include "agentty/util/home_dir.hpp"
 #include "agentty/util/logx.hpp"
+#include "agentty/util/user_root.hpp"
 
 namespace agentty::tools::util::handoff {
 
@@ -100,10 +102,81 @@ namespace {
 // Is `path` a file the nearest repo's git config makes git run? Defined
 // beside the config parser below.
 [[nodiscard]] bool is_git_config_target(const fs::path& path);
+
+[[nodiscard]] bool within(const fs::path& p, const fs::path& root) {
+    if (p == root) return true;
+    auto [r, q] = std::mismatch(root.begin(), root.end(), p.begin(), p.end());
+    return r == root.end();
+}
+
+// `path` against each trust root, spelled and resolved on both sides: a
+// workspace symlink pointing into ~/.agentty, or ~/.agentty itself being a
+// symlink to a dotfiles checkout, must not change the answer. `ancestors`
+// also counts a path that CONTAINS a root (a remove_all or a rename of a
+// directory above it).
+[[nodiscard]] bool touches_own_config(std::string_view raw, bool ancestors) {
+    const auto roots = ::agentty::util::trust_roots();
+    if (roots.empty() || raw.empty()) return false;
+    std::error_code ec;
+    fs::path p{raw};
+    if (std::string_view s = raw; s.front() == '~' && (s.size() == 1 || s[1] == '/')) {
+        const auto home = ::agentty::util::home_dir_or_empty();
+        if (home.empty()) return false;
+        p = fs::path{home} / std::string{s.size() > 2 ? s.substr(2) : std::string_view{}};
+    }
+    if (!p.is_absolute()) p = fs::absolute(p, ec);
+    if (ec) return false;
+    p = p.lexically_normal();
+    if (!p.has_filename()) p = p.parent_path();
+    fs::path resolved = fs::weakly_canonical(p, ec);
+    if (ec) resolved.clear();
+    for (const auto& root : roots) {
+        fs::path real = fs::weakly_canonical(root, ec);
+        if (ec) { real.clear(); ec.clear(); }
+        for (const fs::path* r : std::initializer_list<const fs::path*>{&root, &real}) {
+            if (r->empty()) continue;
+            for (const fs::path* q : std::initializer_list<const fs::path*>{&p, &resolved}) {
+                if (q->empty()) continue;
+                if (within(*q, *r) || (ancestors && within(*r, *q))) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The one message for both entry points. Names the way that DOES work so the
+// model stops instead of looking for another route in.
+[[nodiscard]] Verdict refuse_own(std::string_view path, std::string_view tool) {
+    Verdict v;
+    v.allowed = false;
+    v.is_handoff = true;
+    v.kind = sandbox_cfg::TrustKind::OwnConfig;
+    v.reason = "refused: " + std::string{sandbox_cfg::explain(v.kind)} +
+        ". Nothing running under agentty may change it, whatever the Trust "
+        "handoff setting. Show the user the change and let them make it, in "
+        "their editor or through the agentty command that owns it (agentty "
+        "mcp add, the Sandbox pane).";
+    AGT_LOG(Tool, Warn, "sandbox.handoff", "REFUSED {} {} (own config)",
+            std::string{tool}, logx::body(std::string{path}));
+    return v;
+}
 }  // namespace
+
+bool is_own_config(std::string_view path) {
+    return touches_own_config(path, /*ancestors=*/false);
+}
+
+Verdict check_own_removal(std::string_view path, std::string_view tool) {
+    if (sandbox::requested_mode() == sandbox::Mode::Off) return {};
+    if (!touches_own_config(path, /*ancestors=*/true)) return {};
+    return refuse_own(path, tool);
+}
 
 Verdict check_with(std::string_view path, std::string_view tool,
                    sandbox_cfg::HandoffPolicy policy) {
+    // Before the handoff policy, and not subject to it: see is_own_config.
+    if (is_own_config(path)) return refuse_own(path, tool);
+
     Verdict v;
 
     sandbox_cfg::TrustKind kind{};

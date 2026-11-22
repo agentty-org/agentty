@@ -82,6 +82,16 @@ struct Posture {
     // repo roots under the strict postures. A mount point cannot be renamed
     // (EBUSY), so the read-only binds inside cannot be moved off.
     std::vector<std::string> handoff_anchor;
+    // agentty's own per-user config (util::trust_roots), existing paths only.
+    // build_policy binds each one read-only over itself wherever a writable
+    // bind would otherwise expose it -- the workspace at (or above) $HOME, a
+    // write path the user added, an agent's home -- after every writable
+    // bind, masks re-applied on top. A root nothing writable reaches is left
+    // alone: binding it would ADD it to the guest's view. Decided there, not
+    // here, because callers append write paths after the posture is built.
+    // Same namespace caveat as handoff_ro; the native write tools refuse
+    // these on every host (handoff::is_own_config).
+    std::vector<std::string> own_config_ro;
     std::string workspace;                       // read-write, bound last
     // Bind the workspace read-only (Role::RagPeer: a retrieval backend reads
     // the code and has no reason to change it).

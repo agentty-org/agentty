@@ -3,12 +3,14 @@
 #include "agentty/util/user_root.hpp"
 #include "agentty/util/home_dir.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <maya/runtime.hpp>
 #include <set>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #ifndef _WIN32
 #  include <sys/stat.h>   // chmod
@@ -287,6 +289,37 @@ fs::path user_state_dir() {
 
 fs::path user_cache_dir() {
     return resolve_subdir("AGENTTY_CACHE_DIR", "cache", /*owner_only=*/false);
+}
+
+std::vector<fs::path> trust_roots() {
+    std::vector<fs::path> out;
+    const fs::path root = resolve_root();
+    if (root.empty()) return out;
+    std::error_code ec;
+    auto add = [&](fs::path p) {
+        if (p.empty()) return;
+        if (!p.is_absolute()) p = fs::absolute(p, ec);
+        if (ec) { ec.clear(); return; }
+        p = p.lexically_normal();
+        if (!p.has_filename()) p = p.parent_path();   // "/x/" -> "/x"
+        if (std::ranges::find(out, p) == out.end()) out.push_back(std::move(p));
+    };
+    add(root);
+    // The stores an environment variable can move out from under the root.
+    // Same resolution as subdir_under, minus the mkdir.
+    for (auto [env, leaf] : {std::pair{"AGENTTY_STATE_DIR", "state"},
+                             std::pair{"AGENTTY_CREDENTIALS_DIR", "credentials"}}) {
+        if (const char* v = std::getenv(env); v && *v) {
+            const fs::path given{v};
+            add(given.is_absolute() ? given : root / given);
+        } else {
+            add(root / leaf);
+        }
+    }
+    // Config files trusted by being named, wherever they are.
+    for (const char* env : {"AGENTTY_MCP_CONFIG", "AGENTTY_ACP_AGENTS"})
+        if (const char* v = std::getenv(env); v && *v) add(fs::path{v});
+    return out;
 }
 
 fs::path user_logs_dir() {
