@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.62] - 2026-11-22
+
 ### Added
 - **The agent can ask you to choose.** When a request is ambiguous or a
   decision is yours (which design, whether to delete something), the model
