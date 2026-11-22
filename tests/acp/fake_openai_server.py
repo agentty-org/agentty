@@ -125,6 +125,20 @@ class H(BaseHTTPRequestHandler):
                       chunk({"tool_calls": [{"index": 0, "id": "call_ask", "type": "function",
                                              "function": {"name": "mcp__elicit__ask_name", "arguments": "{}"}}]}),
                       chunk({}, "tool_calls")]
+        elif "ask me questions" in (text or ""):
+            # The interactive question tool (agentty's TUI answers it).
+            args = json.dumps({"questions": [
+                {"question": "Which database should the cache use?", "header": "Database",
+                 "options": [{"label": "SQLite", "description": "One file, nothing to run"},
+                             {"label": "Postgres", "description": "The server the app already uses",
+                              "recommended": True},
+                             {"label": "Redis", "description": "Fastest, but another service to run"}]},
+                {"question": "Which endpoints should be cached?", "header": "Scope", "multiple": True,
+                 "options": [{"label": "/search"}, {"label": "/users/:id"}, {"label": "/feed"}]}]})
+            events = [chunk({"role": "assistant", "content": ""}),
+                      chunk({"tool_calls": [{"index": 0, "id": "call_q", "type": "function",
+                                             "function": {"name": "question", "arguments": args}}]}),
+                      chunk({}, "tool_calls")]
         elif "edit file " in (text or ""):
             parts = (text or "").split("edit file ", 1)[1].split("|")
             args = json.dumps({"path": parts[0].strip(), "old_text": parts[1], "new_text": parts[2].rstrip("\n")})

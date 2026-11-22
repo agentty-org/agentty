@@ -298,6 +298,29 @@ void render_question(int cols) {
         m.d.pending_question = Model::Domain::PendingQuestion{ToolCallId{"q"}, std::move(st)};
         emit_element(tag, maya::Conversation{ui::conversation_config(m)}.build(), cols);
     };
+    // The whole frame, the way the app draws it: card, composer, status bar.
+    {
+        Model m;
+        m.ui.term_cols = cols;
+        m.ui.term_rows = std::getenv("ROWS") ? std::atoi(std::getenv("ROWS")) : 40;
+        Message user;
+        user.role = Role::User;
+        user.text = "add a cache";
+        m.d.current.messages.push_back(std::move(user));
+        Message asst;
+        asst.role = Role::Assistant;
+        ToolUse tc;
+        tc.id = ToolCallId{"q"};
+        tc.name = ToolName{"question"};
+        tc.args = args;
+        tc.status = ToolUse::Pending{std::chrono::steady_clock::now()};
+        asst.tool_calls.push_back(std::move(tc));
+        m.d.current.messages.push_back(std::move(asst));
+        m.d.pending_question = Model::Domain::PendingQuestion{
+            ToolCallId{"q"}, question::start(question::parse(args).questions)};
+        m.s.phase = phase::AwaitingPermission{};
+        emit_element("question \xc2\xb7 whole frame", ui::view(m), cols);
+    }
     show("question \xc2\xb7 first", [](question::State&) {});
     show("question \xc2\xb7 cursor moved", [](question::State& s) { question::move(s, -1); });
     show("question \xc2\xb7 2 of 2, two ticked", [](question::State& s) {
