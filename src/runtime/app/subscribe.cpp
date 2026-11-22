@@ -169,44 +169,35 @@ std::optional<Msg> on_permission(const KeyEvent& ev) {
     return std::nullopt;
 }
 
-// The question picker. While typing the free-text answer, printable keys go
-// into it; otherwise digits pick, space ticks, and any other printable starts
-// the typed answer. Every key is claimed (the picker is modal); ^C still quits.
+// The question picker, sharing the keyboard with the composer below it.
+// The composer is the free-text answer: printable keys type there, and Enter
+// with text in it sends that text as the answer. With the composer empty the
+// picker owns navigation: arrows, Tab, Enter, digits, Space. Esc stops the
+// turn either way. nullopt: the key belongs to the composer.
 std::optional<Msg> on_question(const Model& m, const KeyEvent& ev) {
     if (!m.d.pending_question) return std::nullopt;
-    const bool typing = m.d.pending_question->state.typing;
+    const bool drafting = !m.ui.composer.text.empty() || !m.ui.composer.attachments.empty();
     if (auto* sk = std::get_if<SpecialKey>(&ev.key)) {
+        if (*sk == SpecialKey::Escape) return QuestionEscape{};
+        if (*sk == SpecialKey::Enter && !ev.mods.shift && !ev.mods.alt)
+            return drafting ? Msg{QuestionAnswerText{}} : Msg{QuestionChoose{}};
+        if (*sk == SpecialKey::Tab)     return QuestionForward{};
+        if (*sk == SpecialKey::BackTab) return QuestionBack{};
+        if (drafting) return std::nullopt;   // editing the answer
         switch (*sk) {
-            case SpecialKey::Up:        return QuestionMove{-1};
-            case SpecialKey::Down:      return QuestionMove{+1};
-            case SpecialKey::Tab:       return QuestionForward{};
-            case SpecialKey::BackTab:   return QuestionBack{};
-            case SpecialKey::Left:      return typing ? std::optional<Msg>{} : Msg{QuestionBack{}};
-            case SpecialKey::Right:     return typing ? std::optional<Msg>{} : Msg{QuestionForward{}};
-            case SpecialKey::Enter:     return QuestionChoose{};
-            case SpecialKey::Escape:    return QuestionEscape{};
-            case SpecialKey::Backspace: return QuestionBackspace{};
-            default:                    return std::nullopt;
+            case SpecialKey::Up:    return QuestionMove{-1};
+            case SpecialKey::Down:  return QuestionMove{+1};
+            case SpecialKey::Left:  return QuestionBack{};
+            case SpecialKey::Right: return QuestionForward{};
+            default:                return std::nullopt;
         }
     }
     if (auto* ck = std::get_if<CharKey>(&ev.key)) {
         const char32_t c = ck->codepoint;
         if (c == 0x03 || (ev.mods.ctrl && (c == U'c' || c == U'C'))) return Quit{};
-        if (ev.mods.ctrl || ev.mods.alt) return std::nullopt;
-        if (typing) {
-            if (c < 0x20) return std::nullopt;
-            std::string t;
-            maya::detail::encode_utf8(t, c);
-            return QuestionType{std::move(t)};
-        }
+        if (drafting || ev.mods.ctrl || ev.mods.alt) return std::nullopt;
         if (c >= U'1' && c <= U'9') return QuestionNumber{static_cast<int>(c - U'0')};
         if (c == U' ') return QuestionToggle{};
-        // Any other printable starts the free-text answer with that letter.
-        if (c >= 0x20) {
-            std::string t;
-            maya::detail::encode_utf8(t, c);
-            return QuestionType{std::move(t)};
-        }
     }
     return std::nullopt;
 }
@@ -1450,7 +1441,10 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
                 switch (active_panel) {
                     case OK::Login:          return on_login(m.ui.login, ev);
                     case OK::Permission:     return on_permission(ev);
-                    case OK::Question:       return on_question(m, ev);
+                    case OK::Question:
+                        // Unclaimed keys edit the composer: it is the answer box.
+                        if (auto r = on_question(m, ev)) return r;
+                        return on_composer(composer_state, ev);
                     case OK::Palette: return on_command_palette(ev);
                     case OK::Mention:        return on_mention_palette(ev);
                     case OK::Symbol:         return on_symbol_palette(ev);
@@ -1607,12 +1601,8 @@ Msg on_paste(const Model& m, const maya::PasteEvent& pe) {
     // an edit for it, like typing), a filter query, or else the composer.
     // Every form pane is here: a pane left out used to paste into the
     // composer hidden behind it.
+    // A question's free answer is the composer, so a paste lands there (below).
     if (active_panel == ui::panel::Kind::Login) return LoginPaste{std::move(s)};
-    // A question's typed answer, one line: newlines would read as a send.
-    if (active_panel == ui::panel::Kind::Question) {
-        for (auto& ch : s) if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
-        return QuestionType{std::move(s)};
-    }
     if (so && so->input_active)                 return SettingsListPaste{std::move(s)};
     if (active_panel == ui::panel::Kind::ThreadList && tl && !tl->renaming.empty())
         return ThreadListRenamePaste{std::move(s)};

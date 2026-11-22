@@ -300,7 +300,6 @@ void render_question(int cols) {
     };
     show("question \xc2\xb7 first", [](question::State&) {});
     show("question \xc2\xb7 cursor moved", [](question::State& s) { question::move(s, -1); });
-    show("question \xc2\xb7 typing", [](question::State& s) { question::type(s, "memcached"); });
     show("question \xc2\xb7 2 of 2, two ticked", [](question::State& s) {
         (void)question::choose(s);
         question::toggle(s);
@@ -325,6 +324,8 @@ void render_question(int cols) {
                      {"recommended", true}},
                     {{"label", "Delete them"}, {"description", "the schema dump covers them"}}})}}).questions)};
         emit_element("question \xc2\xb7 just one", ui::question_card(m.d.pending_question->state), cols);
+        emit_element("question \xc2\xb7 drafting an answer in the composer",
+                     ui::question_card(m.d.pending_question->state, /*drafting=*/true), cols);
     }
 
     // Settled: the tool card keeps question → answer once the picker is gone.

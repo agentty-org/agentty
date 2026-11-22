@@ -247,7 +247,6 @@ struct AgenttyApp {
             mix(0x9e57ULL);
             mix(qs.current);
             mix(qs.cursor);
-            mix(qs.typing ? 1ULL : 0ULL);
             mix(qs.reviewing ? 1ULL : 0ULL);
             for (const auto& a : qs.answers) {
                 std::uint64_t bits = a.answered ? 1 : 0;

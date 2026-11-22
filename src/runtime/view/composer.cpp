@@ -230,7 +230,8 @@ bool composer_uses_hardware_caret(const Model& m) noexcept {
     return !painted_caret_env
         && !welcome_bob
         && !agent_active
-        && ui::panel::top(m) == ui::panel::Kind::None
+        && (ui::panel::top(m) == ui::panel::Kind::None
+            || ui::panel::top(m) == ui::panel::Kind::Question)   // the answer box
         && m.ui.terminal_focused
         // Inside tmux, only claim the hardware caret when tmux will
         // actually FORWARD the cursor-style escape (its `cstyle`
@@ -251,7 +252,7 @@ maya::Composer::Config composer_config(const Model& m) {
     cfg.text            = std::move(disp.text);
     cfg.cursor          = disp.cursor;
     cfg.state           = composer_state(m);
-    if (m.d.pending_question) cfg.awaiting_text = "answer the question above";
+    if (m.d.pending_question) cfg.awaiting_text = "pick above, or type your own answer here";
     cfg.active_color    = phase_color(m.s.phase);
     cfg.text_color      = fg;
     cfg.accent_color    = accent;

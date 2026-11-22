@@ -528,11 +528,11 @@ struct QuestionMove   { int delta = 0; };
 struct QuestionToggle {};                 // space: tick / pick
 struct QuestionChoose {};                 // enter
 struct QuestionNumber { int n = 0; };     // 1-9 shortcut
-struct QuestionType   { std::string utf8; };
-struct QuestionBackspace {};
+// Enter with text in the composer: that text answers the current question.
+struct QuestionAnswerText {};
 struct QuestionBack   {};                 // shift+tab / ←: previous question
 struct QuestionForward {};                // tab / →: next question, then review
-struct QuestionEscape {};                 // leave typing, or skip all
+struct QuestionEscape {};                 // review: back; else stop the turn
 
 // ── Model catalog ────────────────────────────────────────────────────────
 // Result of a background model-catalog fetch. `provider_id` is the canonical
@@ -1549,8 +1549,8 @@ using StreamMsg = std::variant<
 using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolExecChildren, ToolTimeoutCheck, PreToolHooksDone,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
-    QuestionMove, QuestionToggle, QuestionChoose, QuestionNumber, QuestionType,
-    QuestionBackspace, QuestionBack, QuestionForward, QuestionEscape>;
+    QuestionMove, QuestionToggle, QuestionChoose, QuestionNumber, QuestionAnswerText,
+    QuestionBack, QuestionForward, QuestionEscape>;
 
 // The tool-output viewer PANEL's messages — split from ToolMsg so the
 // panel's reducer lives in its own file (update/tool_output.cpp), leaving

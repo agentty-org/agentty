@@ -9,15 +9,15 @@
 //   │        one file, nothing to run                      │
 //   │   2  ○ Postgres                                      │
 //   │        the server the app already uses               │
-//   │   ✎  Something else…                                 │
+//   │   ✎  or type your own answer below                   │
 //   │                                                      │
-//   │  enter select · ↑↓ move · 1-2 pick · esc skip         │
+//   │  enter select · ↑↓ move · 1-2 pick · esc stop          │
 //   ╰──────────────────────────────────────────────────────╯
 //
 // With several questions the tab row says where you are and which are
 // answered (●); after the last one a Review page shows every answer and
-// Enter sends them. Typing anything jumps to "Something else", so a free
-// answer is one keystroke away from any row.
+// Enter sends them. A free answer is typed in the composer under the card,
+// the box the user already types into; Enter with text there sends it.
 
 #include "agentty/runtime/view/thread/turn/question.hpp"
 
@@ -46,7 +46,6 @@ using maya::ThemeSlot;
 
 constexpr const char* kDot    = " \xc2\xb7 ";           // ·
 constexpr const char* kBar    = "\xe2\x96\x8c";         // ▌ cursor bar
-constexpr const char* kCaret  = "\xe2\x96\x8f";         // ▏ text caret
 
 Style fg(ThemeSlot s) { return Style{}.with_fg(Color::slot(s)); }
 Style fgc(Color c) { return Style{}.with_fg(c); }
@@ -140,7 +139,8 @@ Element keys_row(std::vector<std::pair<std::string, std::string>> keys) {
     return std::move(l).build(TextWrap::NoWrap);
 }
 
-void question_page(const question::State& s, std::vector<Element>& rows, Color accent) {
+void question_page(const question::State& s, bool drafting, std::vector<Element>& rows,
+                   Color accent) {
     const auto& q = s.q();
     const auto& a = s.a();
     const Color shade = Color::slot(ThemeSlot::Selection);
@@ -161,7 +161,9 @@ void question_page(const question::State& s, std::vector<Element>& rows, Color a
 
     for (std::size_t i = 0; i < q.options.size(); ++i) {
         const auto& o = q.options[i];
-        const bool here = !s.typing && s.cursor == i;
+        // While a typed answer is being drafted, Enter sends that instead,
+        // so the cursor row stops claiming it.
+        const bool here = !drafting && s.cursor == i;
         const bool chosen = i < a.chosen.size() && a.chosen[i];
         Line l;
         l.put(here ? kBar : " ", fgc(accent));
@@ -185,34 +187,40 @@ void question_page(const question::State& s, std::vector<Element>& rows, Color a
         }
     }
 
-    // Something else: the free answer, always last.
+    // Something else: typed in the composer below. Shown as a hint row, and as
+    // the answer once one was given (coming back to this question).
     {
-        const bool here = s.on_text_row();
         Line l;
-        l.put(here ? kBar : " ", fgc(accent));
-        l.put(" \xe2\x9c\x8e  ", here ? fgc(accent) : fg(ThemeSlot::Muted));          // ✎
-        if (s.typing || !a.typed.empty()) {
-            l.put(a.typed, fg(ThemeSlot::Text).with_bold());
-            if (s.typing) l.put(kCaret, fgc(accent));
+        l.put(" ", {});
+        l.put(" \xe2\x9c\x8e  ", drafting ? fgc(accent) : fg(ThemeSlot::Muted));      // ✎
+        if (!a.typed.empty() && !drafting) {
+            l.put("\xe2\x80\x9c" + a.typed + "\xe2\x80\x9d", fg(ThemeSlot::Text).with_bold());
+        } else if (drafting) {
+            l.put("enter sends what you typed below as the answer", fgc(accent));
         } else {
-            l.put(q.options.empty() ? "Type your answer\xe2\x80\xa6" : "Something else\xe2\x80\xa6",
-                  here ? fg(ThemeSlot::Text) : fg(ThemeSlot::Muted).with_italic());
+            l.put(q.options.empty() ? "type your answer below"
+                                    : "or type your own answer below",
+                  fg(ThemeSlot::Muted).with_italic());
         }
-        rows.push_back(here ? shaded(std::move(l), shade) : std::move(l).build());
+        rows.push_back(std::move(l).build());
     }
     rows.push_back(blank());
 
     std::vector<std::pair<std::string, std::string>> keys;
-    if (s.typing) {
-        keys = {{"enter", "send"}, {"esc", q.options.empty() ? "skip" : "back to the list"}};
-    } else {
-        if (q.multiple) keys = {{"space", "toggle"}, {"enter", "done"}};
-        else            keys = {{"enter", "select"}};
-        keys.push_back({"\xe2\x86\x91\xe2\x86\x93", "move"});
-        if (!q.options.empty())
-            keys.push_back({"1-" + std::to_string(std::min<std::size_t>(q.options.size(), 9)), "pick"});
+    if (drafting) {
+        keys = {{"enter", "send as answer"}};
         if (s.questions.size() > 1) keys.push_back({"tab", "next"});
-        keys.push_back({"esc", "skip"});
+        keys.push_back({"esc", "stop"});
+    } else {
+        if (q.options.empty())  keys = {};
+        else if (q.multiple)    keys = {{"space", "toggle"}, {"enter", "done"}};
+        else                    keys = {{"enter", "select"}};
+        if (!q.options.empty()) {
+            keys.push_back({"\xe2\x86\x91\xe2\x86\x93", "move"});
+            keys.push_back({"1-" + std::to_string(std::min<std::size_t>(q.options.size(), 9)), "pick"});
+        }
+        if (s.questions.size() > 1) keys.push_back({"tab", "next"});
+        keys.push_back({"esc", "stop"});
     }
     rows.push_back(keys_row(std::move(keys)));
 }
@@ -245,7 +253,7 @@ void review_page(const question::State& s, std::vector<Element>& rows, Color acc
 
 }  // namespace
 
-Element question_card(const question::State& s) {
+Element question_card(const question::State& s, bool drafting) {
     std::vector<Element> rows;
     if (s.questions.empty()) return maya::dsl::v(std::move(rows)).build();
     const Color accent = Color::slot(ThemeSlot::Info);
@@ -256,7 +264,7 @@ Element question_card(const question::State& s) {
         rows.push_back(blank());
     }
     if (s.reviewing) review_page(s, rows, accent);
-    else             question_page(s, rows, accent);
+    else             question_page(s, drafting, rows, accent);
 
     // Title: what this is. Progress is the tab row's job.
     std::string title = " ? ";

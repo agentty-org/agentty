@@ -439,7 +439,7 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         if (asked.empty()) asked = "\xe2\x80\xa6";
         if (tc.is_done()) {
             const auto& out = card_output(tc);
-            if (out.find("dismissed") != std::string::npos) return asked + "  \xc2\xb7  skipped";
+            if (out.starts_with("The user pressed Esc")) return asked + "  \xc2\xb7  stopped";
             if (out.find("switched clarifying questions off") != std::string::npos)
                 return asked + "  \xc2\xb7  questions are off";
             return asked + "  \xc2\xb7  answered";

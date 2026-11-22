@@ -448,7 +448,9 @@ maya::Conversation::Config conversation_config(const Model& m) {
     }
     // A question the agent is waiting on, in the same place.
     if (m.d.pending_question)
-        cfg.live_tail.push_back(question_card(m.d.pending_question->state));
+        cfg.live_tail.push_back(question_card(
+            m.d.pending_question->state,
+            !m.ui.composer.text.empty() || !m.ui.composer.attachments.empty()));
 
     // Shape probe: every conversation_config invocation's frozen/live_tail
     // sizes plus a rough live-tail content sketch. AGENTTY_LOG=perf=trace

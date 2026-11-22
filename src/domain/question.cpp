@@ -37,7 +37,6 @@ void show(State& s, std::size_t i);
 // After an answer: the next open question, else the review page (several
 // questions: one look at everything before it goes), else done.
 [[nodiscard]] Step advance(State& s) {
-    s.typing = false;
     if (const auto n = next_open(s, s.current)) { show(s, *n); return Step::Stay; }
     if (s.questions.size() > 1) { s.reviewing = true; return Step::Stay; }
     return Step::Done;
@@ -129,8 +128,7 @@ void show(State& s, std::size_t i) {
     for (std::size_t k = 0; k < a.chosen.size(); ++k)
         if (a.chosen[k]) { s.cursor = k; break; }
     if (!a.typed.empty() && std::ranges::none_of(a.chosen, [](bool b) { return b; }))
-        s.cursor = q.options.size();
-    s.typing = q.options.empty();
+        s.cursor = 0;
 }
 }  // namespace
 
@@ -148,17 +146,15 @@ State start(std::vector<Question> qs) {
 }
 
 void move(State& s, int delta) {
-    if (s.questions.empty() || s.reviewing) return;
-    const auto n = static_cast<long>(s.rows());
+    if (s.questions.empty() || s.reviewing || s.q().options.empty()) return;
+    const auto n = static_cast<long>(s.q().options.size());
     long c = static_cast<long>(s.cursor) + delta;
     c = ((c % n) + n) % n;
     s.cursor = static_cast<std::size_t>(c);
-    s.typing = false;
 }
 
 void toggle(State& s) {
-    if (s.questions.empty() || s.reviewing) return;
-    if (s.on_text_row()) { s.typing = true; return; }
+    if (s.questions.empty() || s.reviewing || s.q().options.empty()) return;
     auto& chosen = s.a().chosen;
     if (s.q().multiple) {
         chosen[s.cursor] = !chosen[s.cursor];
@@ -173,10 +169,9 @@ Step choose(State& s) {
     if (s.questions.empty()) return Step::Done;
     if (s.reviewing) return Step::Done;               // send everything
     auto& a = s.a();
-    if (s.on_text_row()) {
-        if (!s.typing) { s.typing = true; return Step::Stay; }
-        if (trimmed(a.typed).empty()) return Step::Stay;   // nothing to send yet
-        if (!s.q().multiple) std::ranges::fill(a.chosen, false);
+    // No options: only a typed answer (the composer) can answer this one.
+    if (s.q().options.empty()) {
+        if (trimmed(a.typed).empty()) return Step::Stay;
         a.answered = true;
         return advance(s);
     }
@@ -194,6 +189,18 @@ Step choose(State& s) {
     return advance(s);
 }
 
+Step answer_text(State& s, std::string_view text) {
+    if (s.questions.empty() || s.reviewing) return Step::Stay;
+    const auto t = trimmed(text);
+    if (t.empty()) return Step::Stay;
+    auto& a = s.a();
+    a.typed = t;
+    // One choice allowed: the typed answer replaces it. Several: it joins them.
+    if (!s.q().multiple) std::ranges::fill(a.chosen, false);
+    a.answered = true;
+    return advance(s);
+}
+
 Step pick_number(State& s, int n) {
     if (s.reviewing) {                                // change that answer
         if (n >= 1 && static_cast<std::size_t>(n) <= s.questions.size())
@@ -203,32 +210,13 @@ Step pick_number(State& s, int n) {
     if (s.questions.empty() || n < 1 || static_cast<std::size_t>(n) > s.q().options.size())
         return Step::Stay;
     s.cursor = static_cast<std::size_t>(n - 1);
-    s.typing = false;
     if (s.q().multiple) { toggle(s); return Step::Stay; }
     return choose(s);
 }
 
-void type(State& s, std::string_view utf8) {
-    if (s.questions.empty() || s.reviewing) return;
-    s.cursor = s.q().options.size();
-    s.typing = true;
-    auto& t = s.a().typed;
-    if (t.size() + utf8.size() <= 2000) t += utf8;
-}
-
-void backspace(State& s) {
-    if (s.questions.empty() || !s.typing) return;
-    auto& t = s.a().typed;
-    while (!t.empty() && (static_cast<unsigned char>(t.back()) & 0xC0) == 0x80) t.pop_back();
-    if (!t.empty()) t.pop_back();
-}
-
-bool escape(State& s) {
-    if (s.reviewing) { show(s, s.questions.size() - 1); return false; }
-    if (s.typing && !s.questions.empty() && !s.q().options.empty()) {
-        s.typing = false;
-        return false;
-    }
+bool escape_stays(State& s) {
+    if (!s.reviewing) return false;
+    show(s, s.questions.size() - 1);
     return true;
 }
 
@@ -242,7 +230,7 @@ void back(State& s) {
 void forward(State& s) {
     if (s.questions.empty() || s.reviewing) return;
     if (s.current + 1 < s.questions.size()) { show(s, s.current + 1); return; }
-    if (s.questions.size() > 1 && s.all_answered()) { s.typing = false; s.reviewing = true; }
+    if (s.questions.size() > 1 && s.all_answered()) s.reviewing = true;
 }
 
 std::string answered(const State& s) {
@@ -269,10 +257,24 @@ std::string answered(const State& s) {
     return out;
 }
 
-std::string dismissed() {
-    return "The user dismissed the question without answering. Do not ask it again "
-           "right away: carry on with your best judgement and say what you assumed, "
-           "or ask in plain text in your reply.";
+std::string stopped(const State& s) {
+    // Esc stops the whole turn (the user takes over), so this is read only
+    // when the user next writes: it says what they had answered by then.
+    std::string out = "The user pressed Esc instead of answering and took over; "
+                      "wait for their next message.";
+    bool any = false;
+    for (const auto& a : s.answers) any |= a.answered;
+    if (!any) return out;
+    out += " Answered before stopping:\n";
+    for (std::size_t i = 0; i < s.questions.size(); ++i) {
+        if (!s.answers[i].answered) continue;
+        out += s.questions[i].question + "\n";
+        for (std::size_t k = 0; k < s.questions[i].options.size(); ++k)
+            if (s.answers[i].chosen[k]) out += "   \xe2\x86\x92 " + s.questions[i].options[k].label + "\n";
+        if (const auto t = trimmed(s.answers[i].typed); !t.empty())
+            out += "   \xe2\x86\x92 (in their own words) " + t + "\n";
+    }
+    return out;
 }
 
 std::string unavailable() {

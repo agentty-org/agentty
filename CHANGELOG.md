@@ -9,9 +9,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   decision is yours (which design, whether to delete something), the model
   can stop and ask up to four multiple-choice questions in a card under the
   turn. It starts on the model's suggestion (★); pick with the arrows and
-  Enter or a digit, tick several with Space where it allows, or start typing
-  to answer in your own words. Several questions get tabs and a review page
-  before anything is sent; Esc skips. The finished card keeps question →
+  Enter or a digit, tick several with Space where it allows, or type your
+  own answer in the usual message box and press Enter. Several questions get
+  tabs and a review page before anything is sent. Esc stops the turn, as it
+  does mid-reply. The finished card keeps question →
   answer in the transcript.
   Like OpenCode's `question` and Claude Code's AskUserQuestion. Don't want
   it? `Ctrl+K → Settings → Ask clarifying questions` turns it off entirely:

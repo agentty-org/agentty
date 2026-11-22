@@ -86,34 +86,41 @@ TEST_CASE("question: a single choice is one enter; answers come back by label") 
     CHECK(out.find("billing") == std::string::npos);
 }
 
-TEST_CASE("question: digits pick, the typed answer is always there, esc skips") {
+TEST_CASE("question: digits pick; a typed answer comes from the composer") {
     auto s = started(two_questions());
     CHECK(q::pick_number(s, 1) == q::Step::Stay);      // SQLite, next question
     CHECK(s.current == 1);
-    // Typing anything moves to the free-text row; enter sends it.
-    q::type(s, "only ");
-    q::type(s, "auth\xc3\xa9");
-    q::backspace(s);                                   // a whole code point
-    CHECK(s.a().typed == "only auth");
-    CHECK(q::choose(s) == q::Step::Stay);              // review
+    // Blank text answers nothing; real text answers the question on screen.
+    CHECK(q::answer_text(s, "  \n") == q::Step::Stay);
+    CHECK_FALSE(s.a().answered);
+    q::toggle(s);                                      // tick auth too
+    CHECK(q::answer_text(s, " only on weekdays ") == q::Step::Stay);   // review
+    CHECK(s.answers[1].typed == "only on weekdays");
+    CHECK(s.answers[1].chosen[0]);                     // several allowed: kept
     CHECK(q::choose(s) == q::Step::Done);
-    CHECK(q::answered(s).find("(in their own words) only auth") != std::string::npos);
+    CHECK(q::answered(s).find("(in their own words) only on weekdays") != std::string::npos);
 
-    // Esc on the text row leaves typing; esc on the options skips everything.
-    auto t = started(two_questions());
-    q::type(t, "x");
-    CHECK_FALSE(q::escape(t));
-    CHECK_FALSE(t.typing);
-    CHECK(q::escape(t));
-    CHECK(q::dismissed().find("Do not ask it again") != std::string::npos);
+    // One choice allowed: typed text replaces a pick.
+    auto t = started(json{{"question", "Which?"}, {"options", json::array({"a", "b"})}});
+    q::toggle(t);
+    CHECK(q::answer_text(t, "neither") == q::Step::Done);
+    CHECK_FALSE(t.answers[0].chosen[0]);
 }
 
-TEST_CASE("question: enter on an empty text row does not send nothing") {
+TEST_CASE("question: esc stops; only the review page takes it as back") {
+    auto s = started(two_questions());
+    CHECK_FALSE(q::escape_stays(s));                   // stop the turn
+    (void)q::pick_number(s, 2);
+    const auto out = q::stopped(s);
+    CHECK(out.starts_with("The user pressed Esc"));
+    CHECK(out.find("Postgres") != std::string::npos);  // what they did answer
+    CHECK(q::answers_in(out).empty());                 // not an answered() result
+}
+
+TEST_CASE("question: a question with no options waits for typed text") {
     auto s = started(json{{"question", "Name?"}, {"options", json::array()}});
-    CHECK(s.typing);                                   // no options: type
-    CHECK(q::choose(s) == q::Step::Stay);
-    q::type(s, "agentty");
-    CHECK(q::choose(s) == q::Step::Done);             // one question: no review
+    CHECK(q::choose(s) == q::Step::Stay);              // enter alone does nothing
+    CHECK(q::answer_text(s, "agentty") == q::Step::Done);   // one question: no review
 }
 
 TEST_CASE("question: the cursor starts on the model's suggestion") {
@@ -149,7 +156,7 @@ TEST_CASE("question: review lets you change one answer, tabs move between questi
     CHECK(s.current == 0);
     CHECK(q::pick_number(s, 2) == q::Step::Stay);      // Postgres; all answered
     CHECK(s.reviewing);
-    CHECK_FALSE(q::escape(s));                         // esc on review: back, not skip
+    CHECK(q::escape_stays(s));                         // esc on review: back, not stop
     CHECK_FALSE(s.reviewing);
 
     // answers_in reads the result back for the transcript card.
@@ -163,7 +170,7 @@ TEST_CASE("question: review lets you change one answer, tabs move between questi
     REQUIRE(back.size() == 2);
     CHECK(back[0] == "Postgres");
     CHECK(back[1] == "auth, search");
-    CHECK(q::answers_in(q::dismissed()).empty());
+    CHECK(q::answers_in(q::stopped(t)).empty());
 }
 
 TEST_CASE("question: the tool exists only where someone can answer and wants to") {
@@ -243,14 +250,28 @@ TEST_CASE("question: a call opens the picker, owns the keys, and settles with th
     CHECK_FALSE(m.s.is_awaiting_permission());
 }
 
-TEST_CASE("question: esc settles the call as skipped, never as a failure") {
+TEST_CASE("question: esc settles the call and stops the turn") {
     auto m = asking();
     (void)agentty::app::cmd::kick_pending_tools(m);
     REQUIRE(m.d.pending_question);
     m = send(std::move(m), A::Msg{A::QuestionEscape{}});
     CHECK_FALSE(m.d.pending_question);
+    REQUIRE(call(m).is_done());                        // well-formed for the next turn
+    CHECK(call(m).output().starts_with("The user pressed Esc"));
+    CHECK(m.s.is_idle());                              // the model does not carry on
+}
+
+TEST_CASE("question: enter with text in the composer answers with it") {
+    auto m = asking();
+    (void)agentty::app::cmd::kick_pending_tools(m);
+    REQUIRE(m.d.pending_question);
+    m.ui.composer.text = "memcached, we already run it";
+    m.ui.composer.cursor = static_cast<int>(m.ui.composer.text.size());
+    m = send(std::move(m), A::Msg{A::QuestionAnswerText{}});
+    CHECK_FALSE(m.d.pending_question);
+    CHECK(m.ui.composer.text.empty());                 // the box was the answer
     REQUIRE(call(m).is_done());
-    CHECK(call(m).output().find("dismissed") != std::string::npos);
+    CHECK(call(m).output().find("memcached, we already run it") != std::string::npos);
 }
 
 TEST_CASE("question: switched off, a stray call is answered at once and nothing opens") {

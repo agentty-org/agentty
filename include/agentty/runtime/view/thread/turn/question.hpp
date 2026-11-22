@@ -7,6 +7,7 @@
 
 namespace agentty::ui {
 
-[[nodiscard]] maya::Element question_card(const question::State& s);
+// `drafting`: the composer below holds a typed answer, which Enter will send.
+[[nodiscard]] maya::Element question_card(const question::State& s, bool drafting = false);
 
 } // namespace agentty::ui

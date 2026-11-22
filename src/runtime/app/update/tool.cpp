@@ -26,6 +26,7 @@
 #include "agentty/runtime/view/thread/turn/turn.hpp"   // turn_run_end
 #include "agentty/store/store.hpp"
 #include "agentty/domain/question.hpp"   // the question tool's picker
+#include "agentty/runtime/composer_attachment.hpp"   // a typed answer's chips
 #include "agentty/tool/hooks.hpp"   // PreToolDecision::Permission
 #include "agentty/tool/spec.hpp"
 #include "agentty/tool/util/utf8.hpp"
@@ -162,17 +163,20 @@ void arm_reconcile_cooldown(Model& m) {
     ::maya::anim::keep_animating();
 }
 
-// The question tool's call, settled with what the user answered (or that
-// they skipped), then the turn goes on: the phase returns to the one the
-// picker interrupted and kick_pending_tools sends the result.
-Cmd settle_question(Model& m, bool dismissed) {
+// The question tool's call, settled with what the user answered, then the
+// turn goes on: the phase returns to the one the picker interrupted and
+// kick_pending_tools sends the result. `stopped` (Esc) settles it with the
+// answers so far and leaves the turn to the caller, which cancels it.
+Cmd settle_question(Model& m, bool stopped) {
     const auto pq = std::move(*m.d.pending_question);
     m.d.pending_question.reset();
-    std::string out = dismissed ? question::dismissed() : question::answered(pq.state);
+    std::string out = stopped ? question::stopped(pq.state) : question::answered(pq.state);
     with_live_tool(m, pq.id, [&](ToolUse& tc) {
         if (!tc.is_terminal()) tc.settle_done(m.now, std::move(out));
     });
     arm_reconcile_cooldown(m);
+    // Stopped: the caller cancels the turn; nothing should start from here.
+    if (stopped) return Cmd::none();
     if (m.s.is_awaiting_permission()) {
         if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx) {
             ctx->last_event_at = m.now;
@@ -979,8 +983,8 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
         },
 
         // ── The question tool's picker ── every key is one State step;
-        // when the answers are in (or the user skipped) the call settles
-        // with them and the turn goes on.
+        // when the answers are in the call settles with them and the turn
+        // goes on. Esc stops the turn instead (see QuestionEscape).
         [&](QuestionMove& e) -> Cmd {
             if (m.d.pending_question) question::move(m.d.pending_question->state, e.delta);
             return Cmd::none();
@@ -992,21 +996,28 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
         [&](QuestionChoose) -> Cmd {
             if (!m.d.pending_question) return Cmd::none();
             if (question::choose(m.d.pending_question->state) == question::Step::Done)
-                return settle_question(m, /*dismissed=*/false);
+                return settle_question(m, /*stopped=*/false);
             return Cmd::none();
         },
         [&](QuestionNumber& e) -> Cmd {
             if (!m.d.pending_question) return Cmd::none();
             if (question::pick_number(m.d.pending_question->state, e.n) == question::Step::Done)
-                return settle_question(m, /*dismissed=*/false);
+                return settle_question(m, /*stopped=*/false);
             return Cmd::none();
         },
-        [&](QuestionType& e) -> Cmd {
-            if (m.d.pending_question) question::type(m.d.pending_question->state, e.utf8);
-            return Cmd::none();
-        },
-        [&](QuestionBackspace) -> Cmd {
-            if (m.d.pending_question) question::backspace(m.d.pending_question->state);
+        // The composer IS the free-text field: Enter with text in it answers
+        // the question on screen, chips expanded, and the box empties.
+        [&](QuestionAnswerText) -> Cmd {
+            if (!m.d.pending_question) return Cmd::none();
+            auto& c = m.ui.composer;
+            const std::string text = attachment::expand(c.text, c.attachments);
+            const auto step = question::answer_text(m.d.pending_question->state, text);
+            if (text.find_first_not_of(" \t\r\n") != std::string::npos) {
+                c.text.clear();
+                c.cursor = 0;
+                c.attachments.clear();
+            }
+            if (step == question::Step::Done) return settle_question(m, /*stopped=*/false);
             return Cmd::none();
         },
         [&](QuestionBack) -> Cmd {
@@ -1017,11 +1028,16 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             if (m.d.pending_question) question::forward(m.d.pending_question->state);
             return Cmd::none();
         },
+        // Esc is Esc: it stops the run, as it does mid-stream. The call is
+        // settled first (any answers so far go with it, so the transcript
+        // stays well-formed and nothing given is lost), then the turn is
+        // cancelled, so the model does not carry on guessing. Whatever the
+        // user types next is the reply. On the review page it only goes back.
         [&](QuestionEscape) -> Cmd {
             if (!m.d.pending_question) return Cmd::none();
-            if (question::escape(m.d.pending_question->state))
-                return settle_question(m, /*dismissed=*/true);
-            return Cmd::none();
+            if (question::escape_stays(m.d.pending_question->state)) return Cmd::none();
+            (void)settle_question(m, /*stopped=*/true);
+            return stream_update(m, msg::StreamMsg{CancelStream{}});
         },
     }, tm);
 }

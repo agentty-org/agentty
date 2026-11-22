@@ -42,8 +42,8 @@ const ToolDef& def() {
             "Give 2-" + std::to_string(question::kMaxOptions) + " short, distinct "
             "options per question and mark the one you would choose as recommended; "
             "the user can always type their own answer instead, so do not add an "
-            "\"Other\" option. The result is the user's answers, or a note that they "
-            "skipped.";
+            "\"Other\" option. The result is the user's answers. If they press Esc "
+            "instead, the turn stops and their next message is the reply.";
         const nlohmann::json option = {
             {"type", "object"},
             {"properties", {
