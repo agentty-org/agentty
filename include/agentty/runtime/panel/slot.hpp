@@ -489,6 +489,7 @@ enum class Kind {
     None,
     Login,
     Permission,
+    Question,
     Palette,
     Mention,
     Symbol,

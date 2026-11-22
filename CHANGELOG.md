@@ -4,6 +4,17 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **The agent can ask you to choose.** When a request is ambiguous or a
+  decision is yours (which design, whether to delete something), the model
+  can stop and ask up to four multiple-choice questions in a card under the
+  turn. Pick with the arrows and Enter or a digit, tick several with Space
+  where it allows, or start typing to answer in your own words; Esc skips.
+  Like OpenCode's `question` and Claude Code's AskUserQuestion. Don't want
+  it? `Ctrl+K → Settings → Ask clarifying questions` turns it off entirely:
+  the tool is no longer offered to the model. It never appears in
+  `agentty run`, ACP sessions or subagents, where nobody could answer.
+
 ### Security
 - **MCP servers, ACP agents and retrieval helpers run in the sandbox.** They
   used to start with your full authority — an `npx some-mcp-server` could

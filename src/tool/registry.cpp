@@ -2,6 +2,7 @@
 
 #include "agentty/mcp/client.hpp"
 #include "agentty/tool/mcp_tools_bridge.hpp"
+#include "agentty/tool/question_tool.hpp"
 #include "agentty/tool/web_search_policy.hpp"
 #include "agentty/tool/tool_loading.hpp"
 #include "agentty/tool/tool_plan.hpp"
@@ -87,7 +88,10 @@ namespace {
 // search_docs/task) are backed by agentty adapters injected via HostServices.
 // mcp-cpp is the SOLE source of truth for tools — there is no native path.
 std::vector<ToolDef> build_native_registry() {
-    return build_mcp_tool_defs();
+    auto tools = build_mcp_tool_defs();
+    // The one native tool mcp-cpp has no shell for: only the host has a user.
+    tools.push_back(question_tool::def());
+    return tools;
 }
 
 // Connect external MCP exactly once, on first catalog access. The returned
@@ -311,8 +315,16 @@ Found find(std::string_view name) {
 Catalog wire_tools() { return refresh_wire_cache()->tools; }
 
 bool withheld_by_policy(const ToolDef& tool, bool web_search_enabled) {
-    return !web_search_enabled && tool.origin == ToolOrigin::Native
-        && tool.name.value == "web_search";
+    return withheld_by_policy(tool, web_search_enabled, question_tool::enabled());
+}
+
+bool withheld_by_policy(const ToolDef& tool, bool web_search_enabled,
+                        bool questions_enabled) {
+    if (tool.origin != ToolOrigin::Native) return false;
+    if (!web_search_enabled && tool.name.value == "web_search") return true;
+    // No one to ask (agentty run, acp, mcp serve), or the user turned it off.
+    if (!questions_enabled && tool.name.value == question_tool::kName) return true;
+    return false;
 }
 
 bool withheld_by_policy(const ToolDef& tool) {

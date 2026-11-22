@@ -96,7 +96,11 @@ int main() {
 
     tools::warm_registry();
     (void)tools::reload_mcp_plugins();
-    const std::size_t native = tools::native_registry().size();
+    // The natives a request can carry: the registry minus what policy
+    // withholds here (the question tool has no one to ask in a test).
+    std::size_t native = 0;
+    for (const auto& t : tools::native_registry())
+        if (!tools::withheld_by_policy(t)) ++native;
     check(native > 0, "native registry is non-empty");
 
     // ── 1. Default: both tools in the catalog and on the wire ────────────

@@ -145,6 +145,7 @@ using Cmd = maya::Cmd<Msg,
     publish_web_search_policy,
     publish_paste_config,
     publish_tool_loading,
+    publish_questions,
     // ── agentty's own: credentials ───────────────────────────────
     install_auth,
     save_credentials,

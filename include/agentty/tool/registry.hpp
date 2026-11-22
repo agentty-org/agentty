@@ -402,12 +402,15 @@ struct Found {
 
 // agentty's settings decide which of its native tools exist for ANY consumer:
 // the model on the wire (tools::plan) and other MCP clients through
-// `agentty mcp-serve`. One predicate, so the two can never disagree. Today the
-// only rule is Settings → Web Search: web_search off withholds the NATIVE
-// web_search (an external MCP tool that happens to share the name is not
-// agentty's to govern). The pure overload takes the switch; the other reads
-// the live policy.
+// `agentty mcp-serve`. One predicate, so the two can never disagree. Two rules:
+// Settings → Web Search off withholds the NATIVE web_search (an external MCP
+// tool that happens to share the name is not agentty's to govern), and the
+// `question` tool exists only where a TUI user is there to answer and has not
+// switched it off (question_tool::enabled). The pure overloads take the
+// switches; the last reads the live settings.
 [[nodiscard]] bool withheld_by_policy(const ToolDef& tool, bool web_search_enabled);
+[[nodiscard]] bool withheld_by_policy(const ToolDef& tool, bool web_search_enabled,
+                                      bool questions_enabled);
 [[nodiscard]] bool withheld_by_policy(const ToolDef& tool);
 
 // The MCP tool-list generation counter, surfaced through the tools namespace

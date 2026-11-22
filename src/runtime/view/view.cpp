@@ -41,6 +41,7 @@ std::optional<maya::Element> pick_panel(const Model& m) {
     switch (panel::top(m)) {
         case OK::Login:          return login_modal(m);
         case OK::Permission:     return std::nullopt;   // renders inline, not as an overlay
+        case OK::Question:       return std::nullopt;   // inline too (conversation.cpp)
         case OK::Palette: return palette_panel(m);
         case OK::Mention:        return mention_panel(m);
         case OK::Symbol:         return symbol_panel(m);

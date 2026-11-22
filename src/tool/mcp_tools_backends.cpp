@@ -1188,6 +1188,9 @@ struct RunStats {
 bool subagent_tool_allowed(const tools::ToolDef& t, const AgentType& type,
                            const RunStats* stats) {
     if (t.name.value == "task") return false;
+    // A subagent has no user of its own: its questions would surface as the
+    // parent's prompt mid-delegation. It reports what it needs instead.
+    if (t.name.value == "question") return false;
     if (!type.allow.empty()) {
         bool listed = false;
         for (auto n : type.allow)

@@ -20,6 +20,8 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/panel/nav.hpp"
+#include "agentty/runtime/panel/top.hpp"        // pn::top: the inline prompts too
+#include "agentty/domain/question.hpp"
 #include "agentty/runtime/panel/smart_form.hpp"
 #include "agentty/runtime/panel/web_search_form.hpp"
 
@@ -48,6 +50,12 @@ struct Case {
 
 const std::vector<Case>& cases() {
     static const std::vector<Case> v = {
+        {pn::Kind::Question, "question picker",
+         [](Model& m) {
+             m.d.pending_question = Model::Domain::PendingQuestion{
+                 ToolCallId{"q"}, agentty::question::start({agentty::question::Question{
+                     "Which?", {}, {{"a", {}}, {"b", {}}}, false}})};
+         }},
         {pn::Kind::Palette, "command palette",
          [](Model& m) { m.ui.panel.descend(pn::Palette{{}}); }},
         {pn::Kind::Mention, "mention palette",
@@ -135,11 +143,11 @@ TEST_CASE("escape guarantee: Esc closes every overlay") {
     for (const auto& c : cases()) {
         Model m;
         c.open(m);
-        CHECK(pn::kind_of(m.ui.panel) == c.kind,
+        CHECK(pn::top(m) == c.kind,
               (std::string{"opened "} + c.name).c_str());
 
         auto [after, cmd] = app::update(std::move(m), pn::close_msg(c.kind));
-        CHECK(pn::kind_of(after.ui.panel) != c.kind,
+        CHECK(pn::top(after) != c.kind,
               (std::string{"Esc closes "} + c.name).c_str());
     }
 }
@@ -159,7 +167,7 @@ TEST_CASE("escape guarantee: a handler that answers nothing still cannot trap") 
         Model m;
         c.open(m);
         auto [after, cmd] = app::update(std::move(m), fallback);
-        CHECK(pn::kind_of(after.ui.panel) != c.kind,
+        CHECK(pn::top(after) != c.kind,
               (std::string{"an inert handler cannot trap the user in "} + c.name).c_str());
     }
 }

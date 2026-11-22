@@ -32,6 +32,7 @@ namespace agentty::ui::panel {
 [[nodiscard]] inline Kind top(const Model& m) noexcept {
     if (login::is_open(m.ui.login))         return Kind::Login;
     if (m.d.pending_permission.has_value()) return Kind::Permission;
+    if (m.d.pending_question.has_value())   return Kind::Question;
     if (const Kind k = kind_of(m.ui.panel); k != Kind::None) return k;
     if (pick::is_open(m.ui.todo.open))      return Kind::Todo;
     return Kind::None;

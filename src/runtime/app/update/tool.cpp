@@ -25,6 +25,7 @@
 #include "agentty/runtime/view/helpers.hpp"   // pretty_model_label
 #include "agentty/runtime/view/thread/turn/turn.hpp"   // turn_run_end
 #include "agentty/store/store.hpp"
+#include "agentty/domain/question.hpp"   // the question tool's picker
 #include "agentty/tool/hooks.hpp"   // PreToolDecision::Permission
 #include "agentty/tool/spec.hpp"
 #include "agentty/tool/util/utf8.hpp"
@@ -159,6 +160,28 @@ void arm_reconcile_cooldown(Model& m) {
     if (m.ui.settle_cooldown_ticks < kReconcileTicks)
         m.ui.settle_cooldown_ticks = kReconcileTicks;
     ::maya::anim::keep_animating();
+}
+
+// The question tool's call, settled with what the user answered (or that
+// they skipped), then the turn goes on: the phase returns to the one the
+// picker interrupted and kick_pending_tools sends the result.
+Cmd settle_question(Model& m, bool dismissed) {
+    const auto pq = std::move(*m.d.pending_question);
+    m.d.pending_question.reset();
+    std::string out = dismissed ? question::dismissed() : question::answered(pq.state);
+    with_live_tool(m, pq.id, [&](ToolUse& tc) {
+        if (!tc.is_terminal()) tc.settle_done(m.now, std::move(out));
+    });
+    arm_reconcile_cooldown(m);
+    if (m.s.is_awaiting_permission()) {
+        if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx) {
+            ctx->last_event_at = m.now;
+            m.s.phase = phase::ExecutingTool{std::move(*ctx)};
+        } else {
+            m.s.phase = phase::Idle{};
+        }
+    }
+    return cmd::kick_pending_tools(m);
 }
 
 
@@ -953,6 +976,48 @@ Cmd tool_update(Model& m, msg::ToolMsg tm) {
             m.d.pending_permission.reset();
             return Cmd::batch(std::move(grant_save),
                               cmd::kick_pending_tools(m));
+        },
+
+        // ── The question tool's picker ── every key is one State step;
+        // when the answers are in (or the user skipped) the call settles
+        // with them and the turn goes on.
+        [&](QuestionMove& e) -> Cmd {
+            if (m.d.pending_question) question::move(m.d.pending_question->state, e.delta);
+            return Cmd::none();
+        },
+        [&](QuestionToggle) -> Cmd {
+            if (m.d.pending_question) question::toggle(m.d.pending_question->state);
+            return Cmd::none();
+        },
+        [&](QuestionChoose) -> Cmd {
+            if (!m.d.pending_question) return Cmd::none();
+            if (question::choose(m.d.pending_question->state) == question::Step::Done)
+                return settle_question(m, /*dismissed=*/false);
+            return Cmd::none();
+        },
+        [&](QuestionNumber& e) -> Cmd {
+            if (!m.d.pending_question) return Cmd::none();
+            if (question::pick_number(m.d.pending_question->state, e.n) == question::Step::Done)
+                return settle_question(m, /*dismissed=*/false);
+            return Cmd::none();
+        },
+        [&](QuestionType& e) -> Cmd {
+            if (m.d.pending_question) question::type(m.d.pending_question->state, e.utf8);
+            return Cmd::none();
+        },
+        [&](QuestionBackspace) -> Cmd {
+            if (m.d.pending_question) question::backspace(m.d.pending_question->state);
+            return Cmd::none();
+        },
+        [&](QuestionBack) -> Cmd {
+            if (m.d.pending_question) question::back(m.d.pending_question->state);
+            return Cmd::none();
+        },
+        [&](QuestionEscape) -> Cmd {
+            if (!m.d.pending_question) return Cmd::none();
+            if (question::escape(m.d.pending_question->state))
+                return settle_question(m, /*dismissed=*/true);
+            return Cmd::none();
         },
     }, tm);
 }

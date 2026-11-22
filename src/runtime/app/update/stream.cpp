@@ -1672,9 +1672,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // Running tools, so later same-turn writers correctly defer
             // until this read completes.
             if (m.s.is_streaming() && !m.s.compacting
-                && !m.d.pending_permission) {
+                && !m.d.pending_permission && !m.d.pending_question) {
                 if (auto* tcp2 = find_streaming_tool(e.id);
                     tcp2 && tcp2->is_pending() && !tcp2->args.is_null()
+                    // The user answers a question; no worker runs it.
+                    && tcp2->name.value != "question"
                     // A PreToolUse hook gets its say first (it may rewrite
                     // or deny), so a call it could match isn't run early.
                     && m.ui.library.loaded
@@ -3262,6 +3264,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             }
 
             m.d.pending_permission.reset();
+            m.d.pending_question.reset();
             m.s.phase = phase::Idle{};
             m.s.status = "cancelled";
             {

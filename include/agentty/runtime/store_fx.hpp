@@ -128,6 +128,12 @@ struct PublishToolLoading { std::string mode; };
 using publish_tool_loading =
     maya::pure_fx<PublishToolLoading, "publish_tool_loading">;
 
+/// Install the question tool's switch (Settings → "Ask clarifying
+/// questions"). The TUI is the only place a user can answer, so this is the
+/// only writer: every other entry point leaves the tool withheld.
+struct PublishQuestions { bool on = true; };
+using publish_questions = maya::pure_fx<PublishQuestions, "publish_questions">;
+
 /// Re-install the live auth header the stream and subagents use.
 ///
 /// Reducers used to resolve the credential themselves (a read of the

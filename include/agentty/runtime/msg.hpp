@@ -521,6 +521,18 @@ struct PermissionApprove {};
 struct PermissionReject {};
 struct PermissionApproveAlways {};
 
+// ── The question tool's picker ── keys while m.d.pending_question is up.
+// Each is one question::State transition; the reducer (update/question.cpp)
+// settles the tool call when the last question is answered or skipped.
+struct QuestionMove   { int delta = 0; };
+struct QuestionToggle {};                 // space: tick / pick
+struct QuestionChoose {};                 // enter
+struct QuestionNumber { int n = 0; };     // 1-9 shortcut
+struct QuestionType   { std::string utf8; };
+struct QuestionBackspace {};
+struct QuestionBack   {};                 // shift+tab: previous question
+struct QuestionEscape {};                 // leave typing, or skip all
+
 // ── Model catalog ────────────────────────────────────────────────────────
 // Result of a background model-catalog fetch. `provider_id` is the canonical
 // id of the provider the fetch was FOR (captured when the fetch launched):
@@ -1384,6 +1396,8 @@ struct ToggleAutoCompact {};
 struct ToggleCommitAttribution {};
 // Keep retrying temporary errors until it works or Esc (#131).
 struct ToggleKeepRetrying {};
+// Let the model ask clarifying questions (the `question` tool).
+struct ToggleQuestions {};
 // MCP tool loading: auto → load all → load on demand (#98).
 struct CycleToolLoading {};
 struct RestoreCheckpoint { CheckpointId id; };
@@ -1533,7 +1547,9 @@ using StreamMsg = std::variant<
 
 using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolExecChildren, ToolTimeoutCheck, PreToolHooksDone,
-    PermissionApprove, PermissionReject, PermissionApproveAlways>;
+    PermissionApprove, PermissionReject, PermissionApproveAlways,
+    QuestionMove, QuestionToggle, QuestionChoose, QuestionNumber, QuestionType,
+    QuestionBackspace, QuestionBack, QuestionEscape>;
 
 // The tool-output viewer PANEL's messages — split from ToolMsg so the
 // panel's reducer lives in its own file (update/tool_output.cpp), leaving
@@ -1674,7 +1690,7 @@ using SandboxMsg = std::variant<
     SandboxEditList, SandboxListKey, SandboxListPaste, SandboxListClose>;
 
 using MetaMsg = std::variant<
-    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, ToggleKeepRetrying, CycleToolLoading,
+    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, ToggleKeepRetrying, ToggleQuestions, CycleToolLoading,
     RestoreCheckpoint, CheckpointRestored,
     ToggleRetrievedExpanded,
     TerminalFocus,

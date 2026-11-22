@@ -52,6 +52,7 @@ set(AGENTTY_IO_SOURCES
     src/domain/complexity.cpp
     src/domain/sandbox_provenance.cpp
     src/domain/web_search_config.cpp
+    src/domain/question.cpp
     src/i18n/i18n.cpp
     src/i18n/startup.cpp
     src/domain/model_name.cpp
@@ -160,6 +161,7 @@ set(AGENTTY_TOOL_SOURCES
     src/tool/schema.cpp
     src/tool/write_lanes.cpp
     src/tool/web_search_policy.cpp
+    src/tool/question_tool.cpp
     src/tool/web_search_plan.cpp
     src/tool/web_search_secret.cpp
     src/scope/scope.cpp
@@ -277,6 +279,7 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/thread/turn/agent_timeline/tool_body_preview.cpp
     src/runtime/view/thread/turn/agent_timeline/agent_timeline.cpp
     src/runtime/view/thread/turn/permission.cpp
+    src/runtime/view/thread/turn/question.cpp
     src/runtime/view/thread/turn/turn.cpp
     src/runtime/view/thread/welcome_screen.cpp
     src/runtime/view/thread/activity_indicator.cpp

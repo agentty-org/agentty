@@ -331,6 +331,10 @@ struct Settings {
     // instead of giving up after ~90 s (#131). Errors retrying can't fix
     // (bad key, quota, not found) still stop at once. Off by default.
     bool                 keep_retrying = false;
+    // Let the model ask multiple-choice clarifying questions (the `question`
+    // tool). On by default; off removes the tool from every request, so the
+    // model asks in plain text if it asks at all.
+    bool                 questions = true;
 };
 
 template <class S>

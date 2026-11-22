@@ -40,6 +40,7 @@
 #include "agentty/runtime/view/thread/activity_indicator.hpp"
 #include "agentty/runtime/view/thread/seam.hpp"
 #include "agentty/runtime/view/thread/turn/permission.hpp"
+#include "agentty/runtime/view/thread/turn/question.hpp"
 #include "agentty/runtime/view/thread/turn/turn.hpp"
 
 namespace agentty::ui {
@@ -445,6 +446,9 @@ maya::Conversation::Config conversation_config(const Model& m) {
         if (auto e = build_permission_row(m))
             cfg.live_tail.push_back(std::move(*e));
     }
+    // A question the agent is waiting on, in the same place.
+    if (m.d.pending_question)
+        cfg.live_tail.push_back(question_card(m.d.pending_question->state));
 
     // Shape probe: every conversation_config invocation's frozen/live_tail
     // sizes plus a rough live-tail content sketch. AGENTTY_LOG=perf=trace

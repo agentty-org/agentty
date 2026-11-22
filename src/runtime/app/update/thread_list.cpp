@@ -236,6 +236,9 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{90};
     // hand the kernel back so a mid-stream swap can't leave the wire running
     // against a thread that no longer exists.
     end_turn(m.s.phase);
+    // A prompt waiting on the user belonged to that turn too.
+    m.d.pending_permission.reset();
+    m.d.pending_question.reset();
     // Smart-Mode per-THREAD routing state must not leak into the new thread:
     // complexity momentum (classify_score_with_context inherits a tier from
     // the PREVIOUS turn), the session cascade bias, and the last turn's
@@ -991,6 +994,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             // model.
             end_turn(m.s.phase);
             m.d.pending_permission.reset();
+            m.d.pending_question.reset();
             // Modals framed the OLD thread's content (the palette and
             // code-block pickers hold indices into the departing thread's
             // last reply), so they'd index into the wrong transcript.

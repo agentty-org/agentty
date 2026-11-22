@@ -330,6 +330,9 @@ Cmd settings_list_update(Model& m, msg::SettingsListMsg sm) {
                 case se::Action::ToggleKeepRetrying: {
                     return reenter(m, Msg{ToggleKeepRetrying{}});
                 }
+                case se::Action::ToggleQuestions: {
+                    return reenter(m, Msg{ToggleQuestions{}});
+                }
                 case se::Action::CycleToolLoading: {
                     return reenter(m, Msg{CycleToolLoading{}});
                 }

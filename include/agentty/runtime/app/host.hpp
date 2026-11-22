@@ -33,6 +33,7 @@
 #include "agentty/tool/subagent.hpp"            // PublishSubagent's target
 #include "agentty/tool/web_search_policy.hpp"       // PublishWebSearchPolicy's target
 #include "agentty/tool/tool_loading.hpp"            // PublishToolLoading's target
+#include "agentty/tool/question_tool.hpp"           // PublishQuestions' target
 #include "agentty/io/clipboard.hpp"                 // PublishPasteConfig's target
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/util/logx.hpp"
@@ -130,6 +131,9 @@ struct Host : maya::terminal_host<P> {
     void handle(PublishToolLoading e) {
         tools::tool_loading::install(tools::plan::loading_from(e.mode));
     }
+
+    // The question tool's switch: one atomic store the request builders read.
+    void handle(PublishQuestions e) { tools::question_tool::install(e.on); }
 
     // Credentials (see store_fx.hpp). Small local reads/writes, run in order
     // on the loop thread so the next fold's stream launch sees them.

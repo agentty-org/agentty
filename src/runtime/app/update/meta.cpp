@@ -226,6 +226,17 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             return Cmd::batch(std::move(save), std::move(cmd));
         },
 
+        [&](ToggleQuestions) -> Cmd {
+            m.d.persisted.questions = !m.d.persisted.questions;
+            auto save = save_record(m);
+            // publish_derived sees the record move and tells the tool layer;
+            // the next request carries the tool, or does not.
+            auto cmd = set_status_toast(m, m.d.persisted.questions
+                ? "questions: on \xc2\xb7 the agent may ask you to pick between options"
+                : "questions: off \xc2\xb7 the agent decides, or asks in plain text");
+            return Cmd::batch(std::move(save), std::move(cmd));
+        },
+
         [&](ToggleKeepRetrying) -> Cmd {
             m.d.persisted.keep_retrying = !m.d.persisted.keep_retrying;
             auto save = save_record(m);

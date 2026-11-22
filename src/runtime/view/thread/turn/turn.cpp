@@ -1198,6 +1198,7 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
                 && is_tail_bottom
                 && all_pending
                 && !m.d.pending_permission
+                && !m.d.pending_question
                 && term_rows_now > 0;
 
             // Defer ONLY when the geometry is unusable (no viewport dims) or
@@ -1211,6 +1212,7 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
                 && all_pending
                 && hidden_fits
                 && !m.d.pending_permission
+                && !m.d.pending_question
                 && deferred_ms < kMaxCardDeferMs;
             if (can_defer) {
                 if (cache.card_defer_since_ms == 0)

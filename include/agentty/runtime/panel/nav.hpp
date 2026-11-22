@@ -220,6 +220,7 @@ namespace agentty::ui::panel {
     switch (k) {
         case Kind::Login:           return Msg{CloseLogin{}};
         case Kind::Permission:      return Msg{PermissionReject{}};
+        case Kind::Question:        return Msg{QuestionEscape{}};
         case Kind::Palette:  return Msg{ClosePalette{}};
         case Kind::Mention:         return Msg{CloseMention{}};
         case Kind::Symbol:          return Msg{CloseSymbol{}};

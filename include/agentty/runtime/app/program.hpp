@@ -240,6 +240,22 @@ struct AgenttyApp {
         mix(static_cast<std::uint64_t>(m.d.effort));
         mix_str(m.d.model_id.value);
         mix(m.d.pending_permission ? 1ULL : 0ULL);
+        // The question picker repaints on every key: cursor, page, ticks,
+        // the typed answer.
+        if (const auto& pq = m.d.pending_question) {
+            const auto& qs = pq->state;
+            mix(0x9e57ULL);
+            mix(qs.current);
+            mix(qs.cursor);
+            mix(qs.typing ? 1ULL : 0ULL);
+            for (const auto& a : qs.answers) {
+                std::uint64_t bits = a.answered ? 1 : 0;
+                for (bool b : a.chosen) bits = (bits << 1) | (b ? 1 : 0);
+                mix(bits);
+                mix(a.typed.size());
+                mix_str(a.typed);
+            }
+        }
 
         // ── Appearance.
         //

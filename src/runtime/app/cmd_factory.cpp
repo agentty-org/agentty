@@ -15,6 +15,8 @@
 #include <utility>
 
 #include "agentty/auth/auth.hpp"
+#include "agentty/domain/question.hpp"
+#include "agentty/tool/question_tool.hpp"
 #include "agentty/domain/catalog.hpp"
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
@@ -1505,8 +1507,10 @@ Cmd launch_stream(Model& m) {
             // (Memory tools still run via /slash command; skills /skill-name.)
             if (!tools_disabled_by_capability) {
                 auto weak_hidden = [](std::string_view n) {
+                    // `question` too: a weak model asks about everything,
+                    // and a picker on "hi" is worse than no picker.
                     return n == "skill" || n == "remember"
-                        || n == "forget" || n == "wipe_memory";
+                        || n == "forget" || n == "wipe_memory" || n == "question";
                 };
                 // Every enabled tool stays callable; the plan decides which
                 // schemas ride this request and which the model finds with
@@ -2285,6 +2289,41 @@ Cmd kick_pending_tools(Model& m) {
     // If a later sibling needs approval, return before marking any earlier
     // sibling Running: returning a permission prompt discards this function's
     // accumulated Cmd, so mutating first would strand that tool forever.
+    // ── The question tool ── is answered by the user, not dispatched. A
+    // call selected for this wave opens the picker (one at a time); the
+    // Question* reducers settle it and kick again. With the setting off (a
+    // model that saw the tool earlier in the thread), it is settled at once
+    // with a note, and a malformed call fails with the reason.
+    if (!m.d.pending_permission && !m.d.pending_question) {
+        for (std::size_t i = 0; i < last.tool_calls.size(); ++i) {
+            auto& tc = last.tool_calls[i];
+            if (tc.name.value != tools::question_tool::kName) continue;
+            if (!promote[i] || !tc.is_pending() || hook_pending(tc)) continue;
+            if (!m.d.persisted.questions) {
+                tc.settle_done(m.now,
+                    "The user has switched clarifying questions off. Carry on with your best "
+                    "judgement and say what you assumed.");
+                continue;
+            }
+            auto parsed = question::parse(tc.args);
+            if (!parsed.error.empty()) {
+                tc.settle_failed(m.now, "[invalid args] " + parsed.error);
+                continue;
+            }
+            m.d.pending_question = Model::Domain::PendingQuestion{
+                tc.id, question::start(std::move(parsed.questions))};
+            if (auto ctx = take_active_ctx(std::move(m.s.phase)); ctx)
+                m.s.phase = phase::AwaitingPermission{std::move(*ctx)};
+            else
+                m.s.phase = phase::Idle{};
+            return cmds.empty() ? Cmd::none() : Cmd::batch(std::move(cmds));
+        }
+    }
+    // The user is answering: nothing else starts until they have. A sibling
+    // that was already running finishes and kicks again; this holds it.
+    if (m.d.pending_question)
+        return cmds.empty() ? Cmd::none() : Cmd::batch(std::move(cmds));
+
     if (!m.d.pending_permission) {
         for (std::size_t i = 0; i < last.tool_calls.size(); ++i) {
             const auto& tc = last.tool_calls[i];
@@ -2338,6 +2377,11 @@ Cmd kick_pending_tools(Model& m) {
         // permission check. Keeps the planner as the single source of
         // truth for scheduling.
         const bool ready = tc.is_pending() || tc.is_approved();
+        // A question waits for its picker (above), never a worker.
+        if (ready && tc.name.value == tools::question_tool::kName) {
+            any_pending = true;
+            continue;
+        }
         if (ready) {
             const bool needs_perm = tc.is_approved() ? false : needs_permission(tc);
             if (needs_perm) {

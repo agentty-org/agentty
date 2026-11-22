@@ -92,6 +92,7 @@ maya::PhaseChip::Config phase_chip_config(const Model& m) {
         if (m.d.pending_permission) tool = m.d.pending_permission->tool_name.value;
         else                        tool = std::string{running_tool_name(m)};
         verb = tool.empty() ? std::string{"approve?"} : ("approve " + tool);
+        if (m.d.pending_question) { glyph = "?"; verb = "answer the question"; }
     }
     // ── 2. compacting ─────────────────────────────────────────────────
     // Long-running history summarisation. Survives across the synthetic

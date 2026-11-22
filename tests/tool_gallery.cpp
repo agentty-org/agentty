@@ -49,6 +49,7 @@
 #include "agentty/diff/diff.hpp"
 #include "agentty/runtime/fused_models.hpp"
 #include "agentty/domain/ui_theme.hpp"
+#include "agentty/domain/question.hpp"   // --question
 
 #include <format>
 #include <maya/runtime.hpp>
@@ -259,6 +260,51 @@ void emit_element(const std::string& tag, const maya::Element& root, int cols) {
         std::printf("\xe2\x94\x80");
     std::printf("\x1b[0m\n");
     emit_canvas(canvas, pool, cols);
+}
+
+// --question: the question tool's card, through conversation_config like the
+// app draws it, in the states a user sees.
+void render_question(int cols) {
+    const nlohmann::json args = {{"questions", nlohmann::json::array({
+        {{"question", "Which database should the cache use?"}, {"header", "Database"},
+         {"options", nlohmann::json::array({
+             {{"label", "SQLite"}, {"description", "one file, nothing to run"}},
+             {{"label", "Postgres"}, {"description", "the server the app already uses"}},
+             {{"label", "Redis"}}})}},
+        {{"question", "Which endpoints should be cached?"}, {"header", "Scope"},
+         {"multiple", true},
+         {"options", nlohmann::json::array({"/search", "/users/:id", "/feed"})}},
+    })}};
+    auto show = [&](const std::string& tag, auto&& step) {
+        Model m;
+        Message user;
+        user.role = Role::User;
+        user.text = "add a cache in front of the slow endpoints";
+        m.d.current.messages.push_back(std::move(user));
+        Message asst;
+        asst.role = Role::Assistant;
+        asst.text = "Before I add it, two things are yours to decide.";
+        ToolUse tc;
+        tc.id = ToolCallId{"q"};
+        tc.name = ToolName{"question"};
+        tc.args = args;
+        tc.status = ToolUse::Pending{std::chrono::steady_clock::now()};
+        asst.tool_calls.push_back(std::move(tc));
+        m.d.current.messages.push_back(std::move(asst));
+        auto st = question::start(question::parse(args).questions);
+        step(st);
+        m.d.pending_question = Model::Domain::PendingQuestion{ToolCallId{"q"}, std::move(st)};
+        emit_element(tag, maya::Conversation{ui::conversation_config(m)}.build(), cols);
+    };
+    show("question \xc2\xb7 first", [](question::State&) {});
+    show("question \xc2\xb7 cursor on 2", [](question::State& s) { question::move(s, 1); });
+    show("question \xc2\xb7 typing", [](question::State& s) { question::type(s, "memcached"); });
+    show("question \xc2\xb7 2 of 2, two ticked", [](question::State& s) {
+        (void)question::choose(s);
+        question::toggle(s);
+        question::move(s, 2);
+        question::toggle(s);
+    });
 }
 
 // --agents: the subagent (`task`) card in the states a user actually sees,
@@ -903,6 +949,7 @@ int main(int argc, char** argv) {
         else if (a == "--reasoning") { render_reasoning(cols); return 0; }
         else if (a == "--prose") { render_prose(cols); return 0; }
         else if (a == "--welcome") { render_welcome(cols); return 0; }
+        else if (a == "--question") { render_question(cols); return 0; }
         else if (a == "--panels") { render_panels(cols); return 0; }
         else if (a == "--agents") { render_agents(cols); return 0; }
         else if (a == "--viewer-agent") { render_viewer_agent(cols); return 0; }

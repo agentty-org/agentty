@@ -417,6 +417,33 @@ static std::string tool_timeline_detail_base(const ToolUse& tc) {
         // "edit i/N" band headers; nothing is lost.
         return path_pp;
     }
+    if (n == "question") {
+        // What was asked, then (settled) what came back: the first answer
+        // line of the result. The picker itself is the card below the turn.
+        std::string asked;
+        if (tc.args.is_object()) {
+            if (const auto qs = tc.args.find("questions"); qs != tc.args.end()
+                && qs->is_array() && !qs->empty()) {
+                asked = safe_arg((*qs)[0], "header");
+                if (asked.empty()) asked = safe_arg((*qs)[0], "question");
+                if (qs->size() > 1) asked += "  \xc2\xb7  " + std::to_string(qs->size()) + " questions";
+            } else {
+                asked = safe("question");
+            }
+        }
+        if (asked.empty()) asked = "\xe2\x80\xa6";
+        if (tc.is_done()) {
+            const auto& out = card_output(tc);
+            if (out.find("dismissed") != std::string::npos) return asked + "  \xc2\xb7  skipped";
+            if (const auto at = out.find("\xe2\x86\x92 "); at != std::string::npos) {
+                auto ans = out.substr(at + 4, out.find('\n', at) - (at + 4));
+                return asked + "  \xe2\x86\x92  " + ans;
+            }
+        } else if (tc.is_pending()) {
+            return asked + "  \xc2\xb7  waiting for your answer";
+        }
+        return asked;
+    }
     if (n == "move") {
         // safe() is streaming-aware, so source/destination show live too.
         auto src = pretty_path(safe("source"));

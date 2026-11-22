@@ -137,6 +137,16 @@ std::vector<Item> general(const Model& m) {
         out.push_back(std::move(i));
     }
     {
+        Item i;
+        i.primary   = "Ask clarifying questions";
+        i.secondary = m.d.persisted.questions
+            ? "on \xc2\xb7 the agent may stop to ask you to pick between options"
+            : "off \xc2\xb7 the agent decides, or asks in plain text";
+        i.hint      = "Enter: toggle";
+        i.action    = Action::ToggleQuestions;
+        out.push_back(std::move(i));
+    }
+    {
         // #98. What each mode does, in the row, so nobody has to look it up.
         const auto mode = agentty::tools::plan::loading_from(m.d.persisted.tool_loading);
         Item i;

@@ -31,6 +31,7 @@
 #include "agentty/runtime/settings_registry.hpp"   // registry::EnvSnapshot
 #include "agentty/domain/session.hpp"
 #include "agentty/domain/todo.hpp"
+#include "agentty/domain/question.hpp"     // Domain::pending_question
 #include "agentty/runtime/panel/slot.hpp"   // ui::panel::State (the exclusive slot)
 #include "agentty/mcp/plugin_model.hpp"    // mcp::PluginModel (owned in the Model)
 #include "agentty/runtime/composer_attachment.hpp"
@@ -413,6 +414,15 @@ struct Model {
         // "Reasoning"). Off by default. Provider-agnostic.
         bool                             show_reasoning = false;
         std::optional<PendingPermission> pending_permission;
+        // The `question` tool waiting on the user: which call, and the
+        // picker's state. Raised by kick_pending_tools, answered by the
+        // Question* reducers (update/question.cpp), which settle the call
+        // with the answers. At most one, like pending_permission.
+        struct PendingQuestion {
+            ToolCallId id;
+            question::State state;
+        };
+        std::optional<PendingQuestion> pending_question;
         // Shell detours in a row (analyze_detour().substitutable()). Drives
         // the drift reminder in update/tool.cpp; reset by any other call.
         int                              shell_detour_streak = 0;
@@ -947,6 +957,8 @@ struct Model {
     std::optional<paste_cfg::Config> published_paste;
     // Same, for MCP tool loading (PublishToolLoading, #98).
     std::optional<std::string> published_tool_loading;
+    // Same, for the question tool's switch (PublishQuestions).
+    std::optional<bool> published_questions;
 
     // The process's launch environment, read ONCE by init() and never again.
     //
