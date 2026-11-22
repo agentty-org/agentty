@@ -759,8 +759,17 @@ std::vector<ToolDef> build_mcp_tool_defs() {
             if ((tool_name == "shell" || tool_name == "test")
                 && tools::util::sandbox::is_active()
                 && r.text.find("failed with exit code ") != std::string::npos
-                && tools::util::sandbox::looks_like_denial(r.text))
+                && tools::util::sandbox::looks_like_denial(r.text)) {
+                // Relative names in the output are relative to where it ran.
+                std::string cwd = ctx.workspace.empty()
+                    ? tools::util::workspace_root().string() : ctx.workspace;
+                if (auto c = args.find("cd"); c != args.end() && c->is_string()) {
+                    const std::filesystem::path d{c->get_ref<const std::string&>()};
+                    cwd = (d.is_absolute() ? d : std::filesystem::path{cwd} / d).string();
+                }
+                tools::util::sandbox::record_denials(r.text, cwd);
                 r.text += tools::util::sandbox::denial_note();
+            }
 
             return decode_result(tool_name, std::move(r));
         };

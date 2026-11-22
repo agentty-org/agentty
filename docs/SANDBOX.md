@@ -767,6 +767,33 @@ Two mechanisms, and the second matters more:
    the cause and forbidding the two wrong moves — do not retry unchanged, do not
    blame the firewall.
 
+The stanza also says what **this host** could not build. On a host without user
+namespaces the network is shared, other processes are visible and read-only
+paths are left to the tool gate; a model told "network: via a proxy" while it
+shares the host network reasons from a wall that is not there. So each wall the
+shipped posture builds below strength adds a `this host:` line with what it
+means for a command. The startup banner and the Settings row say the same in
+short words, from the same list:
+
+```
+sandbox: active (claybin) · protected files: tool gate only · other processes: visible (no user namespaces)
+```
+
+## What the sandbox stopped
+
+The Sandbox pane footer lists what was blocked this session, newest first:
+brokered syscalls (`ptrace PTRACE_ATTACH pid=1`) and, since step 5 of the
+roadmap, **files**. When a command fails on `Permission denied` or `Read-only
+file system`, the paths in its output are recorded — but only those you could
+have written yourself, so a refusal caused by the file's own mode does not show
+up as the sandbox's. That is the path to add in Settings → Sandbox, if adding it
+is what you want.
+
+On Linux with Landlock ABI 7+ claybin also asks the kernel to audit the
+command's own denials (`LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON`); with auditd
+running, `ausearch -m LANDLOCK_ACCESS` has the exact record. Reading it needs
+root, which is why the footer uses the command's output instead.
+
 Only on failure, and only when the output matches. A note on every command is
 noise the model learns to skip, which is how an explanation stops working.
 

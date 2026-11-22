@@ -275,6 +275,14 @@ namespace {
             break;
     }
 
+    // What THIS host could not build. The lines above describe the policy;
+    // on a host without user namespaces some of it is weaker, and a model
+    // that reads "network: via a proxy" while sharing the host network will
+    // reason from a wall that is not there. Fixed at init, so the prompt
+    // prefix stays cacheable.
+    for (const auto& w : sb::degraded_walls())
+        out += "    this host: " + sb::degraded_meaning(w) + "\n";
+
     // The instruction, not just the facts. Without this the model knows it is
     // sandboxed and still retries, because nothing told it that retrying is
     // the wrong move.

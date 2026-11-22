@@ -8,6 +8,7 @@
 #include "agtest.hpp"
 
 #include "agentty/tool/util/sandbox.hpp"
+#include "agentty/tool/util/sandbox_broker.hpp"   // blocked_feed: file denials
 #include "agentty/domain/sandbox_config.hpp"   // Config's default backend
 #include "agentty/provider/prompt.hpp"          // default_system_prompt — the sandbox stanza
 
@@ -364,6 +365,78 @@ TEST_CASE("sandbox: a SUCCEEDING command is never annotated") {
     auto r = ag::run_shell_command("echo hello", 64 * 1024,
                                    std::chrono::seconds{20});
     CHECK(r.output.find("[sandbox]") == std::string::npos);
+}
+
+TEST_CASE("sandbox: the denied path is read out of the usual error shapes") {
+    // Roadmap step 5: a denial reaches the blocked feed with the PATH, which
+    // is what tells you which folder to add. Each line is a real tool's
+    // wording; the parser must not invent paths from the prefixes around it.
+    const auto got = ag::denied_paths(
+        "cat: /etc/shadow: Permission denied\n"
+        "bash: line 1: /home/u/.ssh/x: Permission denied\n"
+        "touch: cannot touch '/opt/y': Read-only file system\n"
+        "PermissionError: [Errno 13] Permission denied: '/srv/z.txt'\n"
+        "mkdir: cannot create directory \xe2\x80\x98/q\xe2\x80\x99: Permission denied\n"
+        "ping: socket: Operation not permitted\n"
+        "cat: /etc/shadow: Permission denied\n",
+        "/nonexistent-cwd");
+    auto has = [&](std::string_view p) { return std::ranges::find(got, p) != got.end(); };
+    CHECK(has("/etc/shadow"));
+    CHECK(has("/home/u/.ssh/x"));
+    CHECK(has("/opt/y"));
+    CHECK(has("/srv/z.txt"));
+    CHECK(has("/q"));
+    // "socket" is a word, not a file that exists where the command ran.
+    CHECK_FALSE(has("/nonexistent-cwd/socket"));
+    // Repeats collapse; nothing else slipped in.
+    CHECK(std::ranges::count(got, std::string{"/etc/shadow"}) == 1);
+    for (const auto& p : got) CHECK(p.starts_with("/"));
+    CHECK(ag::denied_paths("all good\n", "/").empty());
+}
+
+#if !defined(_WIN32)
+TEST_CASE("sandbox: only a denial the host user would not have hit is recorded") {
+    // The feed is "what the sandbox stopped". A file the user cannot write
+    // anyway (/etc/shadow) is the file's own mode, not the box, and stays
+    // out; a file they own and can write is the box.
+    namespace fs = std::filesystem;
+    namespace br = agentty::tools::util::sandbox::broker;
+    const fs::path own = fs::temp_directory_path() /
+        ("agentty_denial_" + std::to_string(static_cast<long long>(::getpid())));
+    { std::ofstream(own) << "x"; }
+    br::clear_blocked_feed();
+    ag::record_denials("cat: /etc/shadow: Permission denied\nsh: " + own.string() +
+                           ": Permission denied\n", "/");
+    const auto feed = br::blocked_feed();
+    bool mine = false, shadow = false;
+    for (const auto& e : feed) {
+        if (e.syscall != "file") continue;
+        mine |= e.detail == own.string();
+        shadow |= e.detail == "/etc/shadow";
+    }
+    CHECK(mine);
+    if (::access("/etc/shadow", W_OK) != 0) CHECK_FALSE(shadow);
+    br::clear_blocked_feed();
+    std::error_code ec;
+    fs::remove(own, ec);
+}
+#endif
+
+TEST_CASE("sandbox: a degraded wall is named in words, for the user and the model") {
+    // "filesystem.write partial" was the banner's whole explanation. Each
+    // load-bearing wall gets a phrase for the banner and a consequence for
+    // the model, from one table so the two cannot drift.
+    const ag::DegradedWall net{"network.isolation", "none", "unavailable"};
+    const ag::DegradedWall fsw{"filesystem.write", "partial", "landlock; ..."};
+    const ag::DegradedWall proc{"process.isolation", "none", "unavailable"};
+    CHECK(ag::degraded_phrase(net) == "network: not isolated");
+    CHECK(ag::degraded_meaning(net).find("share your network") != std::string::npos);
+    CHECK(ag::degraded_phrase(fsw) == "protected files: tool gate only");
+    CHECK(ag::degraded_meaning(fsw).find(".git/hooks") != std::string::npos);
+    CHECK(ag::degraded_phrase(proc) == "other processes: visible");
+    // Every phrase is plain words, never claybin's dotted name.
+    for (const auto& w : {net, fsw, proc})
+        CHECK(ag::degraded_phrase(w).find('.') == std::string::npos);
 }
 
 TEST_CASE("sandbox masks: the credential name list covers what repos hold") {

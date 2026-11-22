@@ -21,6 +21,13 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   read-only even with the workspace at `$HOME`. Writing another agent's
   server list (`.mcp.json`, `~/.claude.json`, `.codex/`, `.gemini/`,
   `.junie/`) is now a trust handoff too.
+- **The sandbox says what it stopped and what this host can't do.** Files a
+  command was refused now appear in the Sandbox pane's blocked list by path
+  (only ones you could have written yourself). On a host without user
+  namespaces the banner names what is missing in words — "other processes:
+  visible", "protected files: tool gate only" — and the model is told what
+  that means for its commands. On Linux 6.15+ the kernel's audit log records
+  each denial too.
 - **The sandbox works, and holds, on hosts without user namespaces.** Ubuntu
   24.04's AppArmor default denies them, and on such a host every sandboxed
   command failed to start; underneath that, a masked `.env` could be read in

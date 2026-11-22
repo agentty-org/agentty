@@ -6,6 +6,7 @@
 #include "agentty/util/home_dir.hpp"   // git_global_stamp
 #include "agentty/util/logx.hpp"   // AGT_LOG — the sealed-policy refusal
 #include "agentty/util/user_root.hpp"   // trust_roots: own config read-only
+#include "agentty/tool/util/sandbox_broker.hpp"   // record: file denials in the blocked feed
 
 #include <algorithm>
 #include <atomic>
@@ -128,7 +129,8 @@ std::atomic<bool> g_cfg_sealed{false};
 // below strong. Read by describe_state() so the banner reports this host, not
 // "a backend exists". Published values, not locks (the concurrency banlist).
 maya::published<const std::string> g_posture_error;
-maya::published<const std::string> g_posture_degraded;
+maya::published<const std::vector<DegradedWall>> g_posture_degraded;
+maya::published<const std::string> g_degraded_reason;
 
 // Only the macOS sandbox-exec backend needs the "can we run this binary?"
 // probe: Linux asks bwrap for a real namespace instead (see below), and the
@@ -1223,16 +1225,25 @@ bool init(Mode requested) {
     if (found == Backend::Claybin) {
         const auto rep = claybin_backend::describe(build_claybin_posture());
         g_posture_error.publish(std::make_shared<const std::string>(rep.ok ? "" : rep.detail));
-        std::string degraded;
+        std::vector<DegradedWall> degraded;
         if (rep.ok)
             for (const auto& w : rep.walls)
                 if ((w.name == "filesystem.read" || w.name == "filesystem.write"
                      || w.name == "network.isolation" || w.name == "process.isolation")
-                    && w.strength != "strong") {
-                    if (!degraded.empty()) degraded += ", ";
-                    degraded += w.name + " " + w.strength;
-                }
-        g_posture_degraded.publish(std::make_shared<const std::string>(std::move(degraded)));
+                    && w.strength != "strong")
+                    degraded.push_back({w.name, w.strength, w.mechanism});
+        // One cause covers nearly every degraded host: no user namespaces
+        // (Ubuntu 24.04's AppArmor default, most containers). Name it once.
+        std::string reason;
+#if defined(__linux__)
+        if (!degraded.empty()) {
+            const auto& h = claybin_backend::host();
+            if (!h.user_namespaces || !h.mount_namespaces) reason = "no user namespaces";
+        }
+#endif
+        g_degraded_reason.publish(std::make_shared<const std::string>(std::move(reason)));
+        g_posture_degraded.publish(
+            std::make_shared<const std::vector<DegradedWall>>(std::move(degraded)));
         if (!rep.ok) found = Backend::None;
     }
 #endif
@@ -1378,6 +1389,61 @@ bool workspace_is_home() {
     return std::filesystem::equivalent(workspace_root(), home, ec) && !ec;
 }
 
+std::vector<DegradedWall> degraded_walls() {
+    if (!is_active()) return {};
+    const auto d = g_posture_degraded.current();
+    return d ? *d : std::vector<DegradedWall>{};
+}
+
+std::string degraded_reason() {
+    const auto r = g_degraded_reason.current();
+    return r ? *r : std::string{};
+}
+
+// One vocabulary for both audiences. The banner gets the short phrase, the
+// model the consequence: "filesystem.write partial" is claybin's name for a
+// fact the user and the model each need in their own words.
+std::string degraded_phrase(const DegradedWall& w) {
+    const bool none = w.strength == "none";
+    if (w.wall == "network.isolation")
+        return none ? "network: not isolated" : "network: partly isolated";
+    if (w.wall == "process.isolation")
+        return "other processes: visible";
+    if (w.wall == "filesystem.write")
+        return none ? "writes: not confined" : "protected files: tool gate only";
+    if (w.wall == "filesystem.read")
+        return none ? "reads: not confined" : "reads: partly confined";
+    return w.wall + ": " + w.strength;
+}
+
+std::string degraded_meaning(const DegradedWall& w) {
+    const bool none = w.strength == "none";
+    if (w.wall == "network.isolation")
+        return none ? "network isolation is unavailable on this host; commands share "
+                      "your network, so do not probe local or private services"
+                    : "network isolation is partial on this host (" + w.mechanism +
+                          "); treat the network rules above as the policy even "
+                          "where a connection gets through";
+    if (w.wall == "process.isolation")
+        return "process isolation is unavailable on this host; commands can see "
+               "your other processes (ps, /proc), so do not inspect or signal them";
+    if (w.wall == "filesystem.write")
+        return none ? "write confinement is unavailable on this host; write only "
+                      "inside the workspace"
+                    : "files the host trusts inside the workspace (.git/hooks, "
+                      ".git/config, .vscode/tasks.json and the like) are not "
+                      "write-protected for commands on this host; do not change "
+                      "them from the shell, and every change there is reported "
+                      "to the user";
+    if (w.wall == "filesystem.read")
+        return none ? "read confinement is unavailable on this host; do not read "
+                      "outside the workspace and your toolchain"
+                    : "read confinement is partial on this host; treat paths "
+                      "outside the workspace as off-limits even where a read "
+                      "succeeds";
+    return w.wall + " is " + w.strength + " on this host";
+}
+
 std::string describe_state() {
     auto m = requested_mode();
     auto b = detected_backend();
@@ -1397,11 +1463,15 @@ std::string describe_state() {
         if (ws == ws.root_path())
             return std::string{"sandbox: degraded ("} + tag
                  + ", --workspace / gives no filesystem containment)";
-        // The walls this host could not build for the shipped posture, by
-        // name -- "active" alone was true on a host enforcing far less.
-        if (const auto deg = g_posture_degraded.current(); deg && !deg->empty())
-            return std::string{"sandbox: active ("} + tag + "; this host: " + *deg + ")";
-        return std::string{"sandbox: active ("} + tag + ")";
+        // The walls this host could not build for the shipped posture, each
+        // in words -- "active" alone was true on a host enforcing far less,
+        // and "filesystem.write partial" told nobody what they had lost.
+        std::string s = std::string{"sandbox: active ("} + tag + ")";
+        const auto deg = degraded_walls();
+        for (const auto& w : deg) s += " \xc2\xb7 " + degraded_phrase(w);
+        if (const auto why = degraded_reason(); !deg.empty() && !why.empty())
+            s += " (" + why + ")";
+        return s;
     }
     // The engine exists but refused the posture we ship. Name the reason:
     // "no backend" sent people to install things that were already there.
@@ -1490,6 +1560,106 @@ std::string describe_state() {
     return false;
 }
 
+std::vector<std::string> denied_paths(std::string_view out, std::string_view cwd) {
+    static constexpr std::string_view kErrs[] = {
+        "Permission denied", "Read-only file system", "Operation not permitted",
+    };
+    std::vector<std::string> paths;
+    auto add = [&](std::string_view raw) {
+        while (!raw.empty() && (raw.front() == ' ' || raw.front() == '"')) raw.remove_prefix(1);
+        while (!raw.empty() && (raw.back() == ' ' || raw.back() == '"')) raw.remove_suffix(1);
+        if (raw.empty() || raw.size() > 4096 || raw.find('\n') != std::string_view::npos) return;
+        fs::path p{std::string{raw}};
+        if (raw.front() == '~') {
+            const char* h = std::getenv("HOME");
+            if (!h || !*h || (raw.size() > 1 && raw[1] != '/')) return;
+            p = fs::path{h} / std::string{raw.size() > 2 ? raw.substr(2) : std::string_view{}};
+        } else if (p.is_relative()) {
+            // A shell prefix ("bash", "line 3") is not a path; a relative
+            // name counts if it exists where the command ran, or has a '/'
+            // and its directory does (a file the command failed to create).
+            if (cwd.empty()) return;
+            p = fs::path{std::string{cwd}} / p;
+            std::error_code ec;
+            const bool there = fs::exists(fs::symlink_status(p, ec));
+            const bool dir_there = raw.find('/') != std::string_view::npos
+                && fs::is_directory(p.parent_path(), ec);
+            if (!there && !dir_there) return;
+        }
+        std::string s = p.lexically_normal().string();
+        if (std::ranges::find(paths, s) == paths.end()) paths.push_back(std::move(s));
+    };
+    std::size_t start = 0;
+    while (start < out.size() && paths.size() < 8) {
+        std::size_t end = out.find('\n', start);
+        if (end == std::string_view::npos) end = out.size();
+        const std::string_view line = out.substr(start, end - start);
+        start = end + 1;
+        for (auto err : kErrs) {
+            const auto at = line.find(err);
+            if (at == std::string_view::npos) continue;
+            const auto before = line.substr(0, at);
+            const auto after = line.substr(at + err.size());
+            // python: "PermissionError: [Errno 13] Permission denied: '/x'"
+            if (after.starts_with(": '")) {
+                const auto q = after.find('\'', 3);
+                if (q != std::string_view::npos) { add(after.substr(3, q - 3)); break; }
+            }
+            // coreutils: "touch: cannot touch '/x': Permission denied", or
+            // ‘/x’ under a UTF-8 locale.
+            if (before.ends_with("': ")) {
+                const auto open = before.rfind('\'', before.size() - 4);
+                if (open != std::string_view::npos) {
+                    add(before.substr(open + 1, before.size() - 4 - open));
+                    break;
+                }
+            }
+            if (before.ends_with("\xe2\x80\x99: ")) {
+                const auto open = before.rfind("\xe2\x80\x98");
+                if (open != std::string_view::npos) {
+                    add(before.substr(open + 3, before.size() - 5 - (open + 3)));
+                    break;
+                }
+            }
+            // shells and cat: "bash: line 1: /x: Permission denied" -- the
+            // field between the last two ": ".
+            if (before.ends_with(": ")) {
+                const auto body = before.substr(0, before.size() - 2);
+                const auto colon = body.rfind(": ");
+                add(colon == std::string_view::npos ? body : body.substr(colon + 2));
+            }
+            break;
+        }
+    }
+    return paths;
+}
+
+void record_denials(std::string_view out, std::string_view cwd) {
+#if !defined(_WIN32)
+    for (const auto& p : denied_paths(out, cwd)) {
+        // Could the host user have done it? If the file allows read+write,
+        // or does not exist and its directory allows creating it, the
+        // refusal was the box. Anything else may be the file's own mode, and
+        // the feed records only what the sandbox stopped.
+        bool host_could = false;
+        std::error_code ec;
+        if (fs::exists(fs::symlink_status(p, ec)))
+            host_could = ::access(p.c_str(), R_OK | W_OK) == 0;
+        else if (const auto dir = fs::path{p}.parent_path(); !dir.empty())
+            host_could = ::access(dir.c_str(), W_OK | X_OK) == 0;
+        if (!host_could) continue;
+        broker::Event ev;
+        ev.syscall = "file";
+        ev.detail = p;
+        ev.allowed = false;
+        broker::record(ev);
+        AGT_LOG(Tool, Info, "sandbox.denied", "file {}", logx::body(p));
+    }
+#else
+    (void)out; (void)cwd;
+#endif
+}
+
 // The note appended to a denied command's output.
 //
 // Phrased for the MODEL and kept short: it names the cause, forbids the two
@@ -1539,8 +1709,10 @@ SubprocessResult run_shell_command(std::string_view cmd,
     // Only on FAILURE, and only when the output looks like a wall. A note on
     // every command would be noise the model learns to skip, which is how an
     // explanation stops working.
-    if (r.exit_code != 0 && looks_like_denial(r.output))
+    if (r.exit_code != 0 && looks_like_denial(r.output)) {
+        record_denials(r.output, workspace_root().string());
         r.output += denial_note();
+    }
     return r;
 }
 
@@ -1568,8 +1740,10 @@ SubprocessResult run_argv(const std::vector<std::string>& argv,
     // Same annotation as the shell path: this is what hooks and ACP terminals
     // go through, and a hook that dies on a wall is just as easy to
     // misdiagnose as a bash call.
-    if (r.exit_code != 0 && looks_like_denial(r.output))
+    if (r.exit_code != 0 && looks_like_denial(r.output)) {
+        record_denials(r.output, workspace_root().string());
         r.output += denial_note();
+    }
     return r;
 }
 

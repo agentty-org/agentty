@@ -126,7 +126,9 @@ namespace {
     std::size_t shown = 0;
     for (auto it = feed.rbegin(); it != feed.rend() && shown < 3; ++it, ++shown) {
         if (shown) out += "  \xc2\xb7  ";
-        out += it->syscall + " " + it->detail;
+        // A file the box refused (record_denials) is its path; a brokered
+        // syscall is the call and its arguments.
+        out += it->syscall == "file" ? it->detail : it->syscall + " " + it->detail;
         // The count only when it is >1: "× 1" is noise, "× 4096" is the
         // difference between a stray call and a loop hammering a denial.
         if (it->count > 1) out += " \xc3\x97 " + std::to_string(it->count);

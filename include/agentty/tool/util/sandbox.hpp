@@ -188,6 +188,21 @@ inline constexpr std::string_view kDenialTag = "[sandbox] ";
 [[nodiscard]] bool looks_like_denial(std::string_view out);
 [[nodiscard]] std::string denial_note();
 
+// The paths a failed command's output names as refused ("cat: /x: Permission
+// denied", "touch: cannot touch '/x': Read-only file system", python's
+// "Permission denied: '/x'"). Relative names are resolved against `cwd` and
+// kept only if they exist. Pure apart from that; at most 8.
+[[nodiscard]] std::vector<std::string> denied_paths(std::string_view out,
+                                                    std::string_view cwd);
+
+// Put the sandbox's file denials in the blocked-activity feed, which until
+// now only saw brokered syscalls. A path is recorded only when the HOST user
+// could have done what the command could not (access(2), read and write, or
+// creating it in its directory): then the refusal came from the box, not from
+// the file's own permissions. The kernel's landlock audit records say the
+// same thing exactly, but reading them needs root; this needs nothing.
+void record_denials(std::string_view out, std::string_view cwd);
+
 // Is the workspace the user's home directory? Then every dotfile is writable
 // to sandboxed commands (login files, ~/.local/bin). The Sandbox pane warns.
 [[nodiscard]] bool workspace_is_home();
@@ -195,9 +210,30 @@ inline constexpr std::string_view kDenialTag = "[sandbox] ";
 // Single-line describe of current state for the startup banner / status
 // command. Examples:
 //   "sandbox: active (claybin)"
+//   "sandbox: active (claybin) · read-only paths: tool gate only ·
+//    processes: not isolated (no user namespaces)"
 //   "sandbox: off"
 //   "sandbox: requested but no backend (kernel has neither landlock nor seccomp)"
 [[nodiscard]] std::string describe_state();
+
+// A load-bearing wall that the SHIPPED posture builds below full strength on
+// this host, from the compile init() ran. Empty when every one is strong or
+// there is no claybin posture. The banner, the settings row and the model's
+// stanza all read this one list, so they cannot disagree about the host.
+struct DegradedWall {
+    std::string wall;        // claybin's name: "network.isolation"
+    std::string strength;    // "partial" | "none"
+    std::string mechanism;   // what claybin used instead, or why not
+};
+[[nodiscard]] std::vector<DegradedWall> degraded_walls();
+// Why the host falls short, when it is one fact: "no user namespaces".
+// Empty when the walls fall short for different reasons.
+[[nodiscard]] std::string degraded_reason();
+// The banner phrase ("network: shared with this host") and what it means for
+// a command, phrased for the model ("...; do not probe local services").
+// Pure: tests drive them with any wall.
+[[nodiscard]] std::string degraded_phrase(const DegradedWall& w);
+[[nodiscard]] std::string degraded_meaning(const DegradedWall& w);
 
 // Run a shell command, wrapping it in the active sandbox when one
 // exists. Same shape as util::run_command_s — drop-in replacement for

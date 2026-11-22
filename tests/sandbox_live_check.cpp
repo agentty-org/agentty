@@ -11,6 +11,7 @@
 //   2. with net_mode=None, a socket to a raw IP cannot connect (the net rule)
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/tool/util/sandbox.hpp"
+#include "agentty/tool/util/sandbox_broker.hpp"   // blocked_feed: step 5
 #include "agentty/domain/sandbox_config.hpp"   // kAlwaysMasked*
 #include "agentty/util/io.hpp"
 #include "agentty/util/child_process.hpp"   // the long-lived section drives it
@@ -985,6 +986,15 @@ int main() {
                                             std::chrono::seconds{15});
             expect_ns(std::filesystem::exists(fake_home + "/.agentty", oe),
                       "...and cannot be moved aside (step 4)");
+            // Step 5: the refusal is in the blocked feed WITH the path, so
+            // the pane says which file the box protected.
+            {
+                bool seen = false;
+                for (const auto& e : agentty::tools::util::sandbox::broker::blocked_feed())
+                    seen |= e.syscall == "file"
+                            && e.detail == fake_home + "/.agentty/settings.json";
+                expect_ns(seen, "the refused write is in the blocked feed with its path (step 5)");
+            }
             auto mem = sb::run_shell_command("cat .agentty/memory.jsonl; echo END", 4096,
                                              std::chrono::seconds{15});
             expect(mem.output.find("MEMORY_SHOULD_NEVER_APPEAR") == std::string::npos,

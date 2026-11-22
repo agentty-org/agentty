@@ -323,7 +323,16 @@ Already mostly true (the seal, `HandoffPolicy`). Make it complete and tested:
   `ld.so <bin>`, copy-to-/tmp-and-exec — each must hit the same kernel walls
   (they do, because claybin never filters by command name; pin it with tests).
 
-### Step 5 — Visibility
+### Step 5 — Visibility  *(done)*
+
+Done: claybin sets `LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON` on ABI 7+, so the
+guest's denials reach the audit log (the default logged only the pre-exec
+apply code). The audit log needs root to read, so the blocked feed takes file
+denials from the failed command's output instead (`sandbox::record_denials`),
+keeping only paths the host user could have written. The banner, Settings row
+and model stanza read one list of degraded walls (`sandbox::degraded_walls`)
+and phrase each in words. Pinned by `sandbox_parity_test` and
+`sandbox_live_check`. The original plan:
 
 - Landlock ABI 7 `LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_ON` where available,
   surfaced in the blocked-activity feed with the denied path.
