@@ -39,6 +39,7 @@
 #include "agentty/tool/plugin.hpp"
 #include "agentty/tool/schema.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
+#include "agentty/tool/util/sandbox.hpp"   // child_spawner: servers are sandboxed
 #include "agentty/tool/util/utf8.hpp"
 #include "agentty/util/dbglog.hpp"
 #include "agentty/util/home_dir.hpp"
@@ -487,6 +488,11 @@ make_provider(const std::string& name, const json& spec) {
     cfg.name = name;
     ::agentty::util::ChildProcess::Spawn spawn;
     spawn.command = command;
+    // Sandboxed as Role::McpServer: an MCP server is third-party code with
+    // the model's attention, so it gets the workspace and the proxied
+    // network -- not ~/.ssh, ~/.aws or the LAN. Fails closed when the
+    // sandbox is on and cannot be built for it.
+    spawn.spawner = tools::util::sandbox::child_spawner(tools::util::sandbox::Role::McpServer);
     // Coerce non-string args/env elements instead of throwing: a single
     // numeric/bool element used to make `.get<std::string>()` throw
     // json::type_error and skip the WHOLE server. Strings pass through

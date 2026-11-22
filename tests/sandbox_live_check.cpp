@@ -13,6 +13,7 @@
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/domain/sandbox_config.hpp"   // kAlwaysMasked*
 #include "agentty/util/io.hpp"
+#include "agentty/util/child_process.hpp"   // the long-lived section drives it
 
 #include <claybin/plan/compile.hpp>   // probe_host: which walls this host has
 
@@ -194,6 +195,10 @@ int main() {
     // for lives somewhere else entirely. A check that passes for the wrong
     // reason is the failure mode this harness has already hit twice.
     agentty::tools::util::set_workspace_root(::agentty::IoAccess::grant(), kWorkspace);
+
+    // LL_ONLY=1: run only the long-lived section (it is the slow one to reach).
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // a hang must show WHERE it is
+    if (std::getenv("LL_ONLY")) goto long_lived;
 
     // ── net_mode=Ports: listed TCP ports only, and no listening ──────────
     std::printf("net_mode=Ports with 443 only:\n");
@@ -809,9 +814,13 @@ int main() {
 
             if (clobbered) {
                 std::printf("  guest said: %s\n", w.output.c_str());
-                expect(false,
-                       "a host-trusted path must be READ-ONLY inside the "
-                       "sandbox when mount namespaces exist");
+                // Without a mount namespace this is EXPECTED: a read-only path
+                // inside the writable workspace has no landlock expression
+                // that keeps git working, so the report says filesystem.write
+                // partial and the handoff gate (detection) is the wall.
+                expect_ns(false,
+                          "a host-trusted path must be READ-ONLY inside the "
+                          "sandbox when mount namespaces exist");
             } else {
                 expect(true, "a write to a host-trusted path is refused");
                 // And it must still be READABLE -- git reads its own config on
@@ -904,8 +913,8 @@ int main() {
                 std::ifstream f(fake_home + "/.config/autostart/x.desktop");
                 std::getline(f, after);
             }
-            expect(after.find("PWNED") == std::string::npos,
-                   "an autostart entry is read-only (#3)");
+            expect_ns(after.find("PWNED") == std::string::npos,
+                      "an autostart entry is read-only (#3)");
         } else {
             std::printf("  no backend -- skipped\n");
         }
@@ -1202,6 +1211,110 @@ int main() {
                    sys.find("CORE_WRITABLE") == std::string::npos,
                "/proc/sys is read-only");
         expect_ns(sys.rfind("0\n", 0) == 0, "core_pattern still masked");
+    }
+
+    // ── long-lived children: MCP servers, ACP agents, rag peers ─────────────
+long_lived:
+    std::printf("\nlong-lived children (MCP servers, agents, rag peers):\n");
+    //
+    // These used to start with the user's full authority -- an `npx
+    // some-mcp-server` could read ~/.ssh and reach the LAN. Each now goes
+    // through sandbox::child_spawner(role) into util::ChildProcess, the SAME
+    // object the real bridge uses. A tiny line-protocol "server" answers one
+    // request per line by trying the thing named, so the checks run inside
+    // the real child, over the real pipes, through the real spawner.
+    {
+        namespace sb = agentty::tools::util::sandbox;
+        // Own workspace: an earlier section leaves it at a fake $HOME that it
+        // then deletes, and a missing workspace fails every spawn on mount.
+        agentty::tools::util::set_workspace_root(::agentty::IoAccess::grant(), kWorkspace);
+        sb::reset_config_for_test();
+        agentty::sandbox_cfg::Config cfg;
+        cfg.configured = true;
+        sb::set_config(cfg);
+        expect(sb::init(sb::Mode::On), "long-lived: the sandbox is up");
+
+        const std::string ws{kWorkspace};
+        const char* home = std::getenv("HOME");
+        const std::string ssh = std::string{home ? home : "/root"} + "/.ssh";
+        if (std::FILE* f = std::fopen((ws + "/.env").c_str(), "w")) {
+            std::fputs("LL_SECRET=should_never\n", f);
+            std::fclose(f);
+        }
+        // One request per line, one answer per line. EOF on stdin ends it.
+        const char* server =
+            "while IFS= read -r q; do case \"$q\" in "
+            "ping) echo pong ;; "
+            "env) grep -q LL_SECRET .env 2>/dev/null && echo READ || echo DENIED ;; "
+            "ssh) ls \"$SSH_DIR\" 2>/dev/null | head -1 | grep -q . && echo READ || echo DENIED ;; "
+            "write) (echo w > ll_write_probe && echo WROTE && rm -f ll_write_probe) 2>/dev/null || echo DENIED ;; "
+            "net) (exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo CONNECTED || echo DENIED ;; "
+            "*) echo '?' ;; esac; done";
+
+        auto ask = [](agentty::util::ChildProcess& c, const char* q) {
+            c.in() << q << '\n';
+            c.in().flush();
+            std::string line;
+            std::getline(c.out(), line);
+            return line;
+        };
+        auto start = [&](sb::Role role) {
+            agentty::util::ChildProcess::Spawn s;
+            s.command = "/bin/bash";
+            s.args = {"-c", server};
+            s.cwd = ws;
+            s.env_kv = {"SSH_DIR=" + ssh};
+            s.quiet_stderr = true;
+            s.spawner = sb::child_spawner(role);
+            return std::make_unique<agentty::util::ChildProcess>(s);
+        };
+
+        {
+            auto c = start(sb::Role::McpServer);
+            expect(ask(*c, "ping") == "pong", "mcp server: answers over its pipes");
+            expect(ask(*c, "env") == "DENIED",
+                   "mcp server: cannot read a workspace .env");
+            expect(ask(*c, "ssh") == "DENIED", "mcp server: cannot read ~/.ssh");
+            {
+                const auto w = ask(*c, "write");
+                if (w != "WROTE") std::printf("  write said: [%s]\n", w.c_str());
+                expect(w == "WROTE", "mcp server: can write the workspace");
+            }
+            expect(ask(*c, "net") == "DENIED",
+                   "mcp server: no direct network (only the proxy)");
+            // EOF on stdin must END it: this is how agentty stops a server.
+            const auto t0 = std::chrono::steady_clock::now();
+            c->terminate(std::chrono::milliseconds{3000});
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            expect(ms < 2500, "mcp server: exits on stdin EOF, without being killed");
+        }
+        {
+            auto c = start(sb::Role::RagPeer);
+            expect(ask(*c, "ping") == "pong", "rag peer: answers over its pipes");
+            expect(ask(*c, "write") == "DENIED", "rag peer: the workspace is read-only");
+            expect(ask(*c, "ssh") == "DENIED", "rag peer: cannot read ~/.ssh");
+        }
+        {
+            auto c = start(sb::Role::Agent);
+            expect(ask(*c, "ping") == "pong", "agent: answers over its pipes");
+            expect(ask(*c, "ssh") == "DENIED", "agent: cannot read ~/.ssh");
+        }
+        std::filesystem::remove(ws + "/.env");
+
+        // Fail closed: with the sandbox on, a child it cannot build is an
+        // ERROR, never a quiet unsandboxed start.
+        {
+            agentty::util::ChildProcess::Spawn s;
+            s.command = "/nonexistent/server";
+            s.spawner = sb::child_spawner(sb::Role::McpServer);
+            bool threw = false;
+            try { agentty::util::ChildProcess c{s}; } catch (const std::exception&) { threw = true; }
+            expect(threw, "a child the sandbox cannot start is refused, not run plainly");
+        }
+        sb::reset_config_for_test();
+        sb::set_config(agentty::sandbox_cfg::Config{});
+        (void)sb::init(sb::Mode::Auto);
     }
 
     std::printf("\n%s\n", failures ? "LIVE CHECK FAILURES" : "all live checks passed");

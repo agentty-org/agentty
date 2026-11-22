@@ -9,14 +9,20 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>   // shared_ptr — the config snapshot
 #include <optional>
 #include <string_view>
+#if defined(__linux__)
+#include <fcntl.h>    // pipe2, open: spawn_long_lived's pipes
+#include <unistd.h>
+#endif
 
 #include <maya/runtime.hpp>
 #include <set>
@@ -1623,6 +1629,220 @@ claybin_backend::Posture claybin_posture_for_test() {
 #else
     return {};
 #endif
+}
+
+namespace {
+
+// An ACP agent's own state under $HOME: where it keeps its sign-in, settings
+// and history. The base posture MASKS several of these (they are credentials
+// to every OTHER process), so the agent role has to give back exactly its
+// own -- and nothing else's. Matched by the program's basename; an agent not
+// listed gets no home state, which shows up as "please sign in", not a leak.
+struct AgentHome { std::string_view bin; std::initializer_list<std::string_view> paths; };
+constexpr AgentHome kAgentHomes[] = {
+    {"claude",       {"/.claude", "/.claude.json", "/.config/claude"}},
+    {"claude-code-acp", {"/.claude", "/.claude.json", "/.config/claude"}},
+    {"codex",        {"/.codex"}},
+    {"codex-acp",    {"/.codex"}},
+    {"gemini",       {"/.gemini", "/.config/gcloud"}},
+    {"devin",        {"/.devin", "/.config/devin", "/.local/share/devin"}},
+    {"opencode",     {"/.opencode", "/.config/opencode", "/.local/share/opencode",
+                      "/.local/state/opencode"}},
+    {"goose",        {"/.config/goose", "/.local/share/goose"}},
+};
+
+[[nodiscard]] std::string_view base_name(std::string_view p) {
+    if (auto s = p.find_last_of("/\\"); s != std::string_view::npos) p.remove_prefix(s + 1);
+    return p;
+}
+
+// npx / uvx / pipx / bunx run their package from a cache they fill on first
+// use. A stdio MCP server is very often `npx -y some-server`; without its
+// cache writable it cannot start. These hold downloaded packages, not
+// credentials (~/.npmrc, which can, stays masked).
+constexpr std::string_view kRunnerCaches[] = {
+    "/.npm/_npx", "/.npm/_cacache", "/.cache/uv", "/.cache/pip",
+    "/.local/share/uv", "/.local/pipx", "/.bun/install/cache", "/.cache/node",
+};
+
+}  // namespace
+
+claybin_backend::Posture posture_for(Role role, const std::vector<std::string>& argv) {
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+    auto p = build_claybin_posture();
+    if (!argv.empty()) relax_wx_for_jit(p, join_argv(argv));
+#if defined(_WIN32)
+    const char* home_env = std::getenv("USERPROFILE");
+#else
+    const char* home_env = std::getenv("HOME");
+#endif
+    const std::string home = home_env ? home_env : "";
+    auto give_back = [&](const std::string& path) {
+        // un-mask a path this role owns, and let it write there.
+        std::erase_if(p.masked, [&](const std::string& m) {
+            return m == path || m.starts_with(path + "/");
+        });
+        std::error_code ec;
+        if (fs::exists(fs::symlink_status(path, ec))) p.write_paths.push_back(path);
+    };
+
+    switch (role) {
+        case Role::Command:
+            break;
+        case Role::McpServer:
+        case Role::Agent:
+        case Role::RagPeer: {
+            // The program a server IS must be readable, wherever it lives: a
+            // configured `python3 /opt/tools/my_server.py` or
+            // `node ~/src/mcp/index.js` sits outside the workspace and the
+            // system read set. Read + execute its directory (for sibling
+            // imports), for argv[0] and for every argument that names an
+            // existing file. Never writable, and never a masked path: a
+            // config cannot hand a server ~/.ssh by naming it as an argument.
+            auto masked_under = [&](const std::string& d) {
+                for (const auto& m : p.masked)
+                    if (d == m || d.starts_with(m + "/") || m.starts_with(d + "/")) return true;
+                return false;
+            };
+            for (const auto& a : argv) {
+                std::error_code ec;
+                fs::path f{a};
+                if (!f.is_absolute() || !fs::is_regular_file(f, ec)) continue;
+                const fs::path dir = fs::canonical(f, ec).parent_path();
+                if (ec || dir == dir.root_path()) continue;
+                const std::string d = dir.string();
+                if (!home.empty() && d == home) continue;   // never all of $HOME
+                if (!masked_under(d)) p.read_paths.push_back(d);
+            }
+            break;
+        }
+    }
+    switch (role) {
+        case Role::Command:
+            break;
+        case Role::McpServer:
+            // its package runner's cache, so `npx -y server` can install
+            if (!home.empty())
+                for (auto c : kRunnerCaches) {
+                    const std::string path = home + std::string{c};
+                    std::error_code ec;
+                    fs::create_directories(path, ec);   // so the bind exists
+                    if (!ec) p.write_paths.push_back(path);
+                }
+            break;
+        case Role::Agent: {
+            // its own home state, and the network: an agent is a client of
+            // its vendor's API. Through the proxy, so the LAN and cloud
+            // metadata stay refused even for an agent.
+            if (p.net_mode != 1 /* None: the user's explicit choice wins */)
+                p.net_mode = 0;
+            if (!home.empty() && !argv.empty())
+                for (const auto& a : kAgentHomes)
+                    if (base_name(argv.front()) == a.bin)
+                        for (auto rel : a.paths) give_back(home + std::string{rel});
+            break;
+        }
+        case Role::RagPeer:
+            p.workspace_read_only = true;
+            p.write_paths.clear();
+            p.net_mode = 1;   // None
+            break;
+    }
+    // A server runs for the session; a command's wall-clock cap would kill it
+    // mid-conversation. CPU-time stays: a spinning server is still a fault.
+    if (role != Role::Command) p.wall_clock_secs = 0;
+    // No broker: nothing polls a long-lived child's listener, and a brokered
+    // ptrace/kill would block the server forever. The filter's flat deny
+    // stands in (a server has no business debugging or signalling anyone).
+    if (role != Role::Command) p.broker = false;
+    return p;
+#else
+    (void)role;
+    (void)argv;
+    return {};
+#endif
+}
+
+std::expected<std::optional<LongLived>, std::string>
+spawn_long_lived(Role role, const std::vector<std::string>& argv,
+                 const std::vector<std::pair<std::string, std::string>>& env,
+                 const std::string& cwd, bool quiet_stderr) {
+    if (argv.empty()) return std::unexpected(std::string{"empty argv"});
+    // Off is the user's choice: spawn plainly, as before.
+    if (requested_mode() == Mode::Off) return std::optional<LongLived>{};
+#if defined(__linux__)
+    if (!is_active() || detected_backend() != Backend::Claybin) {
+        // Auto on a host with no usable sandbox: the banner already says
+        // commands run unsandboxed, and the same goes for servers. On never
+        // reaches here (init refused to start).
+        return std::optional<LongLived>{};
+    }
+    auto posture = posture_for(role, argv);
+    if (!cwd.empty()) posture.cwd = cwd;
+
+    int in[2] = {-1, -1}, out[2] = {-1, -1};
+    if (::pipe2(in, O_CLOEXEC) != 0 || ::pipe2(out, O_CLOEXEC) != 0) {
+        for (int f : {in[0], in[1], out[0], out[1]}) if (f >= 0) ::close(f);
+        return std::unexpected(std::string{"pipe: "} + std::strerror(errno));
+    }
+    // stderr: a server's logs are its own business. Quiet sends them to
+    // /dev/null; otherwise they go where ours go (fd 2).
+    int err_fd = 2;
+    if (quiet_stderr) err_fd = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+    auto r = claybin_backend::spawn_argv(posture, argv, out[1], err_fd, env, in[0]);
+    if (quiet_stderr && err_fd >= 0) ::close(err_fd);
+    ::close(in[0]);
+    ::close(out[1]);
+    if (!r.started) {
+        ::close(in[1]);
+        ::close(out[0]);
+        // FAIL CLOSED: the caller must not retry this child unsandboxed.
+        return std::unexpected("sandbox (" + std::string{to_string(role)} + "): "
+                               + r.start_error);
+    }
+    AGT_LOG(Tool, Info, "sandbox.long_lived", "role={} pid={} argv0={}",
+            to_string(role), r.pid, argv.front());
+    LongLived ll;
+    ll.pid = r.pid;
+    ll.pidfd = r.pidfd;
+    ll.stdin_fd = in[1];
+    ll.stdout_fd = out[0];
+    ll.keepalive = r.net_proxy;
+    ll.kill_tree = std::move(r.kill_tree);
+    if (r.supervisor_fd >= 0) ::close(r.supervisor_fd);   // posture_for: no broker
+    return std::optional<LongLived>{std::move(ll)};
+#else
+    // macOS / Windows: long-lived children are not sandboxed yet. Said in
+    // SANDBOX.md and the Plugins pane rather than silently pretended.
+    (void)role; (void)env; (void)cwd; (void)quiet_stderr;
+    return std::optional<LongLived>{};
+#endif
+}
+
+std::function<std::optional<::agentty::util::ChildProcess::Spawn::Adopt>(
+    const ::agentty::util::ChildProcess::Spawn&)>
+child_spawner(Role role) {
+    using Spawn = ::agentty::util::ChildProcess::Spawn;
+    return [role](const Spawn& s) -> std::optional<Spawn::Adopt> {
+        std::vector<std::string> argv;
+        argv.reserve(s.args.size() + 1);
+        argv.push_back(s.command);
+        argv.insert(argv.end(), s.args.begin(), s.args.end());
+        std::vector<std::pair<std::string, std::string>> env;
+        for (const auto& kv : s.env_kv)
+            if (const auto eq = kv.find('='); eq != std::string::npos)
+                env.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
+        auto r = spawn_long_lived(role, argv, env, s.cwd, s.quiet_stderr);
+        if (!r) throw std::runtime_error(r.error());   // fail closed
+        if (!*r) return std::nullopt;                  // sandbox off: plain spawn
+        Spawn::Adopt a;
+        a.pid       = (*r)->pid;
+        a.pidfd     = (*r)->pidfd;
+        a.stdin_fd  = (*r)->stdin_fd;
+        a.stdout_fd = (*r)->stdout_fd;
+        a.keepalive = std::move((*r)->keepalive);
+        return a;
+    };
 }
 
 bool command_needs_jit(std::string_view cmd) noexcept {

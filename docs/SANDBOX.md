@@ -482,8 +482,13 @@ What changes without namespaces, and what it costs:
   visible cost: a file created directly in a directory that holds a mask is
   unreadable until the next command, because every command recompiles.
   `ls` lists a masked file's name (never its content).
-- **Read-only paths inside the workspace stay read-only** (`.vscode/tasks.json`,
-  `.git/hooks`) the same way.
+- **Read-only paths inside the workspace are NOT enforced by the kernel**
+  (`.vscode/tasks.json`, `.git/hooks`). Landlock rights add up down the
+  tree, so keeping `.git/hooks` read-only would mean taking write off `.git`
+  and the workspace root — and then `git commit` cannot create its lock
+  file. The report says `filesystem.write partial` whenever such a path
+  exists, and the [trust-handoff gate](#the-trust-handoff-gate) (which runs on every
+  host) is the wall that catches a write there.
 - **Network goes through the same proxy**, which now listens on the host's
   loopback; landlock lets the command connect to that one port and nothing
   else (UDP and ICMP too, on landlock abi 10+). Network **None** becomes a
@@ -633,6 +638,31 @@ in landlock, where the kernel resolves it.
 A syscall qualifies for brokering only if all three hold: a scalar argument
 carries the decision, a flat deny is sometimes wrong, and a flat allow is
 sometimes wrong. That is why the list is two entries long.
+
+---
+
+## What runs sandboxed
+
+Every process agentty starts has a **role**, and the role decides its walls.
+
+| process | role | filesystem | network |
+|---|---|---|---|
+| `bash` tool, `diagnostics`, git, lifecycle hooks, ACP terminals | command | workspace rw; secrets masked | per your Network setting |
+| **stdio MCP servers** | mcp server | workspace rw; secrets masked; its package runner's cache rw (`~/.npm/_npx`, `~/.cache/uv`, …) so `npx -y server` can install | per your Network setting — through the proxy, never the LAN or cloud metadata |
+| **ACP agents** (Claude Code, Codex, Gemini, Devin, OpenCode, …) | agent | workspace rw; secrets masked **except the agent's own** sign-in and config dir (`~/.claude`, `~/.codex`, …) | through the proxy (it talks to its own API), unless Network is None |
+| **retrieval peers** (rag) | rag peer | workspace **read-only**; nothing writable | none |
+| code blocks you run yourself (`^R` on a block), `ssh` for airgap | — | **not sandboxed**: these are you, at your terminal | — |
+
+Long-lived children (servers, agents, peers) differ from commands in three
+ways, all because nothing supervises them turn by turn: no syscall broker (a
+brokered `ptrace`/`kill` would hang the server; the filter denies them
+flatly instead), no wall-clock cap (a server lives for the session), and their
+stdin/stdout stay open as the JSON-RPC channel. EOF on stdin still ends them.
+
+With the sandbox **on**, a server or agent that cannot be sandboxed is
+**refused** with the reason — it is never quietly started without one. With it
+**off**, they start plainly, as everything else does. On macOS and Windows,
+long-lived children are not sandboxed yet.
 
 ---
 

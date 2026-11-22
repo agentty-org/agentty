@@ -12,6 +12,7 @@
 
 #include "agentty/io/http.hpp"
 #include "agentty/tool/util/exec.hpp"
+#include "agentty/tool/util/sandbox.hpp"   // child_spawner: rag peers are sandboxed
 #include "agentty/util/child_process.hpp"
 
 namespace agentty::rag {
@@ -55,6 +56,8 @@ public:
     sp.args.assign(spec.argv.begin() + 1, spec.argv.end());
     sp.env_kv = spec.env;
     if (!spec.cwd.empty()) sp.cwd = spec.cwd;
+    // Role::RagPeer: reads the workspace, writes nothing, no network.
+    sp.spawner = tools::util::sandbox::child_spawner(tools::util::sandbox::Role::RagPeer);
     std::shared_ptr<util::ChildProcess> child;
     try {
         child = std::make_shared<util::ChildProcess>(sp);

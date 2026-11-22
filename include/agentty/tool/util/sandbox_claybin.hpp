@@ -83,6 +83,9 @@ struct Posture {
     // (EBUSY), so the read-only binds inside cannot be moved off.
     std::vector<std::string> handoff_anchor;
     std::string workspace;                       // read-write, bound last
+    // Bind the workspace read-only (Role::RagPeer: a retrieval backend reads
+    // the code and has no reason to change it).
+    bool workspace_read_only{false};
     std::string cwd;                             // where the shell starts
 
     // ── network ──────────────────────────────────────────────────────────

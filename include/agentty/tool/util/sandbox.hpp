@@ -37,7 +37,9 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>   // shared_ptr — config_snapshot's return type
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +47,7 @@
 #include "agentty/domain/sandbox_config.hpp"
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/tool/util/subprocess.hpp"
+#include "agentty/util/child_process.hpp"   // ChildProcess::Spawn: child_spawner's hook
 
 namespace agentty::tools::util::handoff { struct TrustedSnapshot; }
 
@@ -278,6 +281,79 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
 // sealed config snapshot right now, including the non-configurable masks and
 // workspace sweep in sandbox.cpp. Empty/default on non-Linux builds.
 [[nodiscard]] claybin_backend::Posture claybin_posture_for_test();
+
+// ── Roles: WHAT a child is decides what it may touch ──
+//
+// Every process agentty starts is one of these, and its sandbox posture is a
+// pure function of the role and the sealed config (posture_for). Commands go
+// through run_child (one-shot, supervised); the long-lived roles go through
+// spawn_long_lived, which hands back pipes for a JSON-RPC peer.
+enum class Role : std::uint8_t {
+    Command,    // shell tool, diagnostics, git, hooks, ACP terminals
+    McpServer,  // a stdio MCP server: third-party code that speaks to the model
+    Agent,      // an ACP agent (Claude Code, Codex, ...): its own config + its API
+    RagPeer,    // a retrieval backend: reads the workspace, needs nothing else
+};
+[[nodiscard]] constexpr const char* to_string(Role r) noexcept {
+    switch (r) {
+        case Role::Command:   return "command";
+        case Role::McpServer: return "mcp server";
+        case Role::Agent:     return "agent";
+        case Role::RagPeer:   return "rag peer";
+    }
+    return "command";
+}
+
+// What a role may do, beyond the shared base (system read set, masks,
+// syscall filter, resource caps):
+//
+//   Command    workspace rw; network per config (Full via proxy / None / Ports)
+//   McpServer  workspace rw; network per config, like a command; plus its own
+//              cache dirs rw (npx/uvx install into them on first run)
+//   Agent      workspace rw; FULL network through the proxy (it talks to its
+//              own API); plus its own config dir rw (~/.claude, ~/.codex, ...),
+//              which the base masks would otherwise hide from it
+//   RagPeer    workspace READ-ONLY; no network
+//
+// Long-lived roles differ from Command in three runtime ways, all forced by
+// having no supervise loop: no syscall broker (nobody polls it, so a brokered
+// call would hang -- ptrace/kill fall back to the filter's flat deny), no
+// wall-clock cap (a server runs for the session), and stdio is a pipe pair
+// kept open for the life of the child.
+[[nodiscard]] claybin_backend::Posture posture_for(Role role,
+                                                   const std::vector<std::string>& argv);
+
+// A long-lived child in the sandbox, with its pipes. pid/pidfd/fds are owned
+// by the caller (util::ChildProcess adopts them). `keepalive` holds what the
+// sandbox needs while the child runs (the network proxy, the cgroup).
+struct LongLived {
+    int pid = -1;
+    int pidfd = -1;
+    int stdin_fd = -1;    // write end
+    int stdout_fd = -1;   // read end
+    std::shared_ptr<void> keepalive;
+    std::function<bool()> kill_tree;
+};
+
+// Spawn `argv` for `role`. Returns:
+//   * a LongLived when the sandbox is active and the posture built,
+//   * nullopt when the sandbox is OFF (the caller spawns plainly -- the user
+//     chose that), and
+//   * an error string when the sandbox is on but this child cannot be
+//     sandboxed. FAIL CLOSED: the caller must not fall back to a plain spawn.
+// Linux only today; other platforms return nullopt (see SANDBOX.md).
+[[nodiscard]] std::expected<std::optional<LongLived>, std::string>
+spawn_long_lived(Role role, const std::vector<std::string>& argv,
+                 const std::vector<std::pair<std::string, std::string>>& env,
+                 const std::string& cwd, bool quiet_stderr);
+
+// The hook util::ChildProcess::Spawn::spawner takes, for `role`. Every
+// long-lived child site sets it -- ONE line each -- so there is one way a
+// server, an agent or a rag peer gets its sandbox. Throws (fail closed) when
+// the sandbox is on and the child cannot be sandboxed.
+[[nodiscard]] std::function<std::optional<::agentty::util::ChildProcess::Spawn::Adopt>(
+    const ::agentty::util::ChildProcess::Spawn&)>
+child_spawner(Role role);
 
 // True when a command runs a JIT runtime (node, npm, deno, bun, java, ...)
 // that needs RWX pages. Below Strict such a command gets W^X lifted, since

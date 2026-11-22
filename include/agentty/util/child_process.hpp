@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <istream>
 #include <memory>
 #include <optional>
@@ -291,10 +292,31 @@ public:
         // agent (Devin logs every trace span there) must not scribble over
         // the TUI or a headless run's output.
         bool                     quiet_stderr = false;
+
+        // Who starts the child, when it is not a plain spawn. The sandbox
+        // layer fills this in (sandbox::child_spawner) for MCP servers, ACP
+        // agents and rag peers; util/ stays below the tool layer and never
+        // names it. Returns:
+        //   nullopt            -> spawn plainly (no sandbox, by the user's choice)
+        //   Adopt              -> a running child; ChildProcess adopts it
+        //   throws             -> refused; FAIL CLOSED, never a plain spawn
+        struct Adopt {
+            int pid = -1, pidfd = -1, stdin_fd = -1, stdout_fd = -1;
+            std::shared_ptr<void> keepalive;   // the sandbox's proxy/cgroup
+        };
+        std::function<std::optional<Adopt>(const Spawn&)> spawner;
     };
 
     explicit ChildProcess(const Spawn& s) {
         namespace pf = maya::platform;
+#if !defined(_WIN32)
+        if (s.spawner) {
+            if (auto a = s.spawner(s)) {
+                adopt(std::move(*a), s.command);
+                return;
+            }
+        }
+#endif
         pf::process_spec spec;
         spec.argv.reserve(s.args.size() + 1);
         spec.argv.push_back(s.command);
@@ -372,6 +394,36 @@ public:
     }
 
 private:
+#if !defined(_WIN32)
+    // Take over a child the sandbox started. The pipes and pidfd are TAKEN;
+    // after this the object is indistinguishable from a plain spawn.
+    void adopt(Spawn::Adopt a, const std::string& command) {
+        namespace pf = maya::platform;
+        pf::native_process::adopted_child c;
+        c.pid       = a.pid;
+        c.pidfd     = a.pidfd;
+        c.stdout_fd = a.stdout_fd;
+        c.stdin_fd  = a.stdin_fd;
+        // in a pid namespace the pid is not a group leader here: stop() must
+        // use the pidfd (see adopted_child::leads_own_group).
+        c.leads_own_group = false;
+        auto p = pf::native_process::adopt(c);
+        if (!p) throw std::runtime_error("cannot adopt sandboxed '" + command + "': "
+                                         + std::string{p.error().what});
+        keepalive_ = std::move(a.keepalive);
+        exit_h_ = p->exit_handle();
+        pid_    = a.pid;
+        const auto out = p->stdout_handle();
+        const auto in  = p->stdin_handle();
+        if (!out) throw std::runtime_error("child_process: no stdout pipe");
+        proc_ = std::make_unique<child_proc>(std::move(*p));
+        out_buf_    = std::make_unique<child_out_buf>(*out);
+        in_buf_     = std::make_unique<child_in_buf>(*proc_, in);
+        out_stream_ = std::make_unique<std::istream>(out_buf_.get());
+        in_stream_  = std::make_unique<std::ostream>(in_buf_.get());
+    }
+#endif
+
     [[nodiscard]] bool exited() const noexcept { return proc_->reaped(); }
 
     // Claimed, so it can't land after a reap.
@@ -400,6 +452,10 @@ private:
         return true;
     }
 
+    // What the sandbox needs while the child runs (its network proxy, its
+    // cgroup). FIRST, so it is destroyed LAST: the destructor's terminate()
+    // runs before any member goes, and the proxy outlives the child's pipes.
+    std::shared_ptr<void>                      keepalive_;
     // Behind a pointer: the in-buf holds a reference.
     std::unique_ptr<child_proc>                proc_;
     maya::platform::borrowed_handle            exit_h_{};

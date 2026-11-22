@@ -5,6 +5,14 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Security
+- **MCP servers, ACP agents and retrieval helpers run in the sandbox.** They
+  used to start with your full authority — an `npx some-mcp-server` could
+  read `~/.ssh`, `~/.aws` and every repo, and reach your LAN. Now each gets
+  walls for what it is: MCP servers get the workspace and the proxied
+  network; ACP agents also get their own sign-in directory (and only their
+  own); retrieval helpers get a read-only workspace and no network. With the
+  sandbox on, a server that cannot be sandboxed is refused with the reason,
+  never started without one. Linux; macOS and Windows next.
 - **The sandbox works, and holds, on hosts without user namespaces.** Ubuntu
   24.04's AppArmor default denies them, and on such a host every sandboxed
   command failed to start; underneath that, a masked `.env` could be read in

@@ -356,6 +356,11 @@ namespace {
             if (m.starts_with(w)) d = std::move(d).mask(m);
     }
     if (!p.workspace.empty()) {
+        // Read-only (Role::RagPeer) is NOT a read-only bind HERE: the masks
+        // and handoff binds below need mount points created inside the
+        // workspace, which EROFS refuses. It is bound rw now and remounted
+        // read-only at the very end of this function, once everything inside
+        // it exists -- the recursive remount carries the inner mounts too.
         d = std::move(d).bind(p.workspace, p.workspace);
         d = std::move(d).workdir(p.cwd.empty() ? p.workspace : p.cwd);
 
@@ -408,7 +413,25 @@ namespace {
         // Masks go last, after every bind. build_claybin_posture already
         // keeps masked paths out of handoff_ro; this makes the order itself
         // safe too, so no later bind can uncover a mask again.
-        if (!p.handoff_ro.empty() || !p.handoff_anchor.empty())
+        //
+        // A read-only workspace (Role::RagPeer) is one more bind of the
+        // workspace onto itself, read-only, AFTER everything that needed to
+        // create mount points in it. It sits on top, so the masks are applied
+        // again over it. Mount-implied rights JOIN at a path, so without a
+        // mount namespace that bind alone would leave the earlier rw grant in
+        // force; the explicit grant below is the landlock half: caller grants
+        // MEET the mount plan, so the workspace is read+exec there too.
+        if (p.workspace_read_only) {
+            d = std::move(d).ro_bind(p.workspace, p.workspace);
+            // A meet keeps only what the caller named, so name a read-only
+            // world. Nothing writable that could be an ANCESTOR of the
+            // workspace (it often lives under /tmp or $HOME): landlock rights
+            // add up down the tree, and one writable ancestor would undo the
+            // read-only grant. /dev keeps write for /dev/null.
+            d = std::move(d).grant("/", FileRights::exec());
+            d = std::move(d).grant("/dev", FileRights::all());
+        }
+        if (p.workspace_read_only || !p.handoff_ro.empty() || !p.handoff_anchor.empty())
             for (const auto& m : p.masked)
                 if (m.starts_with(p.workspace)) d = std::move(d).mask(m);
     }

@@ -674,6 +674,10 @@ SpawnedAcpAgent spawn_acp_agent(const maya::unlocked&           cap,
         // a headless run's stderr). AGENTTY_ACP_STDERR=1 lets them through.
         const char* show = std::getenv("AGENTTY_ACP_STDERR");
         spawn.quiet_stderr = !(show && show[0] == '1');
+        // Role::Agent: its own config dir and its API, through the proxy;
+        // not the other agents' sign-ins or the user's keys.
+        spawn.spawner = ::agentty::tools::util::sandbox::child_spawner(
+            ::agentty::tools::util::sandbox::Role::Agent);
         holder->child = std::make_unique<::agentty::util::ChildProcess>(spawn);
     } catch (const std::exception& e) {
         err = std::string("spawn_acp_agent: cannot start '") + argv.front() + "': " + e.what();

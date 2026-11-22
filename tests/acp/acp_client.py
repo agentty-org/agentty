@@ -529,7 +529,7 @@ def scenario_elicit(c, cwd):
         print("  debug last tool output:", got[:300])
         log = os.path.join(os.environ.get("AGENTTY_HOME", ""), "logs", "agentty.log")
         if os.path.exists(log):
-            for line in open(log).read().splitlines()[-400:]:
+            for line in open(log, errors="replace").read().splitlines()[-400:]:
                 if "mcp." in line and ("elicit" in line or "reload" in line):
                     print("  log:", line[:200])
     if c.elicitations:

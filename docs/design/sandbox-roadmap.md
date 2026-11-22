@@ -214,7 +214,34 @@ The original plan for this step, kept for the record:
 7. `sandbox_live_check` gains a `--no-userns` mode that re-execs itself under
    `bwrap --disable-userns` and is run in CI.
 
-### Step 2 — One spawn seam: `sandbox::Child` (fixes F3, prepares F2)
+### Step 2 — One spawn seam: `sandbox::Child` (fixes F3, prepares F2)  ✅ *done (long-lived half)*
+
+Shipped as `sandbox::Role` + `posture_for(role, argv)` + `spawn_long_lived`
++ `child_spawner(role)`. `util::ChildProcess::Spawn` gained a `spawner` hook
+the sandbox layer fills in, so util/ never names the tool layer, and each
+long-lived site is one line. The five command spawner lambdas in
+`sandbox.cpp` still exist; folding them onto `posture_for(Role::Command)` is
+the remaining cleanup.
+
+### Step 3 — Sandbox long-lived children (fixes F2)  ✅ *done*
+
+MCP stdio servers, ACP agents and rag peers all spawn through
+`child_spawner`. Fail closed when the sandbox is on. Found on the way and
+fixed in claybin: the setup processes that stay behind (outer waiter, pid-1
+shepherd) never exec, so they kept copies of every caller descriptor — and a
+copy of the guest's stdin write end meant a server never saw EOF and could
+not be stopped (`stdin_eof_test`). Verified by `sandbox_live_check`'s
+long-lived section in both modes: secrets unreadable, `~/.ssh` unreadable, no
+direct network, workspace read-only for rag peers, EOF ends the server, an
+unbuildable child is refused.
+
+Also found and corrected while testing: expanding READ-ONLY paths under a
+writable workspace (step 1's first version) took write off the workspace root
+and broke `git commit` without namespaces. Only masks are expanded now; a
+read-only path there makes the report say `filesystem.write partial`, and the
+handoff gate is the wall.
+
+### Step 2 — original plan, for the record
 
 Replace the five lambdas with one value type and one function:
 
