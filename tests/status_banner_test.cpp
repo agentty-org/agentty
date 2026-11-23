@@ -14,7 +14,9 @@
 #include <maya/core/anim_clock.hpp>
 #include <maya/print.hpp>
 
+#include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/model.hpp"
+#include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include "agentty/runtime/view/status_bar/status_banner.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
@@ -112,6 +114,35 @@ TEST_CASE("status bar: the phase chip counts down a scheduled retry") {
 
     a->retry_at = {};                  // no deadline known: the plain verb
     CHECK(A::ui::phase_chip_config(m).verb == "retrying");
+}
+
+TEST_CASE("status banner: a held status stands exactly as long as its work") {
+    using H = A::StreamState::StatusHold;
+    const auto now = maya::anim_now();
+
+    // The refresh that turned out not to be due: OAuthRefreshNotDue drops
+    // the flag and writes no status. The line used to stay forever.
+    A::Model m;
+    m.s.oauth_refresh_in_flight = true;
+    m.s.hold_status("refreshing OAuth token\xe2\x80\xa6", H::AuthRefresh);
+    CHECK(m.s.status_active(now));
+    auto [after, c] = agentty::app::update(
+        std::move(m), A::Msg{A::msg::LoginMsg{A::OAuthRefreshNotDue{}}});
+    (void)c;
+    CHECK(!after.s.status_active(now));
+    CHECK(A::ui::status_banner_config(after).text.empty());
+
+    // Compaction torn down without its success toast.
+    A::Model k;
+    k.s.compacting = true;
+    k.s.hold_status("compacting context\xe2\x80\xa6", H::Compacting);
+    CHECK(k.s.status_active(now));
+    k.s.compacting = false;
+    CHECK(!k.s.status_active(now));
+
+    // Any later write releases the hold: the new line is not bound to it.
+    k.s.status = "context compacted";
+    CHECK(k.s.status_active(now));
 }
 
 TEST_CASE("status bar: a toast keeps the context and cache gauges") {

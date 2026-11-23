@@ -23,6 +23,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 - **A retry message can't outlive its turn.** When the turn ends, any
   "retrying …" line goes with it. That includes "reasoning used the whole
   budget · retrying with less…", which nothing had ever cleared.
+- **"in progress" lines leave when the work does.** "refreshing OAuth
+  token…", "compacting context…", "rewinding to checkpoint…", "retrieving
+  context…" and the self-update download line are now tied to the work they
+  describe. Before, they cleared only on the success path, so a refresh that
+  turned out not to be due left "refreshing OAuth token…" up all session.
 - **OpenCode Go and Zen show the cache in the status bar.** OpenCode
   reports its cache only in its own `usage.opencode.tokens` (cache_read,
   cache_write_5m/1h), not in OpenAI's `prompt_tokens_details`, so agentty

@@ -655,8 +655,8 @@ Cmd submit_message(Model& m) {
     const bool defer_for_retrieval = !proactive_probe.empty();
     Cmd launch;
     if (defer_for_retrieval) {
-        m.s.status       = "retrieving context\xE2\x80\xA6";   // …
-        m.s.status_until = {};   // sticky until the block lands
+        m.s.hold_status("retrieving context\xE2\x80\xA6",   // …
+                        StreamState::StatusHold::Retrieval);
         const std::uint64_t rid = ++m.s.retrieval_seq;
         if (auto* c = active_ctx(m.s.phase)) c->awaiting_retrieval = rid;
         // The launch is issued by the ProactiveContextReady handler once the

@@ -2367,8 +2367,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                                     c.retry = retry::Scheduled{};
                                 }))
                             return Cmd::none();
-                        m.s.status = "forking \xc2\xb7 trimming to fit…";
-                        m.s.status_until = {};
+                        m.s.hold_status("forking \xc2\xb7 trimming to fit…",
+                                        StreamState::StatusHold::Compacting);
                         return Cmd::after(std::chrono::milliseconds{100},
                                                 Msg{RetryStream{}});
                     }
@@ -2954,8 +2954,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     placeholder.role = Role::Assistant;
                     m.d.current.messages.push_back(std::move(placeholder));
                     m.s.oauth_refresh_in_flight = true;
-                    m.s.status = "auth expired \xE2\x80\x94 refreshing token\xE2\x80\xA6";
-                    m.s.status_until = {};
+                    m.s.hold_status("auth expired \xE2\x80\x94 refreshing token\xE2\x80\xA6",
+                                    StreamState::StatusHold::AuthRefresh);
                     auto refresh_cmd = cmd::refresh_oauth_for_401();
                     // No force_redraw needed: the StreamingMarkdown
                     // pre-settle above already locks the message's

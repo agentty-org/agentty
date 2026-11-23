@@ -925,9 +925,52 @@ struct StreamState {
     // transitioning to Idle, so the toast must outlive the ctx.
     std::chrono::steady_clock::time_point status_until{};
 
-    // True iff `status` is set AND either has no expiry or hasn't expired yet.
+    // What a STICKY in-progress status ("compacting context…", "refreshing
+    // OAuth token…") is waiting on. Such a line has no expiry, so the only
+    // thing that ever cleared it was the one handler that finished the work —
+    // and any path that finished it differently (a refresh that turned out
+    // not to be due, a compaction torn down by an error) left it on screen
+    // for the rest of the session: the retry banner's bug in another shirt.
+    //
+    // Set with hold_status(); the line then stands exactly as long as its
+    // flag does. Bound to the TEXT it was set with, so any later write to
+    // `status` releases the hold without having to know it exists.
+    enum class StatusHold : std::uint8_t {
+        None, Compacting, AuthRefresh, Rewind, Retrieval, SelfUpdate,
+    };
+    StatusHold  status_hold = StatusHold::None;
+    std::string status_hold_text;
+
+    void hold_status(std::string text, StatusHold h) {
+        status           = std::move(text);
+        status_until     = {};
+        status_hold      = h;
+        status_hold_text = status;
+    }
+
+    // True once the work a held status describes is over.
+    [[nodiscard]] bool status_hold_released() const noexcept {
+        if (status_hold == StatusHold::None || status != status_hold_text)
+            return false;
+        switch (status_hold) {
+            case StatusHold::None:        return false;
+            case StatusHold::Compacting:  return !compacting;
+            case StatusHold::AuthRefresh: return !oauth_refresh_in_flight;
+            case StatusHold::Rewind:      return !thread_loading;
+            case StatusHold::SelfUpdate:  return !update_in_flight;
+            case StatusHold::Retrieval: {
+                const auto* a = active_ctx(phase);
+                return !a || a->awaiting_retrieval == 0;
+            }
+        }
+        return false;
+    }
+
+    // True iff `status` is set, inside its TTL (or has none), and — for a
+    // held status — the work it describes is still going.
     [[nodiscard]] bool status_active(std::chrono::steady_clock::time_point now) const noexcept {
         if (status.empty()) return false;
+        if (status_hold_released()) return false;
         if (status_until.time_since_epoch().count() == 0) return true;
         return now < status_until;
     }

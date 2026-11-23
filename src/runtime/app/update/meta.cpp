@@ -162,8 +162,8 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             ctx.last_event_at = now;
             m.s.phase     = phase::Streaming{std::move(ctx)};
             m.s.compacting = true;
-            m.s.status      = "compacting context\xe2\x80\xa6";   // …
-            m.s.status_until = {};   // sticky until compaction completes
+            m.s.hold_status("compacting context\xe2\x80\xa6",   // …
+                            StreamState::StatusHold::Compacting);
             return cmd::launch_stream(m);
         },
 
@@ -305,8 +305,8 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             // so no message can land between the index computed at
             // CheckpointRestored time and the truncation.
             m.s.thread_loading = true;
-            m.s.status         = "rewinding to checkpoint\xe2\x80\xa6";
-            m.s.status_until   = {};
+            m.s.hold_status("rewinding to checkpoint\xe2\x80\xa6",
+                            StreamState::StatusHold::Rewind);
             // Isolated worker: git checkout-index on a large snapshot can
             // block for seconds; never on the shared BG pool.
             auto cmd = Cmd::task_isolated(
@@ -1108,18 +1108,18 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
                 std::snprintf(buf, sizeof buf, "%.1f", double(b) / (1024.0 * 1024.0));
                 return std::string{buf};
             };
+            std::string line;
             if (e.total > 0) {
                 const int pct = int((e.got * 100) / e.total);
-                m.s.status = "\xe2\xac\x86 downloading agentty "
-                           + mib(e.got) + " / " + mib(e.total) + " MiB ("
-                           + std::to_string(pct) + "%)";
+                line = "\xe2\xac\x86 downloading agentty "
+                     + mib(e.got) + " / " + mib(e.total) + " MiB ("
+                     + std::to_string(pct) + "%)";
             } else {
                 // No Content-Length: show what we have rather than a
                 // percentage we would have to invent.
-                m.s.status = "\xe2\xac\x86 downloading agentty "
-                           + mib(e.got) + " MiB";
+                line = "\xe2\xac\x86 downloading agentty " + mib(e.got) + " MiB";
             }
-            m.s.status_until = {};
+            m.s.hold_status(std::move(line), StreamState::StatusHold::SelfUpdate);
             return Cmd::none();
         },
         [&](UpdateApplied& e) -> Cmd {

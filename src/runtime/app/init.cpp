@@ -460,8 +460,8 @@ std::pair<Model, Cmd> init(const LaunchFlags& flags) {
     // can't fire a stream with the stale auth_header still in Deps.
     if (auto refresh = auth::take_pending_refresh()) {
         m.s.oauth_refresh_in_flight = true;
-        m.s.status = "refreshing OAuth token…";
-        m.s.status_until = {};
+        m.s.hold_status("refreshing OAuth token…",
+                        StreamState::StatusHold::AuthRefresh);
         cmds.push_back(cmd::refresh_oauth(std::move(*refresh)));
     }
 

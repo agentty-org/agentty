@@ -319,6 +319,9 @@ struct AgenttyApp {
         // ── Session / phase.
         mix(static_cast<std::uint64_t>(m.s.phase.index()));
         mix_str(m.s.status);
+        // A held status vanishes when its flag drops, with no write to
+        // `status` — hash the verdict so that fold repaints.
+        mix(m.s.status_hold_released() ? 1ULL : 0ULL);
         // Compaction summary streams into an off-transcript buffer; the
         // activity tape narrates its bytes live (conversation.cpp →
         // Config::stream). Size is the right term: every delta grows it,

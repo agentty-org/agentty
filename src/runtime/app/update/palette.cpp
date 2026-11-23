@@ -123,8 +123,8 @@ template <class T, class V>
                 return Cmd::none();
             m.s.update_in_flight = true;
             std::string v = m.s.update_latest;
-            m.s.status = "\xe2\xac\x86 downloading agentty v" + v + "\xe2\x80\xa6";
-            m.s.status_until = {};
+            m.s.hold_status("\xe2\xac\x86 downloading agentty v" + v + "\xe2\x80\xa6",
+                            StreamState::StatusHold::SelfUpdate);
             return cmd::perform_self_update(std::move(v));
         });
         add(Command::Quit,             emit<Quit>());
