@@ -855,8 +855,13 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
             // works across retries within the turn.
             if (!reschedule_streaming(m.s.phase, [](phase::Active&) {}))
                 return Cmd::none();   // late event from Idle: no-op
-            m.s.status = "retrying (upstream cut off)…";
-            return cmd::launch_stream(m);
+            m.s.status = "retrying (upstream cut off)\xe2\x80\xa6";
+            // Never left standing: the next real event clears it, and if none
+            // comes the toast lapses anyway rather than outliving the retry.
+            m.s.status_until = m.now + std::chrono::seconds{8};
+            return Cmd::batch(cmd::launch_stream(m),
+                              Cmd::after(std::chrono::milliseconds{8050},
+                                         Msg{ClearStatus{m.s.status_until}}));
         }
     }
 
@@ -1219,8 +1224,37 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
 // Every event handler bumps `last_event_at` so the Tick-based stall watchdog
 // can tell "stream is alive but quiet" from "stream is stalled."
 
+namespace {
+// The statuses that mean "the stream is failing and being retried".
+[[nodiscard]] bool is_retry_status(std::string_view s) noexcept {
+    return s.starts_with("retrying") || s.find("retrying in") != std::string_view::npos;
+}
+}  // namespace
+
 Cmd stream_update(Model& m, msg::StreamMsg sm) {
     using maya::overload;
+
+    // A retry banner ("retrying (upstream cut off)…", "transient — retrying
+    // in …", "rate limit — retrying …") says the stream is NOT working. The
+    // first event proving it is — text, thinking, a tool call, the end of the
+    // turn — retires it. This used to happen only in StreamStarted, which the
+    // OpenAI-compatible transport never sends, so on OpenCode Go, OpenRouter
+    // and every custom host the banner stayed up for the rest of the session
+    // after one successful retry.
+    {
+        const bool progress =
+            std::holds_alternative<StreamTextDelta>(sm)
+            || std::holds_alternative<StreamThinkingDelta>(sm)
+            || std::holds_alternative<StreamReasoning>(sm)
+            || std::holds_alternative<StreamToolUseStart>(sm)
+            || std::holds_alternative<StreamToolUseDelta>(sm)
+            || std::holds_alternative<StreamToolUseSnapshot>(sm)
+            || std::holds_alternative<StreamFinished>(sm);
+        if (progress && is_retry_status(m.s.status)) {
+            m.s.status.clear();
+            m.s.status_until = {};
+        }
+    }
 
     // Every provider addresses tool stream updates by stable ToolCallId. This
     // is the canonical assembler boundary: wire adapters may deliver append

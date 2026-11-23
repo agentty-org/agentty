@@ -9,6 +9,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   reports its cache only in its own `usage.opencode.tokens` (cache_read,
   cache_write_5m/1h), not in OpenAI's `prompt_tokens_details`, so agentty
   saw no cache at all and hid the CACHE gauge. It is read now.
+- **"retrying (upstream cut off)…" no longer sticks.** On OpenAI-style
+  providers (OpenCode Go, OpenRouter, custom hosts) one retried request left
+  the banner up for the rest of the session, however well things went after.
+  It now clears as soon as the retried stream produces anything, and lapses
+  on its own after a few seconds regardless.
 
 ## [0.9.62] - 2026-11-22
 

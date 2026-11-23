@@ -65,6 +65,26 @@ TEST_CASE("keep retrying: on keeps retrying a 503, and says so") {
     CHECK(m.s.status.find("until Esc") != std::string::npos);
 }
 
+TEST_CASE("retry banner: gone once the stream works, even with no StreamStarted") {
+    // The OpenAI-compatible transport (OpenCode Go, OpenRouter, custom hosts)
+    // never sends StreamStarted, which was the only thing that cleared the
+    // banner: one retry left "retrying …" up for the rest of the session.
+    auto m = streaming(false);
+    m = fail(std::move(m), "HTTP 503: service unavailable", 503);
+    REQUIRE(m.s.is_streaming());
+    REQUIRE(m.s.status.find("retrying") != std::string::npos);
+    auto [next, cmd] = agentty::app::update(
+        std::move(m), A::Msg{A::StreamTextDelta{"hello"}});
+    (void)cmd;
+    CHECK(next.s.status.empty());
+    // An unrelated toast is left alone.
+    next.s.status = "context compacted";
+    auto [after, c2] = agentty::app::update(
+        std::move(next), A::Msg{A::StreamTextDelta{" there"}});
+    (void)c2;
+    CHECK(after.s.status == "context compacted");
+}
+
 TEST_CASE("keep retrying: on still stops on errors retrying can't fix") {
     auto m = streaming(true);
     m = fail(std::move(m), "HTTP 404: model not found", 404);
