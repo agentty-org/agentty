@@ -4,7 +4,24 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **A message in the status bar no longer hides the gauges.** Toasts used to
+  take over the whole row, so the context and cache gauges disappeared for
+  every "copied to clipboard" and for as long as any message stood. The
+  message now sits on the left and the gauges stay on the right. On a
+  terminal too narrow for both, the message wins.
+- **Retry countdowns update live.** "retrying in 21s" counts down to the
+  next attempt, then shows "retrying now" while it connects, instead of
+  holding the first number for the whole wait.
+- **Banner colours match what happened.** Rate-limit retries are amber,
+  not the calm blue they had been painted (the line read "rate_limit —",
+  and the colour check missed it; it now reads "rate limited —").
+  "giving up after …", "could not …" and "… failed" are red.
+
 ### Fixed
+- **A retry message can't outlive its turn.** When the turn ends, any
+  "retrying …" line goes with it. That includes "reasoning used the whole
+  budget · retrying with less…", which nothing had ever cleared.
 - **OpenCode Go and Zen show the cache in the status bar.** OpenCode
   reports its cache only in its own `usage.opencode.tokens` (cache_read,
   cache_write_5m/1h), not in OpenAI's `prompt_tokens_details`, so agentty

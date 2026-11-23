@@ -56,6 +56,28 @@ struct Scheduled  {};
 } // namespace retry
 using RetryState = std::variant<retry::Fresh, retry::StallFired, retry::Scheduled>;
 
+// True for a status line that says "this turn is failing and being retried":
+// "retrying (upstream cut off)…", "transient — retrying in 5s (attempt 2/6)…",
+// "rate limited — retrying in …", "compacting — retrying in …", "reasoning
+// used the whole budget · retrying with less…".
+//
+// ONE definition, because three readers must agree on it: the reducer that
+// retires the banner on the first sign of progress, the view that tints it
+// amber, and the view that hides it once the turn is over. They each had
+// their own prefix list and drifted — "rate_limit — …" missed the view's
+// "rate limit" prefix and painted calm blue, and "reasoning … · retrying
+// with less" matched neither, so nothing ever cleared it.
+//
+// Anchored on the joint, not the word: "keep retrying: on" is a settings
+// toast, not a retry.
+[[nodiscard]] constexpr bool status_is_retry(std::string_view s) noexcept {
+    using namespace std::string_view_literals;
+    return s.starts_with("retrying"sv)
+        || s.find("\xe2\x80\x94 retrying"sv) != std::string_view::npos   // "— retrying"
+        || s.find("\xc2\xb7 retrying"sv)     != std::string_view::npos   // "· retrying"
+        || s.find("- retrying"sv)            != std::string_view::npos;
+}
+
 namespace phase {
 
 // Per-turn streaming context: alive whenever the request lifecycle is
@@ -157,6 +179,12 @@ struct Active {
 
     // Retry/stall machine state — see RetryState above.
     RetryState retry = retry::Fresh{};
+    // When a Scheduled retry fires (now + backoff, stamped where it is
+    // scheduled). Lets the status bar count DOWN to it live — "retrying in
+    // 21s" frozen on screen for 21 seconds reads like a hang, a number that
+    // ticks reads like a plan. Meaningful only while `retry` is Scheduled;
+    // epoch = no deadline known (the view then keeps the text as written).
+    std::chrono::steady_clock::time_point retry_at{};
 
     // Nonzero while this turn's launch waits on a deferred retrieval; only a
     // ProactiveContextReady with this id may launch it.

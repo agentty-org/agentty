@@ -441,7 +441,7 @@ TEST_CASE("native: no widget anywhere paints truecolor") {
     // classified from the status TEXT, so drive it the way the app does
     // rather than setting the enum behind the classifier's back.
     for (const char* status : {"error: the request failed",
-                              "retrying (upstream cut off)",
+                              "cannot rewind while the agent is working",
                               "indexing the workspace"}) {
         m.s.status = status;
         m.s.status_until = {};   // no expiry, so status_active() is true
@@ -605,7 +605,7 @@ TEST_CASE("native: no text is painted in its own background colour") {
 
     // ...and the status banner, whose filled band had the same bug.
     for (const char* status : {"error: the request failed",
-                              "retrying (upstream cut off)",
+                              "cannot rewind while the agent is working",
                               "indexing the workspace"}) {
         m.s.status = status;
         m.s.status_until = {};

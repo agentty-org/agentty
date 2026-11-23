@@ -71,7 +71,7 @@ set(_AGENTTY_CONSOLIDATED
     theme_discipline_test
     key_routing_test
     native_visibility_test
-    palette_nav_test panel_test panel_nav_test status_bar_cache_test
+    palette_nav_test panel_test panel_nav_test status_bar_cache_test status_banner_test
     appearance_rows_test
     issue37_terminal_respect_test
     param_tag_repair_test shell_cmd_alias_test sandbox_escape_test sandbox_pane_test sandbox_broker_test handoff_gate_test spawn_work_budget_test handoff_shell_test scope_test table_render_test

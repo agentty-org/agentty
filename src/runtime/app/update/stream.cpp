@@ -1225,9 +1225,10 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
 // can tell "stream is alive but quiet" from "stream is stalled."
 
 namespace {
-// The statuses that mean "the stream is failing and being retried".
+// The statuses that mean "the stream is failing and being retried" -- the
+// one definition the view shares (domain/session.hpp).
 [[nodiscard]] bool is_retry_status(std::string_view s) noexcept {
-    return s.starts_with("retrying") || s.find("retrying in") != std::string_view::npos;
+    return status_is_retry(s);
 }
 }  // namespace
 
@@ -2286,7 +2287,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     // compacting" is already on the banner; we just
                     // append the retry hint so the user knows the
                     // operation is still alive, not silently wedged.
-                    m.s.status = "compacting — retrying in " + std::to_string(secs) + "s";
+                    m.s.status = "compacting — retrying in " + std::to_string(secs) + "s…";
                     m.s.status_until = m.now
                                      + delay + std::chrono::milliseconds{1500};
                     // Reset only the streamed bytes — keep `compacting`
@@ -2299,6 +2300,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                             c.last_failure_at   = m.now;
                             ++c.no_progress_failures;   // see the latch above
                             c.retry             = retry::Scheduled{};
+                            c.retry_at          = m.now + delay;
                         }))
                         return Cmd::none();
                     return Cmd::after(delay, Msg{RetryStream{}});
@@ -3065,7 +3067,10 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // The attempt counter shown to the user reflects whichever
                 // budget actually gates this failure.
                 const int shown_attempt = mid_stream ? mid_prior : prior_transient;
-                m.s.status = std::string{provider::to_string(klass)}
+                // The class as a word a person says: to_string() is the log
+                // key ("rate_limit"), and the underscore leaked onto screen.
+                m.s.status = std::string{klass == provider::ErrorClass::RateLimit
+                                             ? "rate limited" : "transient"}
                            + " — retrying in " + std::to_string(secs) + "s"
                            + (keep_retrying
                                   ? " (attempt " + std::to_string(shown_attempt + 1)
@@ -3082,6 +3087,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                         // model output (see StreamTextDelta / ToolUseStart).
                         ++c.no_progress_failures;
                         c.retry             = retry::Scheduled{};
+                        c.retry_at          = m.now + delay;
                     }))
                     return Cmd::none();
                 if (last) {
@@ -3220,7 +3226,10 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // nothing. Otherwise transition retry back to Fresh on
             // the in-flight ctx so the freshly-launched stream's own
             // errors flow through the normal classifier path.
-            if (auto* a = active_ctx(m.s.phase)) a->retry = retry::Fresh{};
+            if (auto* a = active_ctx(m.s.phase)) {
+                a->retry    = retry::Fresh{};
+                a->retry_at = {};
+            }
             if (m.s.is_idle()) return Cmd::none();
             return cmd::launch_stream(m);
         },
