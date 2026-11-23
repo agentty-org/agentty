@@ -15,6 +15,7 @@
 #include <maya/print.hpp>
 
 #include "agentty/runtime/model.hpp"
+#include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include "agentty/runtime/view/status_bar/status_banner.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 
@@ -92,6 +93,25 @@ TEST_CASE("status banner: severity reads off what happened") {
     CHECK(kind("auth expired \xe2\x80\x94 refreshing token\xe2\x80\xa6") == Kind::Warn);
     CHECK(kind("cannot rewind while the agent is working") == Kind::Warn);
     CHECK(kind("copied to clipboard") == Kind::Info);
+}
+
+TEST_CASE("status bar: the phase chip counts down a scheduled retry") {
+    auto m = with_status("", /*streaming=*/true);
+    auto* a = A::active_ctx(m.s.phase);
+    REQUIRE(a != nullptr);
+    a->retry    = A::retry::Scheduled{};
+    a->retry_at = maya::anim_now() + std::chrono::seconds{12};
+    auto chip = A::ui::phase_chip_config(m);
+    CHECK(chip.verb == "retry 12s");
+    CHECK(chip.elapsed_secs < 0.0f);   // one clock, not two
+
+    a->retry_at = maya::anim_now() + std::chrono::seconds{150};
+    chip = A::ui::phase_chip_config(m);
+    CHECK(chip.verb == "retry 2m30");
+    CHECK(chip.verb.size() <= 10);
+
+    a->retry_at = {};                  // no deadline known: the plain verb
+    CHECK(A::ui::phase_chip_config(m).verb == "retrying");
 }
 
 TEST_CASE("status bar: a toast keeps the context and cache gauges") {

@@ -1,6 +1,7 @@
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include <maya/core/anim_clock.hpp>   // anim_now: the frame clock
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <string_view>
@@ -37,6 +38,15 @@ namespace agentty::ui {
 // ─────────────────────────────────────────────────────────────────────
 
 namespace {
+
+// "retry 7s" / "retry 1m30" — always within the chip's 10-column verb slot
+// (Retry-After is capped at 600 s upstream, so minutes never pass 2 digits).
+std::string retry_countdown_verb(long long secs) {
+    if (secs < 100) return "retry " + std::to_string(secs) + "s";
+    const long long s = secs % 60;
+    return "retry " + std::to_string(secs / 60) + "m"
+         + (s < 10 ? "0" : "") + std::to_string(s);
+}
 
 // Walk the last assistant message and return the name of the tool
 // call currently in `Running` state, if any.
@@ -106,12 +116,26 @@ maya::PhaseChip::Config phase_chip_config(const Model& m) {
         elapsed   = phase_elapsed;
     }
     // ── 3. retry::Scheduled — exponential backoff between attempts ───
+    // Counts DOWN to the next attempt (Active::retry_at) rather than up
+    // from the turn start: while waiting, the only question is "when does
+    // it try again". The chip outlives the toast — the band is a few
+    // seconds of attention, the chip is the standing answer — so the
+    // countdown lives here too. Elapsed is dropped: two clocks side by
+    // side, one rising and one falling, read as noise.
     else if (m.s.in_scheduled()) {
         glyph     = spinner;
         verb      = "retrying";
         color     = status_warn;
         breathing = true;
         elapsed   = phase_elapsed;
+        if (const auto* a = active_ctx(m.s.phase);
+            a && a->retry_at.time_since_epoch().count() != 0) {
+            const auto left = std::max<long long>(1,
+                std::chrono::ceil<std::chrono::seconds>(
+                    a->retry_at - maya::anim_now()).count());
+            verb    = retry_countdown_verb(left);
+            elapsed = -1.0f;
+        }
     }
     // ── 4. retry::StallFired — 120s silence watchdog tripped ─────────
     else if (m.s.in_stall_fired()) {

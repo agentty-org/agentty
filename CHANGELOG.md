@@ -12,7 +12,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   terminal too narrow for both, the message wins.
 - **Retry countdowns update live.** "retrying in 21s" counts down to the
   next attempt, then shows "retrying now" while it connects, instead of
-  holding the first number for the whole wait.
+  holding the first number for the whole wait. The phase chip counts down
+  too ("retry 12s"), so the wait is visible even after the message fades.
 - **Banner colours match what happened.** Rate-limit retries are amber,
   not the calm blue they had been painted (the line read "rate_limit —",
   and the colour check missed it; it now reads "rate limited —").
