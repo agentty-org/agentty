@@ -4,6 +4,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **OpenCode Go and Zen show the cache in the status bar.** OpenCode
+  reports its cache only in its own `usage.opencode.tokens` (cache_read,
+  cache_write_5m/1h), not in OpenAI's `prompt_tokens_details`, so agentty
+  saw no cache at all and hid the CACHE gauge. It is read now.
+
 ## [0.9.62] - 2026-11-22
 
 ### Added

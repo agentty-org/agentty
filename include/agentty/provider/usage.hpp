@@ -76,6 +76,31 @@ using json = nlohmann::json;
             su.cache_reported = true;
         }
     }
+    // OpenCode (Zen / Go, opencode.ai/inference) bills from its own split in
+    // usage.opencode.tokens: input EXCLUDES cache reads and writes, and the
+    // writes come by lifetime. Its prompt_tokens follows the upstream model,
+    // so it is not trusted to say which way it counted: when this object is
+    // there and the standard field is not, the split is taken from it whole.
+    if (!su.cache_reported && u.contains("opencode") && u["opencode"].is_object()
+        && u["opencode"].contains("tokens") && u["opencode"]["tokens"].is_object()) {
+        const auto& t = u["opencode"]["tokens"];
+        auto num = [&](const char* k) {
+            const auto it = t.find(k);
+            return it != t.end() && it->is_number() ? std::max(it->get<int>(), 0) : 0;
+        };
+        if (t.contains("cache_read") || t.contains("cache_write_5m")
+            || t.contains("cache_write_1h")) {
+            su.cache_reported = true;
+            su.input_tokens                = num("input");
+            su.cache_read_input_tokens     = num("cache_read");
+            su.cache_creation_input_tokens = num("cache_write_5m") + num("cache_write_1h");
+            if (u.contains("completion_tokens_details")
+                && u["completion_tokens_details"].is_object())
+                su.reasoning_output_tokens =
+                    u["completion_tokens_details"].value("reasoning_tokens", 0);
+            return any(su) ? std::optional{su} : std::nullopt;
+        }
+    }
     cached  = std::clamp(cached, 0, prompt);
     written = std::clamp(written, 0, prompt - cached);
     su.input_tokens                = prompt - cached - written;

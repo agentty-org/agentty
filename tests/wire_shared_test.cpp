@@ -224,6 +224,29 @@ TEST_CASE("usage extractors") {
         auto su = usage::from_openai(json::parse(R"({"prompt_tokens":5,"completion_tokens":1})"));
         CHECK(su.has_value() && su->cache_read_input_tokens == 0);
     }
+    // OpenCode Go / Zen: the cache only in usage.opencode.tokens, with input
+    // already excluding it. Taken whole, so the status bar's CACHE shows.
+    {
+        auto su = usage::from_openai(json::parse(R"({"prompt_tokens":9200,
+            "completion_tokens":300,"cost":0,
+            "opencode":{"billing_source":"go","tokens":{"input":1200,"output":300,
+              "reasoning":120,"cache_read":8000,"cache_write_5m":0,"cache_write_1h":0}}})"));
+        REQUIRE(su.has_value());
+        CHECK(su->cache_reported);
+        CHECK(su->input_tokens == 1200);
+        CHECK(su->cache_read_input_tokens == 8000);
+        CHECK(su->cache_creation_input_tokens == 0);
+        CHECK(su->output_tokens == 300);
+    }
+    // ...and the standard field still wins when a host sends both.
+    {
+        auto su = usage::from_openai(json::parse(R"({"prompt_tokens":100,
+            "prompt_tokens_details":{"cached_tokens":64},
+            "opencode":{"tokens":{"input":1,"cache_read":99}}})"));
+        REQUIRE(su.has_value());
+        CHECK(su->cache_read_input_tokens == 64);
+        CHECK(su->input_tokens == 36);
+    }
     // All-zero / empty → nullopt (matches the transports' "only sink if
     // non-empty" guard).
     CHECK(!usage::from_openai(json::object()).has_value());
