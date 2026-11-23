@@ -7,6 +7,8 @@
 //     "rate limit" prefix).
 // And the one layout change: the band no longer blanks the gauges.
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "agtest.hpp"
@@ -20,6 +22,7 @@
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include "agentty/runtime/view/status_bar/status_banner.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
+#include "agentty/runtime/view/status_bar/stream_note.hpp"
 
 namespace A = agentty;
 using Kind = maya::StatusBanner::Kind;
@@ -143,6 +146,49 @@ TEST_CASE("status banner: a held status stands exactly as long as its work") {
     // Any later write releases the hold: the new line is not bound to it.
     k.s.status = "context compacted";
     CHECK(k.s.status_active(now));
+}
+
+TEST_CASE("stream note: a waiting retry says why, which try, and drains") {
+    auto m = with_status("", true);
+    auto* a = A::active_ctx(m.s.phase);
+    REQUIRE(a != nullptr);
+    const auto now = maya::anim_now();
+    a->retry           = A::retry::Scheduled{};
+    a->last_failure_at = now - std::chrono::seconds{3};
+    a->retry_at        = now + std::chrono::seconds{7};
+    a->retry_why       = "HTTP 503: service unavailable";
+    a->retry_count     = "2/6";
+    const auto n = A::ui::stream_note_config(m);
+    CHECK(n.text == "HTTP 503: service unavailable \xc2\xb7 2/6");
+    CHECK(n.progress > 0.6f);   // 7 of 10 s left
+    CHECK(n.progress < 0.8f);
+
+    // In the row, beside the chip, with the gauges still there.
+    maya::StatusBar::Config c = A::ui::status_bar_config(m);
+    c.context.used = 50'000;
+    c.context.max  = 200'000;
+    const std::string row = maya::render_to_string(maya::StatusBar{c}.build(), 140);
+    INFO(row);
+    if (std::getenv("AGT_SHOW_ROW")) {
+        std::fputs(row.c_str(), stdout);
+        std::fputs(maya::render_to_string(maya::StatusBar{c}.build(), 80).c_str(), stdout);
+    }
+    CHECK(row.find("retry 7s") != std::string::npos);
+    CHECK(row.find("HTTP 503") != std::string::npos);
+    CHECK(row.find("\xe2\x94\x81") != std::string::npos);   // ━ the bar
+    CHECK(row.find("CTX") != std::string::npos);
+
+    // The attempt fired: no bar, "trying again".
+    a->retry    = A::retry::Fresh{};
+    a->retry_at = {};
+    const auto f = A::ui::stream_note_config(m);
+    CHECK(f.text.find("trying again") != std::string::npos);
+    CHECK(f.progress < 0.0f);
+
+    // A working stream has nothing to explain.
+    a->retry_why.clear();
+    a->first_delta_at = now;
+    CHECK(A::ui::stream_note_config(m).text.empty());
 }
 
 TEST_CASE("status bar: a toast keeps the context and cache gauges") {

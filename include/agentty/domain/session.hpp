@@ -185,6 +185,13 @@ struct Active {
     // ticks reads like a plan. Meaningful only while `retry` is Scheduled;
     // epoch = no deadline known (the view then keeps the text as written).
     std::chrono::steady_clock::time_point retry_at{};
+    // What the stream note narrates about the CURRENT recovery: why it is
+    // retrying ("HTTP 503: service unavailable", "upstream cut off") and
+    // which attempt this is ("2/6", "3 · until Esc"). Written where a
+    // retry is scheduled, cleared by the first real progress. The backoff
+    // span is retry_at - last_failure_at (both stamped together).
+    std::string retry_why;
+    std::string retry_count;
 
     // Nonzero while this turn's launch waits on a deferred retrieval; only a
     // ProactiveContextReady with this id may launch it.

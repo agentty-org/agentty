@@ -5,6 +5,7 @@
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
 #include "agentty/runtime/view/status_bar/status_banner.hpp"
+#include "agentty/runtime/view/status_bar/stream_note.hpp"
 #include "agentty/runtime/view/status_bar/title_chip.hpp"
 #include "agentty/runtime/view/status_bar/token_stream_sparkline.hpp"
 
@@ -26,6 +27,7 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
     cfg.context       = context_gauge_config(m);
     cfg.cache         = cache_gauge_config(m);
     cfg.status_banner = status_banner_config(m);
+    cfg.note          = stream_note_config(m);
     // Shortcuts row retired — the welcome screen carries the full
     // keybinding map. While a thread is active the user has already
     // internalised the bindings, and the status bar's middle row
@@ -87,6 +89,14 @@ maya::StatusBar::Config status_bar_config(const Model& m) {
         k.add(cfg.status_banner.text)
          .add(static_cast<std::uint64_t>(cfg.status_banner.is_error))
          .add(static_cast<std::uint64_t>(cfg.status_banner.kind));
+        // stream note — the bar at its drawn resolution (half cells), so
+        // a draining wait repaints 20 times, not every frame
+        k.add(cfg.note.text)
+         .add(cfg.note.tail)
+         .add(static_cast<std::uint64_t>(cfg.note.tone.kind()))
+         .add(static_cast<std::uint64_t>(cfg.note.tone.raw_r()))
+         .add(static_cast<std::uint64_t>(cfg.note.progress < 0.0f
+                 ? 999 : static_cast<int>(cfg.note.progress * 20.0f + 0.5f)));
         cfg.content_key = k.build().hash();
     }
     return cfg;

@@ -14,6 +14,7 @@
 #include <nlohmann/json_fwd.hpp>  // only json declarations here; full type lives in the .cpp
 
 #include "agentty/runtime/cmd.hpp"
+#include "agentty/provider/error_class.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/domain/entitlement.hpp"
 #include "agentty/runtime/msg.hpp"
@@ -397,6 +398,9 @@ Cmd trim_frozen_if_oversized(Model& m);
 // even registered.
 Cmd set_status_toast(Model& m, std::string text,
                                 std::chrono::seconds ttl = std::chrono::seconds{3});
+
+// One line of "why is this retrying" for the stream note (update/stream.cpp).
+std::string retry_reason(provider::ErrorClass klass, std::string_view msg);
 
 // ── update/stream.cpp helpers ────────────────────────────────────────────
 // (declared at module scope above — `update_stream_preview`, `salvage_args`,

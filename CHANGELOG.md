@@ -5,6 +5,17 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **The activity bar explains what the stream is going through.** Retries,
+  stalls and slow starts are shown inline next to the phase indicator
+  instead of in a banner that covered the bar:
+  `⠋ retry 7s   HTTP 503: service unavailable · 2/6  ━━━━━━━───`.
+  It shows the provider's reason and which attempt this is, and the bar runs
+  down until the next try. After that it reads "… · trying again" and goes
+  away at the first token. A stalled stream shows "no data for 47s ·
+  reconnecting". A slow first token shows "waiting for the first token", or
+  "the model is reading the prompt" on a local model. A working stream shows
+  nothing extra; the token chart says enough. On a narrow terminal the token
+  counts drop before the reason does.
 - **A message in the status bar no longer hides the gauges.** Toasts used to
   take over the whole row, so the context and cache gauges disappeared for
   every "copied to clipboard" and for as long as any message stood. The

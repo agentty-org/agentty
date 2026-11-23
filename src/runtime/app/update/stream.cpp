@@ -610,9 +610,12 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
                 m.ui.view_cache.drop(m.d.current.id, MessageId{last.id.value + "#r"});
                 m.d.current.messages.pop_back();
                 m.d.current.messages.push_back(Message{.role = Role::Assistant});
-                if (!reschedule_streaming(m.s.phase, [](phase::Active&) {}))
+                if (!reschedule_streaming(m.s.phase, [](phase::Active& c) {
+                        c.retry_why   = "reasoning used the whole budget \xc2\xb7 "
+                                        "asking again with less";
+                        c.retry_count.clear();
+                    }))
                     return Cmd::none();
-                m.s.status = "reasoning used the whole budget \xc2\xb7 retrying with less\xe2\x80\xa6";
                 return cmd::launch_stream(m);
             }
         }
@@ -855,13 +858,12 @@ Cmd finalize_turn(Model& m, StopReason stop_reason) {
             // works across retries within the turn.
             if (!reschedule_streaming(m.s.phase, [](phase::Active&) {}))
                 return Cmd::none();   // late event from Idle: no-op
-            m.s.status = "retrying (upstream cut off)\xe2\x80\xa6";
-            // Never left standing: the next real event clears it, and if none
-            // comes the toast lapses anyway rather than outliving the retry.
-            m.s.status_until = m.now + std::chrono::seconds{8};
-            return Cmd::batch(cmd::launch_stream(m),
-                              Cmd::after(std::chrono::milliseconds{8050},
-                                         Msg{ClearStatus{m.s.status_until}}));
+            // Narrated by the stream note until the first byte of the new
+            // attempt clears it (stream_update's progress block).
+            a->retry_why   = "upstream cut off mid-reply";
+            a->retry_count = std::to_string(a->truncation_retries) + "/"
+                           + std::to_string(kMaxTruncationRetries);
+            return cmd::launch_stream(m);
         }
     }
 
@@ -1232,6 +1234,22 @@ namespace {
 }
 }  // namespace
 
+// The stream note's "why": the provider's own sentence, trimmed to one line
+// and shorn of the transport's framing. "HTTP 503: service unavailable"
+// stays as is (the code is the useful part); a JSON body or a stack of
+// "error: error:" prefixes does not reach the screen.
+std::string retry_reason(provider::ErrorClass klass, std::string_view msg) {
+    std::string_view s = msg;
+    while (s.starts_with("error: ")) s.remove_prefix(7);
+    if (auto nl = s.find('\n'); nl != std::string_view::npos) s = s.substr(0, nl);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '.')) s.remove_suffix(1);
+    if (s.empty() || s.front() == '{')
+        return klass == provider::ErrorClass::RateLimit ? "rate limited"
+                                                        : "provider error";
+    if (s.size() > 80) return std::string{s.substr(0, 79)} + "\xe2\x80\xa6";
+    return std::string{s};
+}
+
 Cmd stream_update(Model& m, msg::StreamMsg sm) {
     using maya::overload;
 
@@ -1255,6 +1273,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             m.s.status.clear();
             m.s.status_until = {};
         }
+        if (progress)
+            if (auto* a = active_ctx(m.s.phase); a && !a->retry_why.empty()) {
+                a->retry_why.clear();
+                a->retry_count.clear();
+            }
     }
 
     // Every provider addresses tool stream updates by stable ToolCallId. This
@@ -3067,18 +3090,16 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // The attempt counter shown to the user reflects whichever
                 // budget actually gates this failure.
                 const int shown_attempt = mid_stream ? mid_prior : prior_transient;
-                // The class as a word a person says: to_string() is the log
-                // key ("rate_limit"), and the underscore leaked onto screen.
-                m.s.status = std::string{klass == provider::ErrorClass::RateLimit
-                                             ? "rate limited" : "transient"}
-                           + " — retrying in " + std::to_string(secs) + "s"
-                           + (keep_retrying
-                                  ? " (attempt " + std::to_string(shown_attempt + 1)
-                                        + ", until Esc)…"
-                                  : " (attempt " + std::to_string(shown_attempt + 1)
-                                        + "/" + std::to_string(retry_cap) + ")…");
-                m.s.status_until = m.now
-                                 + delay + std::chrono::milliseconds{1500};
+                (void)secs;   // the chip counts down from retry_at instead
+                // Narrated in the activity row (stream note), not the toast:
+                // the toast took the row's left, hiding the very chip that
+                // counts down to the retry. A stale retry toast from before
+                // this one goes too.
+                if (status_is_retry(m.s.status)) { m.s.status.clear(); m.s.status_until = {}; }
+                std::string why = retry_reason(klass, e.message);
+                std::string count = keep_retrying
+                    ? std::to_string(shown_attempt + 1) + " \xc2\xb7 until Esc"
+                    : std::to_string(shown_attempt + 1) + "/" + std::to_string(retry_cap);
                 if (!reschedule_streaming(m.s.phase, [&](phase::Active& c) {
                         c.transient_retries = attempt + 1;
                         if (mid_stream) c.mid_stream_failures = mid_prior + 1;
@@ -3088,6 +3109,8 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                         ++c.no_progress_failures;
                         c.retry             = retry::Scheduled{};
                         c.retry_at          = m.now + delay;
+                        c.retry_why         = std::move(why);
+                        c.retry_count       = std::move(count);
                     }))
                     return Cmd::none();
                 if (last) {

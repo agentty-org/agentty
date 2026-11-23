@@ -62,7 +62,10 @@ TEST_CASE("keep retrying: on keeps retrying a 503, and says so") {
         m = fail(std::move(m), "HTTP 503: service unavailable", 503);
         REQUIRE(m.s.is_streaming());
     }
-    CHECK(m.s.status.find("until Esc") != std::string::npos);
+    const auto* a = A::active_ctx(m.s.phase);
+    REQUIRE(a != nullptr);
+    CHECK(a->retry_count.find("until Esc") != std::string::npos);
+    CHECK(a->retry_why == "HTTP 503: service unavailable");
 }
 
 TEST_CASE("retry banner: gone once the stream works, even with no StreamStarted") {
@@ -72,11 +75,15 @@ TEST_CASE("retry banner: gone once the stream works, even with no StreamStarted"
     auto m = streaming(false);
     m = fail(std::move(m), "HTTP 503: service unavailable", 503);
     REQUIRE(m.s.is_streaming());
-    REQUIRE(m.s.status.find("retrying") != std::string::npos);
+    // Narrated in the activity row now, so the toast stays free.
+    REQUIRE(!A::active_ctx(m.s.phase)->retry_why.empty());
+    CHECK(!A::status_is_retry(m.s.status));
+    m.s.status = "retrying (stale)";   // and a leftover toast still clears
     auto [next, cmd] = agentty::app::update(
         std::move(m), A::Msg{A::StreamTextDelta{"hello"}});
     (void)cmd;
     CHECK(next.s.status.empty());
+    CHECK(A::active_ctx(next.s.phase)->retry_why.empty());
     // An unrelated toast is left alone.
     next.s.status = "context compacted";
     auto [after, c2] = agentty::app::update(
