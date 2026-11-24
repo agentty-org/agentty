@@ -932,4 +932,4 @@ std::uint64_t Proxy::served() const noexcept {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#endif  // (__linux__ || __APPLE__) && !AGENTTY_NETPROXY_PARSERS_ONLY
+#endif  // (MAYA_OS_LINUX || MAYA_OS_APPLE) && !AGENTTY_NETPROXY_PARSERS_ONLY

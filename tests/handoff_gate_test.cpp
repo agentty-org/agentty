@@ -451,7 +451,7 @@ TEST_CASE("handoff: removing or moving the own config aside is refused") {
     CHECK(hg::check_own_removal((own.dir.parent_path() / "unrelated-xyz").string(),
                                 "remove").allowed);
 }
-#endif  // !_WIN32
+#endif  // !MAYA_OS_WINDOWS
 
 TEST_CASE("handoff: another agent's server list is a handoff, not ordinary") {
     Fresh fresh;

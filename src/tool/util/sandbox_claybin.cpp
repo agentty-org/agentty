@@ -1100,7 +1100,7 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
                       {}, stdin_fd);
 }
 
-#else  // __linux__
+#else  // MAYA_OS_LINUX
 
 bool available() {
     // The same question the bwrap probe asks, and for the same reason: a
@@ -1488,8 +1488,8 @@ SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd, int stdo
     return spawn_argv(p, {"/bin/sh", "-c", shell_cmd}, stdout_fd, stderr_fd, {}, stdin_fd);
 }
 
-#endif  // __APPLE__ / __linux__
+#endif  // MAYA_OS_APPLE / MAYA_OS_LINUX
 
 }  // namespace agentty::tools::util::sandbox::claybin_backend
 
-#endif  // __linux__ || __APPLE__
+#endif  // MAYA_OS_LINUX || MAYA_OS_APPLE

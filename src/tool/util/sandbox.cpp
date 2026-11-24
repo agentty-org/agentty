@@ -151,7 +151,7 @@ maya::published<const std::string> g_degraded_reason;
     return r.started && r.exit_code == 0;
 }
 
-#endif // __APPLE__
+#endif // MAYA_OS_APPLE
 
 #if MAYA_OS_LINUX
 
@@ -225,7 +225,7 @@ maya::published<const std::string> g_degraded_reason;
 // Visible to BOTH platform arms, because the claybin backend consumes them on
 // Linux and on macOS alike. That is the point of the list: one boundary
 // definition, extended rather than paraphrased, however many backends read it.
-#endif  // __linux__ (reopened below)
+#endif  // MAYA_OS_LINUX (reopened below)
 
 #if MAYA_OS_LINUX || MAYA_OS_APPLE
 
@@ -300,7 +300,7 @@ constexpr const char* kHomeToolSubdirs[] = {
     // read.
     "/.gitconfig", "/.config/git",
 };
-#endif  // __linux__ || __APPLE__
+#endif  // MAYA_OS_LINUX || MAYA_OS_APPLE
 
 // Windows' names for the same three lists, resolved at posture build time:
 // the toolchain and shell live under the system root and Program Files, and
@@ -330,7 +330,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
     "\\.bun\\bin", "\\.deno\\bin",   // Bun / Deno
     "\\.dotnet",                     // .NET
 };
-#endif  // _WIN32
+#endif  // MAYA_OS_WINDOWS
 
 // Back into the per-platform arm the shared read set interrupted.
 #if MAYA_OS_LINUX
@@ -353,7 +353,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
 // Hence the #endif immediately below, closing the Linux arm that opened far
 // above: this one function has to be visible to BOTH the Linux and the macOS
 // run_wrapped(), and the per-platform arm reopens right after it.
-#endif  // __linux__ (reopened below)
+#endif  // MAYA_OS_LINUX (reopened below)
 
 // Below Strict, a JIT command gets W^X lifted or it cannot start at all.
 // Strict (Hardened, Airgapped) keeps the wall and the build fails instead.
@@ -854,7 +854,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     out.kill_tree     = std::move(r.kill_tree);
     return out;
 }
-#endif  // __linux__ || __APPLE__ || _WIN32
+#endif  // MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 
 // Back into the per-platform arm the posture builder interrupted.
 //

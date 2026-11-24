@@ -95,7 +95,7 @@ int spawn_feed_stdin(const std::vector<std::string>& argv, const std::string& in
     const auto r = tools::util::run_child(run);
     return r.started && r.exited ? r.exit_code : -1;
 }
-#endif // !_WIN32
+#endif // !MAYA_OS_WINDOWS
 
 #if MAYA_OS_WINDOWS
 // The credential target name shown in Windows Credential Manager. One item

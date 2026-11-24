@@ -398,7 +398,7 @@ namespace runner_ui {
         });
 }
 
-#else  // _WIN32 — non-interactive fallback via the shared subprocess runner
+#else  // MAYA_OS_WINDOWS — non-interactive fallback via the shared subprocess runner
 
 #include <maya/runtime.hpp>
 

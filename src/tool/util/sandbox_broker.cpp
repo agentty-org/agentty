@@ -220,7 +220,7 @@ struct NsIds { std::int32_t pid = -1, pgid = -1; };
     return out;
 }
 
-#endif  // __linux__
+#endif  // MAYA_OS_LINUX
 
 }  // namespace
 

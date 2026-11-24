@@ -398,9 +398,9 @@ DisplayEnv discover_display() {
     return out;
 }
 
-#endif // __linux__
+#endif // MAYA_OS_LINUX
 
-#endif // !_WIN32
+#endif // !MAYA_OS_WINDOWS
 
 } // namespace
 

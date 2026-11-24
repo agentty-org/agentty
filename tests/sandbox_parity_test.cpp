@@ -182,7 +182,7 @@ TEST_CASE("sandbox: the SHIPPED posture compiles and masks on a no-userns host")
     REQUIRE(net != nullptr);
     CHECK(net->mechanism.find("landlock net") != std::string::npos);
 }
-#endif  // __linux__
+#endif  // MAYA_OS_LINUX
 
 #if MAYA_OS_LINUX
 TEST_CASE("sandbox: a microvm request is REFUSED, never downgraded") {
@@ -246,7 +246,7 @@ TEST_CASE("sandbox: the kernel-isolation gap says whose fault it is") {
     CHECK(report_with(true).find("kvm available") != std::string::npos);
     CHECK(report_with(false).find("no kvm") != std::string::npos);
 }
-#endif  // __linux__
+#endif  // MAYA_OS_LINUX
 
 TEST_CASE("sandbox: claybin is the default, and bwrap is still the fallback") {
     // The default flipped to claybin because the difference is MEASURED, not

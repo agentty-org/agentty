@@ -337,7 +337,7 @@ TEST_CASE("exec: a sandboxed background session gets its brokered syscalls answe
     (*s)->stop();
     CHECK_MESSAGE(out.find("after-kill") != std::string::npos, "the guest got past kill: " << out);
     CHECK_MESSAGE(ended, "and exited on its own");
-#endif  // __linux__
+#endif  // MAYA_OS_LINUX
 }
 
 // ── a session: started here, polled later ───────────────────────────────

@@ -288,4 +288,4 @@ int main() {
     return 1;
 }
 
-#endif // !_WIN32
+#endif // !MAYA_OS_WINDOWS

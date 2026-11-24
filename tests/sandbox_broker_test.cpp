@@ -292,4 +292,4 @@ TEST_CASE("broker feed: concurrent writers do not corrupt it") {
     CHECK(br::blocked_feed().size() <= 64);
 }
 
-#endif  // __linux__
+#endif  // MAYA_OS_LINUX
