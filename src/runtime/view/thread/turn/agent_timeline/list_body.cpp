@@ -103,7 +103,10 @@ public:
             std::string_view row = rows.substr(pos, std::min<std::size_t>(nl - pos, 4096));
             pos = nl + 1;
             // Rows are `path:line:text`; only the text is ever highlighted.
-            if (auto c1 = row.find(':'); c1 != std::string_view::npos)
+            // Skip a Windows drive-letter colon (`C:\...`) in the path.
+            const std::size_t from =
+                (row.size() > 2 && row[1] == ':' && (row[2] == '\\' || row[2] == '/')) ? 2 : 0;
+            if (auto c1 = row.find(':', from); c1 != std::string_view::npos)
                 if (auto c2 = row.find(':', c1 + 1); c2 != std::string_view::npos)
                     row.remove_prefix(c2 + 1);
             try {
