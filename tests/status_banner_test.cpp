@@ -159,7 +159,8 @@ TEST_CASE("stream note: a waiting retry says why, which try, and drains") {
     a->retry_why       = "HTTP 503: service unavailable";
     a->retry_count     = "2/6";
     const auto n = A::ui::stream_note_config(m);
-    CHECK(n.text == "HTTP 503: service unavailable \xc2\xb7 2/6");
+    CHECK(n.text == "HTTP 503: service unavailable");
+    CHECK(n.tail == "2/6");
     CHECK(n.progress > 0.6f);   // 7 of 10 s left
     CHECK(n.progress < 0.8f);
 
@@ -167,6 +168,7 @@ TEST_CASE("stream note: a waiting retry says why, which try, and drains") {
     maya::StatusBar::Config c = A::ui::status_bar_config(m);
     c.context.used = 50'000;
     c.context.max  = 200'000;
+    c.content_key  = 0;
     const std::string row = maya::render_to_string(maya::StatusBar{c}.build(), 140);
     INFO(row);
     if (std::getenv("AGT_SHOW_ROW")) {
@@ -177,6 +179,19 @@ TEST_CASE("stream note: a waiting retry says why, which try, and drains") {
     CHECK(row.find("HTTP 503") != std::string::npos);
     CHECK(row.find("\xe2\x94\x81") != std::string::npos);   // ━ the bar
     CHECK(row.find("CTX") != std::string::npos);
+
+    // No usage yet (the turn never got a reply): the empty "——/200k ———%"
+    // placeholder yields to the note, and at 80 columns the attempt
+    // number survives while the reason is shortened.
+    c.context.used = 0;
+    c.content_key  = 0;   // hand-edited config: don't reuse the cached row
+    const std::string empty = maya::render_to_string(maya::StatusBar{c}.build(), 140);
+    CHECK(empty.find("CTX") == std::string::npos);
+    c.note.text = "HTTP 503: service unavailable (fake upstream, please hold)";
+    const std::string narrow = maya::render_to_string(maya::StatusBar{c}.build(), 60);
+    INFO(narrow);
+    CHECK(narrow.find("2/6") != std::string::npos);
+    CHECK(narrow.find("retry 7s") != std::string::npos);
 
     // The attempt fired: no bar, "trying again".
     a->retry    = A::retry::Fresh{};

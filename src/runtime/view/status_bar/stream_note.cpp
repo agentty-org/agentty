@@ -33,8 +33,10 @@ maya::StreamNote::Config stream_note_config(const Model& m) {
     const auto now = maya::anim_now();
     const auto warn = maya::Color::slot(maya::ThemeSlot::Warning);
 
+    // The attempt number rides in the TAIL: the note truncates its text
+    // from the end, and "2/6" is the part that must survive a narrow row.
     auto with_count = [&](std::string s) {
-        if (!a->retry_count.empty()) s += " \xc2\xb7 " + a->retry_count;
+        cfg.tail = a->retry_count;
         return s;
     };
 
@@ -58,7 +60,7 @@ maya::StreamNote::Config stream_note_config(const Model& m) {
         return cfg;
     }
     if (!a->retry_why.empty()) {
-        cfg.text = with_count(a->retry_why) + " \xc2\xb7 trying again";
+        cfg.text = with_count(a->retry_why + " \xc2\xb7 trying again");
         cfg.tone = warn;
         return cfg;
     }
