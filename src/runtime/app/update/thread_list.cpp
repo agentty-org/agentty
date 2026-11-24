@@ -150,7 +150,10 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{90};
 // to the latest turn and, unless it's cached or already loading, (re)starts
 // one keyed settle timer: holding ↓ keeps replacing it, so only the row
 // you stop on is loaded.
-[[nodiscard]] Cmd sync_peek(Model& m) {
+// `settle`: how long the cursor must rest first. Opening the picker passes 0:
+// the first row is the one Enter most often opens, and there is no held
+// arrow key to debounce yet -- 90 ms of nothing on the fastest path.
+[[nodiscard]] Cmd sync_peek(Model& m, std::chrono::milliseconds settle = kPeekSettle) {
     auto* p = m.ui.panel.get<pn::ThreadList>();
     if (!p) return Cmd::none();
     const int at = picked_thread(m, *p);
@@ -165,7 +168,7 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{90};
     // nothing.
     if (!m.d.ui().thread_preview || cached || m.ui.peek_loading == id.value)
         return Cmd::cancel("thread-peek");
-    return Cmd::after("thread-peek", kPeekSettle, Msg{ThreadPeekSettled{id}});
+    return Cmd::after("thread-peek", settle, Msg{ThreadPeekSettled{id}});
 }
 
 // A pasted or typed piece of a title, flattened to one line: line breaks
@@ -328,7 +331,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             pn::ThreadList fresh{{0}};
             fresh.index = std::max(0, visible_index_of(m, fresh, m.d.current.id));
             m.ui.panel.descend(std::move(fresh));
-            return Cmd::batch(std::move(cmd), sync_peek(m));
+            return Cmd::batch(std::move(cmd), sync_peek(m, std::chrono::milliseconds{0}));
         },
         [&](CloseThreadList) -> Cmd {
             // Esc with a filter clears it first, so a typo never closes the list.
