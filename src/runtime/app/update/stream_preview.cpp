@@ -336,14 +336,22 @@ void update_stream_preview(ToolUse& tc) {
     }
 }
 
-void sync_todo_state_from_args(Model& m, const nlohmann::json& args) {
-    if (!args.is_object()) return;
-    auto it = args.find("todos");
-    if (it == args.end() || !it->is_array() || it->empty()) return;
+namespace {
 
+// The items a todo call's args describe. `closed` = the array is complete;
+// while it streams, its LAST element may be half-written (content cut
+// mid-string, status not arrived yet -- it would read as "pending"), so it
+// is left out.
+std::vector<TodoItem> todo_items_of(const nlohmann::json& args, bool closed) {
     std::vector<TodoItem> items;
+    if (!args.is_object()) return items;
+    auto it = args.find("todos");
+    if (it == args.end() || !it->is_array()) return items;
+    std::size_t n = it->size();
+    if (!closed && n > 0) --n;
     items.reserve(it->size());
-    for (const auto& td : *it) {
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& td = (*it)[i];
         if (!td.is_object()) continue;
         auto c = td.find("content");
         if (c == td.end() || !c->is_string()) continue;
@@ -355,12 +363,13 @@ void sync_todo_state_from_args(Model& m, const nlohmann::json& args) {
                                            : TodoStatus::Pending;
         items.push_back(std::move(item));
     }
-    if (items.empty()) return;
-    // Cheap unchanged-guard: the preview fires this every tick a `todo`
-    // call is streaming, but the plan only actually changes when an item's
-    // content or status flips. Rebuilding + move-assigning the vector each
-    // tick churns allocations for no visible change. Compare shape first
-    // (count + per-item content/status) and bail if identical.
+    return items;
+}
+
+// Assign only when something moved: the live path runs every preview tick
+// of a streaming todo call, and an unchanged plan must not churn the
+// vector (or the visual hash that reads it).
+void set_plan(Model& m, std::vector<TodoItem> items) {
     if (items.size() == m.ui.todo.items.size()) {
         bool same = true;
         for (std::size_t i = 0; i < items.size(); ++i) {
@@ -373,6 +382,46 @@ void sync_todo_state_from_args(Model& m, const nlohmann::json& args) {
         if (same) return;
     }
     m.ui.todo.items = std::move(items);
+}
+
+}  // namespace
+
+// The plan as a FINISHED todo call left it: exactly its list. Includes the
+// empty list -- `todos: []` clears the plan (the tool says "0 items"); this
+// used to return early on empty, so a cleared plan stayed on screen.
+void sync_todo_state_from_args(Model& m, const nlohmann::json& args) {
+    if (!args.is_object() || !args.contains("todos")) return;
+    set_plan(m, todo_items_of(args, /*closed=*/true));
+}
+
+// The plan while a todo call is still STREAMING. The model rewrites the
+// whole list on every call, so the partial array is a prefix of the new
+// plan, not the plan: assigning it made a 3/7 plan drop to 0/1 and climb
+// back 1/2, 2/3... with each preview tick, and an item whose status hadn't
+// arrived yet read as pending (a done step blinking back to undone).
+//
+// So: the complete items streamed so far, then every item of the current
+// plan the stream hasn't restated yet, in their old order and with their
+// old status. The total holds steady and a status flips the moment its
+// item is written. The exact new list replaces this at StreamToolUseEnd.
+void sync_todo_state_live(Model& m, const nlohmann::json& args) {
+    auto streamed = todo_items_of(args, /*closed=*/false);
+    if (streamed.empty()) return;
+    auto restated = [&](const TodoItem& old) {
+        return std::ranges::any_of(streamed, [&](const TodoItem& s) {
+            return s.content == old.content;
+        });
+    };
+    // A brand-new plan (nothing in common with the current one) is shown as
+    // it streams: carrying the old plan's leftovers would invent a total.
+    if (!std::ranges::any_of(m.ui.todo.items, restated)) {
+        set_plan(m, std::move(streamed));
+        return;
+    }
+    std::vector<TodoItem> merged = streamed;
+    for (const auto& old : m.ui.todo.items)
+        if (!restated(old)) merged.push_back(old);
+    set_plan(m, std::move(merged));
 }
 
 void restore_todo_from_thread(Model& m) {

@@ -1603,7 +1603,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                     // global indicator track the in-progress item the
                     // instant the model writes it, not only at exec output.
                     if (tc.name == "todo")
-                        sync_todo_state_from_args(m, tc.args);
+                        sync_todo_state_live(m, tc.args);
                 }
             }
             resync_live_tool_viewer(m);
@@ -1635,7 +1635,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 tc->stream_parse_through = 0;
                 update_stream_preview(*tc);
                 tc->last_preview_at = now;
-                if (tc->name == "todo") sync_todo_state_from_args(m, tc->args);
+                if (tc->name == "todo") sync_todo_state_live(m, tc->args);
             }
             resync_live_tool_viewer(m);
             return Cmd::none();
@@ -1697,6 +1697,14 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 }
                 // Required-field check is deferred to finalize_turn so the
                 // turn-level retry logic owns the single decision point.
+                //
+                // A todo call's args just closed: the plan is exactly its
+                // list NOW. The live merge above ran at most every 120 ms
+                // (the last items can land after its final tick), and the
+                // exec result may be seconds away behind the rest of the
+                // stream or a permission prompt.
+                if (tc.name == "todo" && tc.args.is_object())
+                    sync_todo_state_from_args(m, tc.args);
             }
             resync_live_tool_viewer(m);
             // ── Speculative read-only dispatch (mid-stream) ─────────────

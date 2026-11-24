@@ -199,3 +199,59 @@ TEST_CASE("plan footer: switching threads never shows another thread's plan") {
     REQUIRE(m.ui.todo.items.size() == 2);
     CHECK(m.ui.todo.items[1].status == TodoStatus::InProgress);
 }
+
+namespace {
+nlohmann::json todos(std::initializer_list<std::pair<const char*, const char*>> items) {
+    auto arr = nlohmann::json::array();
+    for (const auto& [c, s] : items) arr.push_back({{"content", c}, {"status", s}});
+    return nlohmann::json{{"todos", arr}};
+}
+int done_of(const Model& m) {
+    int n = 0;
+    for (const auto& it : m.ui.todo.items) n += it.status == TodoStatus::Completed;
+    return n;
+}
+}  // namespace
+
+// The model rewrites the WHOLE list on every todo call. While that call
+// streams, the partial array is only a prefix of the new plan. Assigning it
+// as the plan made the footer read 0/1, 1/2, 2/3... on every preview tick of
+// a plan that was really 3/5 -> 4/5 -- the "doesn't update well" report.
+TEST_CASE("plan footer: a streaming rewrite never shrinks or rewinds the plan") {
+    Model m = with_plan({{"a", C}, {"b", C}, {"c", I}, {"d", P}, {"e", P}});
+
+    // Two items streamed, the second still being written (its status hasn't
+    // arrived, so it would read as pending). Only the complete one counts.
+    app::detail::sync_todo_state_live(m, todos({{"a", "completed"}, {"b", "pend"}}));
+    CHECK(m.ui.todo.items.size() == 5);
+    CHECK(done_of(m) == 2);
+
+    // Further in: c is now done, d in flight. The total holds at 5 and the
+    // flip shows the moment its item is written.
+    app::detail::sync_todo_state_live(m, todos({
+        {"a", "completed"}, {"b", "completed"}, {"c", "completed"},
+        {"d", "in_progress"}, {"e", "pend"}}));
+    CHECK(m.ui.todo.items.size() == 5);
+    CHECK(done_of(m) == 3);
+    CHECK(m.ui.todo.items[3].status == TodoStatus::InProgress);
+
+    // The call closes: exactly its list, e included.
+    app::detail::sync_todo_state_from_args(m, todos({
+        {"a", "completed"}, {"b", "completed"}, {"c", "completed"},
+        {"d", "in_progress"}, {"e", "pending"}}));
+    CHECK(m.ui.todo.items.size() == 5);
+    CHECK(footer(m, 120).find("3/5") != std::string::npos);
+}
+
+TEST_CASE("plan footer: a new plan streams as itself; an empty list clears") {
+    Model m = with_plan({{"old", C}, {"older", I}});
+    // Nothing in common with the current plan: shown as it streams, without
+    // the old plan's leftovers padding the total.
+    app::detail::sync_todo_state_live(m, todos({{"new one", "in_progress"}, {"new tw", "pe"}}));
+    REQUIRE(m.ui.todo.items.size() == 1);
+    CHECK(m.ui.todo.items[0].content == "new one");
+
+    // `todos: []` is the model clearing the plan; it used to be ignored.
+    app::detail::sync_todo_state_from_args(m, nlohmann::json{{"todos", nlohmann::json::array()}});
+    CHECK(m.ui.todo.items.empty());
+}

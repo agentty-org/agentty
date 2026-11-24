@@ -53,6 +53,16 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   "giving up after …", "could not …" and "… failed" are red.
 
 ### Fixed
+- **The plan counter in the composer footer no longer jumps around while it
+  updates.** Each todo update rewrites the whole list, and the partly-sent
+  list used to replace the plan every 120 ms. A plan at 3/5 showed 0/1,
+  1/2, 2/3 and so on while the update arrived, and a finished step whose
+  status hadn't arrived yet showed as undone. Now the items received so far
+  are combined with the rest of the current plan, so the total stays put
+  and a step's status changes as soon as it arrives. The exact new list
+  takes over when the update finishes, before the tool has even run. An
+  update that sends an empty list now clears the plan; before, it was
+  ignored.
 - **A retry message can't outlive its turn.** When the turn ends, any
   "retrying …" line goes with it. That includes "reasoning used the whole
   budget · retrying with less…", which nothing had ever cleared.

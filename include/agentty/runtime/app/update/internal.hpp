@@ -95,6 +95,10 @@ Cmd maybe_auto_title(Model& m);
 // in-progress item the instant the model writes it. No-op when args
 // carries no todos array (partial early stream).
 void sync_todo_state_from_args(Model& m, const nlohmann::json& args);
+// While a todo call STREAMS: its complete items so far, merged over the
+// current plan's not-yet-restated items, so the count holds steady instead of
+// restarting from 0/1 on every preview tick (update/stream_preview.cpp).
+void sync_todo_state_live(Model& m, const nlohmann::json& args);
 
 // The plan belongs to a THREAD, but ui.todo is one mirror. Call after
 // m.d.current is replaced (new / loaded / forked thread): rebuilds the mirror
