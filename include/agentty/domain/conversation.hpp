@@ -1043,6 +1043,17 @@ struct Message {
     }
 };
 
+// What a parsed thread was read FROM: its log's size and mtime (both 0 when
+// the thread has no log, e.g. a legacy .json). Taken just before a load, so
+// a later load can tell whether the same bytes are still on disk -- and a
+// thread already parsed (the ^J peek) can be reused instead of read again.
+struct LogStamp {
+    std::uint64_t size  = 0;
+    std::int64_t  mtime = 0;   // ns since epoch
+    [[nodiscard]] bool valid() const noexcept { return size != 0; }
+    bool operator==(const LogStamp&) const = default;
+};
+
 struct Thread {
     ThreadId    id;
     std::string title;

@@ -397,7 +397,7 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
             auto toast = set_status_toast(
                 m, "rewound \xc2\xb7 files restored, prompt back in composer",
                 std::chrono::seconds{5});
-            return Cmd::batch(std::move(save_restored), cmd::reset_inline(),
+            return Cmd::batch(std::move(save_restored), cmd::swap_content_inline(),
                               std::move(toast));
         },
         [&](TerminalFocus& e) -> Cmd {

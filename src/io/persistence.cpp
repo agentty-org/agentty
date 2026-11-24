@@ -2847,6 +2847,21 @@ void debug_forget_saved(const maya::below<maya::leaf>& cap, const ThreadId& id) 
     async_writer().forget(cap, id.value);
 }
 
+LogStamp log_stamp(Io, const ThreadId& id) {
+    LogStamp s;
+    if (id.value.empty()) return s;
+    std::error_code ec;
+    const auto p = threads_dir() / (id.value + ".jsonl");
+    const auto size = fs::file_size(p, ec);
+    if (ec) return s;
+    const auto t = fs::last_write_time(p, ec);
+    if (ec) return s;
+    s.size  = static_cast<std::uint64_t>(size);
+    s.mtime = static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count());
+    return s;
+}
+
 std::optional<Thread> load_thread_by_id(Io io, const ThreadId& id) {
     if (id.value.empty()) return std::nullopt;
 

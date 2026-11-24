@@ -120,6 +120,12 @@ std::pair<Model, Cmd> update(Model m, Msg msg,
 // stale router running, and equality can't be wrong in that direction — the
 // same reasoning as jaal's subs_key (D38).
 Cmd publish_derived(Model& m, Cmd c) {
+    // The ^J peek's whole-thread parse lives only while the picker is open
+    // (it exists to make Enter fast). Every way out of the picker -- Esc,
+    // ^J again, a panel opened over it -- ends here, so this is the one
+    // place that can't miss one.
+    if (m.ui.peek_full && !m.ui.panel.is<ui::panel::ThreadList>())
+        m.ui.peek_full.reset();
     // A model picked while a turn ran: apply it on the fold that ended the
     // turn. First, so the selection and subagent view published below
     // already describe the new model.

@@ -260,7 +260,7 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{90};
     // saved-lines (including pre-agentty shell history), acceptable precisely
     // because the user asked to switch threads. Do NOT extend it to per-turn
     // paths.
-    return Cmd::batch(cmd::prewarm_provider(m), cmd::reset_inline());
+    return Cmd::batch(cmd::prewarm_provider(m), cmd::swap_content_inline());
 }
 
 // Rename thread `id`, or with `clear` drop the chosen name and go back to
@@ -454,7 +454,26 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
         },
         [&](ThreadPeekLoaded& e) -> Cmd {
             if (m.ui.peek_loading == e.id.value) m.ui.peek_loading.clear();
+            // Enter was pressed on this row while its peek was loading: this
+            // load IS the open. Hand it straight to the open effect (which
+            // still checks the log didn't move) -- no second read.
+            if (!m.ui.open_on_peek.empty() && m.ui.open_on_peek == e.id.value) {
+                m.ui.open_on_peek.clear();
+                if (e.thread && m.s.loading_thread == e.id)
+                    return cmd::load_thread_async(e.id, std::move(e.thread), e.stamp);
+                if (m.s.loading_thread == e.id)
+                    return cmd::load_thread_async(e.id);   // the peek had nothing to give
+                return Cmd::none();                         // superseded (^N, another open)
+            }
             if (!e.turns) return Cmd::none();
+            // Keep the whole parse for the row under the cursor (only that
+            // one -- a thread is MBs): Enter there opens it without reading
+            // the file again. A row the cursor already left gets dropped.
+            if (e.thread) {
+                const auto* p = m.ui.panel.get<pn::ThreadList>();
+                if (p && p->peek_id == e.id.value)
+                    m.ui.peek_full = Model::UI::PeekFull{std::move(*e.thread), e.stamp};
+            }
             std::erase_if(m.ui.peek_cache, [&](const auto& t) { return t.id == e.id; });
             m.ui.peek_cache.insert(m.ui.peek_cache.begin(),
                                    Model::UI::PeekThread{e.id, std::move(*e.turns)});
@@ -526,6 +545,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                 }
                 m.s.thread_loading = true;
                 m.s.loading_thread = meta.id;
+                m.ui.open_on_peek.clear();
                 // Warm the socket so the first turn in the thread the user
                 // is switching INTO doesn't re-pay the handshake (the pool's
                 // idle TTL has usually evicted it during composer breathing
@@ -539,11 +559,26 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
                         set_status_toast(m, "opening " + foreign::display_name(meta.imported->source)
                                                 + " session\xe2\x80\xa6", std::chrono::seconds{2});
                 } else {
-                    load = cmd::load_thread_async(meta.id);
+                    // The peek's parse, if it's this thread: the effect checks
+                    // the log is unchanged and skips the read.
+                    if (m.ui.peek_full && m.ui.peek_full->thread.id == meta.id) {
+                        load = cmd::load_thread_async(meta.id, std::move(m.ui.peek_full->thread),
+                                                      m.ui.peek_full->stamp);
+                    } else if (m.ui.peek_loading == meta.id.value) {
+                        // Its peek is reading the file right now: wait for
+                        // that read (ThreadPeekLoaded opens it) rather than
+                        // start a second one beside it.
+                        m.ui.open_on_peek = meta.id.value;
+                        load = Cmd::none();
+                    } else {
+                        load = cmd::load_thread_async(meta.id);
+                    }
+                    m.ui.peek_full.reset();
                 }
                 cmd = Cmd::batch(cmd::prewarm_provider(m), std::move(load));
             }
             m.ui.panel.close<pn::ThreadList>();
+            m.ui.peek_full.reset();
             return cmd;
         },
         [&](ThreadListDelete) -> Cmd {
@@ -1049,7 +1084,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             // `\x1b[3J` cost (wipes the user's pre-agentty shell
             // scrollback) is acceptable because the user explicitly
             // asked for the content swap (picker select).
-            return cmd::reset_inline();
+            return cmd::swap_content_inline();
         },
     }, tm);
 }

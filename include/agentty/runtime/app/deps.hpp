@@ -40,6 +40,10 @@ struct Deps {
     // bodies are fetched on demand via load_thread.
     std::function<std::vector<Thread>()>        load_threads;
     std::function<std::optional<Thread>(const ThreadId&)> load_thread;
+    // The thread log's size+mtime, so a thread the ^J peek already parsed
+    // can be reused at open if the bytes on disk haven't moved. Unset (tests,
+    // stores without a log) = never reuse: always load fresh.
+    std::function<LogStamp(const ThreadId&)> log_stamp;
     // Picker summaries for old threads, filled and indexed (off the UI
     // thread). Unset in tests that don't need it.
     std::function<std::vector<Thread>(const std::vector<ThreadId>&)> backfill_summaries;
@@ -133,6 +137,10 @@ void install(P& p, S& s, auth::AuthHeader auth) {
         .save_thread     = [&s](const Thread& t) { s.save_thread(t); },
         .load_threads    = [&s] { return s.load_threads(); },
         .load_thread     = [&s](const ThreadId& id) { return s.load_thread(id); },
+        .log_stamp       = [&s](const ThreadId& id) {
+            if constexpr (requires { s.log_stamp(id); }) return s.log_stamp(id);
+            else return LogStamp{};
+        },
         .backfill_summaries = [&s](const std::vector<ThreadId>& ids) {
             return s.backfill_summaries(ids);
         },

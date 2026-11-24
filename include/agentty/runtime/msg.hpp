@@ -677,6 +677,13 @@ struct ThreadPeekSettled { ThreadId id; };
 struct ThreadPeekLoaded {
     ThreadId id;
     std::optional<std::vector<ui::PeekTurn>> turns;
+    // The whole thread the peek parsed to build `turns`. Kept (one, the row
+    // under the cursor) so Enter on that row opens it without reading and
+    // parsing the same file again -- on a 16 MB thread that second load was
+    // most of the switch. Empty for a foreign session (its peek reads the
+    // source, not an agentty thread).
+    std::optional<Thread> thread;
+    LogStamp              stamp;   // the log as `thread` was read from it
 };
 // Type to filter the thread list by title.
 struct ThreadListFilterInput     { char32_t ch; };

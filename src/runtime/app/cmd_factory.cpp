@@ -3242,10 +3242,22 @@ Cmd load_thread_peek_async(ThreadId id) {
     return cmd::io_task_isolated(
         [](Io io, maya::Sink<Msg> out, std::stop_token, ThreadId id) {
             std::optional<std::vector<ui::PeekTurn>> turns;
+            std::optional<Thread> whole;
+            LogStamp stamp;
             try {
-                if (auto t = deps(io).load_thread(id)) turns = ui::peek_turns_of(*t);
+                // Stamp BEFORE reading: if a write lands mid-read, the stamp
+                // is older than the bytes and the open re-reads. The reverse
+                // order could stamp bytes it never read.
+                if (const auto& ls = deps(io).log_stamp) stamp = ls(id);
+                if (auto t = deps(io).load_thread(id)) {
+                    turns = ui::peek_turns_of(*t);
+                    // Keep the parse for Enter -- only when it can be checked
+                    // against the disk later (a stamp) and is worth keeping.
+                    if (stamp.valid()) whole = std::move(*t);
+                }
             } catch (...) {}
-            out.send(Msg{ThreadPeekLoaded{std::move(id), std::move(turns)}});
+            out.send(Msg{ThreadPeekLoaded{std::move(id), std::move(turns),
+                                          std::move(whole), stamp}});
         },
         std::move(id));
 }
@@ -3322,16 +3334,28 @@ Cmd load_foreign_peek_async(ThreadId id, Thread::Import im) {
         std::move(id), std::move(im));
 }
 
-Cmd load_thread_async(ThreadId id) {
+Cmd load_thread_async(ThreadId id, std::optional<Thread> prefetched, LogStamp stamp) {
     // task_isolated rather than task: a single big thread (multi-MB,
     // hundreds of messages) still takes 20-50ms of synchronous parse,
     // small enough to keep on the worker pool — but isolating matches
     // the load_threads_async policy and keeps the per-thread parse
     // off the same pool that tools/stream contend for.
     return cmd::io_task_isolated(
-        [](Io io, maya::Sink<Msg> out, std::stop_token, ThreadId id) {
+        [](Io io, maya::Sink<Msg> out, std::stop_token, ThreadId id,
+           std::optional<Thread> prefetched, LogStamp stamp) {
             try {
-                auto loaded = deps(io).load_thread(id);
+                // The ^J peek parsed this thread already. If the log is
+                // byte-for-byte the one it read (same size, same mtime), use
+                // that parse: a 16 MB thread's read + parse was most of the
+                // switch's wait. One stat instead of the whole file.
+                std::optional<Thread> loaded;
+                if (prefetched && stamp.valid() && prefetched->id == id) {
+                    if (const auto& ls = deps(io).log_stamp; ls && ls(id) == stamp)
+                        loaded = std::move(prefetched);
+                }
+                AGT_LOG(Perf, Debug, "thread.load", "id={} from={}", id.value,
+                        loaded ? "peek" : "disk");
+                if (!loaded) loaded = deps(io).load_thread(id);
                 if (loaded) {
                     // A reopened fork still points at its parent's transcript
                     // outside the workspace; the grant from fork time died
@@ -3354,7 +3378,7 @@ Cmd load_thread_async(ThreadId id) {
             } catch (...) {
                 out.send(Msg{ThreadLoaded{Thread{}}});
             }
-        }, std::move(id));
+        }, std::move(id), std::move(prefetched), stamp);
 }
 
 std::uint64_t next_codex_login_attempt_id() noexcept {

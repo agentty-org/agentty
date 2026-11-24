@@ -392,7 +392,10 @@ struct LoopBreak {
 // vanished, parse error) dispatches a `ThreadLoaded` with an empty
 // Thread so the reducer can no-op gracefully without leaving the
 // `thread_loading` flag stuck.
-[[nodiscard]] Cmd load_thread_async(ThreadId id);
+// `prefetched` + `stamp`: the ^J peek's parse of this thread and the log it
+// read. Used instead of reading the file again when the log is unchanged.
+[[nodiscard]] Cmd load_thread_async(ThreadId id, std::optional<Thread> prefetched = std::nullopt,
+                                    LogStamp stamp = {});
 
 // Read a thread for the ^J peek, off the UI thread, and send
 // ThreadPeekLoaded. Only reads: unlike load_thread_async it grants nothing,

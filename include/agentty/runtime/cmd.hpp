@@ -184,8 +184,20 @@ namespace app::cmd {
 [[nodiscard]] inline Cmd emit_host_sequence(std::string seq) {
     return Cmd(maya::EmitHostSequence{std::move(seq)});
 }
+// Wipe the inline region and REPRINT the thread's history above the new
+// frame at the current width: for a rewrap, after a width change left rows
+// laid out at the old one.
 [[nodiscard]] inline Cmd reset_inline() {
-    return Cmd(maya::ResetInline{});
+    return Cmd(maya::ResetInline{.replay_history = true});
+}
+// Wipe the inline region for a CONTENT SWAP (thread switch, new thread,
+// fork, rewind) without reprinting history. The rehydrated live canvas
+// already shows the newest ~1300 rows; replaying the rest of a long thread
+// wrote ~14 MB through the terminal on every switch -- 3+ s of layout and a
+// visible scroll of the whole transcript in tmux -- to land on that same
+// screen. Older turns stay in the transcript (^O, the thread itself).
+[[nodiscard]] inline Cmd swap_content_inline() {
+    return Cmd(maya::ResetInline{.replay_history = false});
 }
 [[nodiscard]] inline Cmd force_redraw() {
     return Cmd(maya::ForceRedraw{});

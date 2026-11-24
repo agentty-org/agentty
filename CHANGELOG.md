@@ -53,6 +53,16 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   "giving up after …", "could not …" and "… failed" are red.
 
 ### Fixed
+- **Switching to a large thread is fast, and tmux no longer redraws the
+  whole conversation.** Opening a thread used to print its entire history
+  into the terminal again, about 14 MB for a 2,200-message thread. That
+  took 3 to 5 seconds and showed every row scrolling past in tmux. Now only
+  what fits on screen is drawn, about 240 KB, finished about 0.1 s after
+  Enter. The thread was also being read from disk twice: once for the ^J
+  preview and again on open. It is now read once, reused if the file hasn't
+  changed since the preview read it, and pressing Enter while the preview
+  is still loading waits for it instead of starting a second read. Older
+  messages are still in the conversation (^O) and in the file.
 - **The plan counter in the composer footer no longer jumps around while it
   updates.** Each todo update rewrites the whole list, and the partly-sent
   list used to replace the plan every 120 ms. A plan at 3/5 showed 0/1,

@@ -727,6 +727,20 @@ struct Model {
         };
         static constexpr std::size_t kPeekCache = 16;
         std::vector<PeekThread> peek_cache;
+        // The most recent peek's WHOLE thread, parsed already -- at most one,
+        // and only while the picker is open (cleared on close). Enter on its
+        // row hands it to the load effect, which reuses it if the log on
+        // disk is still the one it was parsed from (another agentty may
+        // have written since) instead of reading + parsing it again.
+        struct PeekFull {
+            Thread thread;
+            LogStamp stamp;
+        };
+        std::optional<PeekFull> peek_full;
+        // Enter landed on a row whose peek load was still in flight: the
+        // thread to open when that load lands, instead of starting a second
+        // read of the same file (two 16 MB reads racing for one switch).
+        std::string open_on_peek;
         // The id whose load is in flight, so a held arrow key doesn't queue
         // a load per row it passes.
         std::string peek_loading;

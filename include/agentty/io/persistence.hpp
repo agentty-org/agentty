@@ -256,6 +256,9 @@ void clamp_compactions(Thread& t);
 // nothing is rewritten until that thread is next saved.
 [[nodiscard]] std::optional<Thread> load_thread_by_id(Io, const ThreadId& id);
 
+// What a parsed thread was read FROM (domain/conversation.hpp: LogStamp).
+[[nodiscard]] LogStamp log_stamp(Io, const ThreadId& id);
+
 // Subagent runs kept for an editor to open (threads/subagents/<id>.json).
 // Not in the thread list; the blob GC reads them.
 bool save_subagent_thread(Io, const Thread& t);
@@ -284,6 +287,9 @@ public:
     }
     [[nodiscard]] std::optional<Thread> load_thread(const ThreadId& id) {
         return persistence::load_thread_by_id(io_, id);
+    }
+    [[nodiscard]] LogStamp log_stamp(const ThreadId& id) {
+        return persistence::log_stamp(io_, id);
     }
     [[nodiscard]] std::vector<Thread> backfill_summaries(const std::vector<ThreadId>& ids) {
         return maya::thread_root([&](const maya::unlocked& c) {

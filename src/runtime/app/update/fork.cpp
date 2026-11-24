@@ -213,7 +213,7 @@ Cmd fork_update(Model& m, msg::ForkMsg fm) {
             // effect alongside the save.
             return Cmd::batch(std::move(save_fork),
                               cmd::prewarm_provider(m),
-                              std::move(toast), cmd::reset_inline());
+                              std::move(toast), cmd::swap_content_inline());
         },
     }, fm);
 }
