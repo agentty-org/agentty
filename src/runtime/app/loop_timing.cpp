@@ -8,6 +8,7 @@
 #include "agentty/runtime/app/program.hpp"
 #include "agentty/util/logx.hpp"
 
+#include <cstdio>
 #include <string_view>
 
 namespace agentty::app {
@@ -34,6 +35,19 @@ maya::run_options run_options() {
         if (leaf.starts_with(ns)) leaf.remove_prefix(ns.size());
         const double ms = std::chrono::duration<double, std::milli>(took).count();
         AGT_LOG(Ui, Warn, "loop.slow", "update {} {:.1f} ms", leaf, ms);
+    };
+    // A fault (an update/effect/subscribe that threw) is jaal's to catch and
+    // report. Its default report is one stderr line -- which, with the UI up,
+    // lands only in stderr.log. Put it in agentty.log as well, where the
+    // flight recorder and every other loop line already are, and keep the
+    // stderr line: exit 70's message tells the user to look in stderr.log.
+    opt.kernel.faults = [](const maya::fault& f) {
+        const auto site = maya::to_string(f.site);
+        AGT_LOG(Ui, Error, "loop.fault", "{}: {}{}", site, f.what,
+                f.stopping ? " (stopping)" : " (message dropped)");
+        std::fprintf(stderr, "agentty: fault in %.*s: %s%s\n",
+                     static_cast<int>(site.size()), site.data(), f.what.c_str(),
+                     f.stopping ? " (stopping)" : " (message dropped)");
     };
     return opt;
 }

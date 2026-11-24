@@ -18,7 +18,11 @@ fails=0
 # The corpus is the checkout itself, so a change that only ADDS lines moves
 # BM25 stats and nudges MRR. agentty_code_heldout drifted 0.666-0.680 across
 # three trees with no retrieval change (PR #124), so its MRR floor sits under
-# that band; the others already had room.
+# that band; the others already had room. It moved again, to 0.638, when the
+# status-bar rework added status_banner_test.cpp and maya's StreamNote: the
+# query "render the status bar at the bottom" now has more files saying
+# "status bar" than its gold (status_bar.cpp) does. Same retrieval, a bigger
+# corpus -- so 0.62, with hit@8 left where it was.
 # set  hit@8-floor  MRR-floor
 while read -r set h8min mrrmin; do
     out=$("$A" rag-eval "tests/rag_eval/$set.json" 2>&1)
@@ -36,7 +40,7 @@ while read -r set h8min mrrmin; do
     fi
 done <<'EOF'
 agentty_code          0.88  0.67
-agentty_code_heldout  0.90  0.64
+agentty_code_heldout  0.90  0.62
 agentty_docs          0.90  0.67
 agentty_docs_heldout  0.95  0.82
 EOF

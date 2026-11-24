@@ -100,3 +100,14 @@ static_assert(requires(H& h, maya::host_context<H>& cx, maya::sig s) {
               },
               "Host::on_signal must accept host_context<Host>, or SIGWINCH "
               "never reaches the program and a resize is ignored.");
+
+// The kernel options main() runs with. jaal times every fold and catches
+// every fault; with these unset it reports both to stderr, which with the UI
+// up is a redirect nobody reads. A refactor that dropped either hook would
+// only show as a slow or crashed session with nothing in agentty.log.
+TEST_CASE("program: run_options budgets a frame and routes slow folds and faults") {
+    const auto opt = agentty::app::run_options();
+    CHECK(opt.kernel.fold_budget_time == std::chrono::milliseconds{16});
+    CHECK(static_cast<bool>(opt.kernel.slow));
+    CHECK(static_cast<bool>(opt.kernel.faults));
+}

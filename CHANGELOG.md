@@ -21,6 +21,9 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   each update and reports the specific message type that ran over budget,
   e.g. `loop.slow update msg::OpenPalette 23.1 ms`. Before, agentty timed
   updates itself and logged a domain plus an index (`ComposerMsg#7`).
+  Errors that jaal catches inside an update (an exception thrown while
+  handling a message) are now written to agentty.log as `loop.fault` too.
+  Before, they went only to stderr.log.
 - **Crash handlers use `std::atomic_flag` as the re-entry guard** instead of
   `volatile sig_atomic_t`. It is just as signal-safe, it is also correct if
   two threads crash at once, and it passes jaal's concurrency checks.
