@@ -6,8 +6,14 @@
 #include "agentty/io/shared_file.hpp"
 #include "agentty/util/logx.hpp"
 
+#include <maya/core/executor.hpp>   // exec::parallel_for: lines parse independently
 #include <nlohmann/json.hpp>
 #include <simdjson.h>
+
+#include <algorithm>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 #include <cstdio>
 #include <fstream>
@@ -363,38 +369,61 @@ std::vector<Message> ThreadLog::range(std::size_t from, std::size_t to) const {
     in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
     buf.resize(static_cast<std::size_t>(in.gcount()));
 
-    out.reserve(to - from);
-    // One parser for the whole window: simdjson reuses its internal
-    // buffers across parses, so constructing it per line would throw away
-    // most of the win.
-    simdjson::dom::parser parser;
-    std::size_t pos = 0;
-    while (pos < buf.size()) {
-        std::size_t nl = buf.find('\n', pos);
+    // Split into lines first (cheap: one memchr walk), then parse them in
+    // parallel. Every line is an independent message, and parsing is the
+    // whole cost: a 16 MB / 2,200-message thread took ~290 ms on one core,
+    // which is what a thread switch waited on. Chunks of contiguous lines
+    // keep one simdjson parser per chunk (it reuses its buffers across
+    // parses) and keep the output in file order.
+    std::vector<std::string_view> lines;
+    lines.reserve(to - from);
+    for (std::size_t pos = 0; pos < buf.size();) {
+        const std::size_t nl = buf.find('\n', pos);
         const bool last = (nl == std::string::npos);
-        const std::string_view line{buf.data() + pos,
-                                    (last ? buf.size() : nl) - pos};
+        const std::string_view line{buf.data() + pos, (last ? buf.size() : nl) - pos};
         pos = last ? buf.size() : nl + 1;
-        if (line.empty()) continue;
-
-        // A bad line costs that message, not the thread. This is where a
-        // torn final append lands: it parses as garbage and is dropped,
-        // leaving every complete message intact.
-        json j = parse_line(parser, line);
-        if (j.is_discarded()) {
-            AGT_LOG(General, Warn, "thread_log.read",
-                    "skipping unparseable line in {}", log_.string());
-            continue;
-        }
-        auto m = persistence::message_from_json(j);
-        if (!m) {
-            AGT_LOG(General, Warn, "thread_log.read",
-                    "skipping malformed message in {}: {}",
-                    log_.string(), m.error().render());
-            continue;
-        }
-        out.push_back(std::move(*m));
+        if (!line.empty()) lines.push_back(line);
     }
+
+    // Below this, one thread is faster than the hand-off.
+    constexpr std::size_t kPerChunk = 64;
+    const std::size_t chunks = std::max<std::size_t>(1, (lines.size() + kPerChunk - 1) / kPerChunk);
+    std::vector<std::vector<std::optional<Message>>> parsed(chunks);
+    // Bad lines are counted per chunk and logged afterwards, on this thread.
+    std::vector<std::size_t> bad_json(chunks, 0), bad_msg(chunks, 0);
+    auto parse_chunk = [&](std::size_t c) {
+        simdjson::dom::parser parser;
+        const std::size_t b = c * kPerChunk;
+        const std::size_t e = std::min(lines.size(), b + kPerChunk);
+        auto& dst = parsed[c];
+        dst.reserve(e - b);
+        for (std::size_t i = b; i < e; ++i) {
+            // A bad line costs that message, not the thread. This is where a
+            // torn final append lands: it parses as garbage and is dropped,
+            // leaving every complete message intact.
+            json j = parse_line(parser, lines[i]);
+            if (j.is_discarded()) { ++bad_json[c]; continue; }
+            auto m = persistence::message_from_json(j);
+            if (!m) { ++bad_msg[c]; continue; }
+            dst.emplace_back(std::move(*m));
+        }
+    };
+    if (chunks == 1) parse_chunk(0);
+    else maya::exec::parallel_for(chunks, parse_chunk);
+
+    out.reserve(lines.size());
+    std::size_t nj = 0, nm = 0;
+    for (std::size_t c = 0; c < chunks; ++c) {
+        nj += bad_json[c];
+        nm += bad_msg[c];
+        for (auto& m : parsed[c]) out.push_back(std::move(*m));
+    }
+    if (nj)
+        AGT_LOG(General, Warn, "thread_log.read",
+                "skipping {} unparseable line(s) in {}", nj, log_.string());
+    if (nm)
+        AGT_LOG(General, Warn, "thread_log.read",
+                "skipping {} malformed message(s) in {}", nm, log_.string());
     return out;
 }
 

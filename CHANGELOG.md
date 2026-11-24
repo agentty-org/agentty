@@ -57,9 +57,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   whole conversation.** Opening a thread used to print its entire history
   into the terminal again, about 14 MB for a 2,200-message thread. That
   took 3 to 5 seconds and showed every row scrolling past in tmux. Now only
-  the newest six screens are drawn, about 65 KB, and the thread is on
-  screen 20 to 60 ms after Enter. The ^J preview starts loading the moment
-  the picker opens, instead of 90 ms later. The thread was also being read from disk twice: once for the ^J
+  the newest four screens are drawn, about 45 KB, and the thread is on
+  screen about 30 ms after Enter. The ^J preview starts loading the moment
+  the picker opens and settles 40 ms after you stop on a row (it was 90),
+  and a thread file is parsed on all cores, about 85 ms for 16 MB instead
+  of 280. The thread was also being read from disk twice: once for the ^J
   preview and again on open. It is now read once, reused if the file hasn't
   changed since the preview read it, and pressing Enter while the preview
   is still loading waits for it instead of starting a second read. Older

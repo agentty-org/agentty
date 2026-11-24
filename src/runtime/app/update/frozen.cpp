@@ -161,19 +161,19 @@ std::size_t frozen_row_budget(const Model& m) { return frozen_row_budget(term_di
 // exactly what makes them scrollable.
 //
 // Net effect: the live canvas is unchanged (so resize and Ctrl-L cost what
-// they cost today), and the user gets ~6 viewports of real, scrollable
+// they cost today), and the user gets ~4 viewports of real, scrollable
 // history on a resumed thread instead of nothing.
 //
-// 6x, floored at 240 rows. The seed is painted in the SWITCH frame -- every
+// 4x, floored at 160 rows. The seed is painted in the SWITCH frame -- every
 // row of it laid out and written before the user sees the new thread -- so
 // it is the switch's latency. Measured (tmux, 140x40, 16 MB thread): the
 // old max(1200, rows*20) seed made that frame 85 ms (53 ms layout, 23 ms
-// paint, 1179 rows) for a screen that shows 40 of them. Per-row cost is
-// roughly fixed, so 240 rows is ~1/5 of it. Six screens of scroll-up is
-// plenty right after a switch; everything older is in ^O and on disk.
+// paint, 1179 rows) for a screen that shows 40 of them; 6x was 34 ms; 4x
+// is ~18 ms and the thread is on screen ~35 ms after Enter. Four screens
+// of scroll-up right after a switch; everything older is in ^O and on disk.
 std::size_t rehydrate_row_budget(int term_rows) {
     const int rows = term_rows > 0 ? term_rows : 24;
-    return static_cast<std::size_t>(std::max(240, rows * 6));
+    return static_cast<std::size_t>(std::max(160, rows * 4));
 }
 std::size_t rehydrate_row_budget(const Model& m) { return rehydrate_row_budget(term_dims(m).rows); }
 

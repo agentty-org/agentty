@@ -143,8 +143,11 @@ constexpr std::size_t kSummaryBatch = 12;
 }
 
 // The peek pauses this long on a row before loading it, so holding ↓
-// through the list doesn't load every thread it passes.
-constexpr auto kPeekSettle = std::chrono::milliseconds{90};
+// through the list doesn't load every thread it passes. Just above a key
+// repeat interval (30-35 Hz -> ~29-33 ms): a held key never lands, a single
+// press loads 40 ms later. It was 90 ms, and that was the lag between
+// arrowing to a thread and Enter being instant on it.
+constexpr auto kPeekSettle = std::chrono::milliseconds{40};
 
 // Point the peek at the row under the cursor. A new row resets its scroll
 // to the latest turn and, unless it's cached or already loading, (re)starts

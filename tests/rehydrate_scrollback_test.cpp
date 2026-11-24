@@ -91,8 +91,11 @@ int rehydrate_scrollback_test_main() {
                 live, seed);
     check(seed > live,
           "rehydrate seeds MORE than the live canvas keeps");
-    check(seed >= live * 2,
-          "the seed is wide enough to be worth committing (>= 2x)");
+    // Not 2x any more: the seed is painted in the switch frame, so its size
+    // is the switch's latency (frozen.cpp rehydrate_row_budget). Wider than
+    // live is what matters -- the trim below still has rows to commit.
+    check(seed >= live + live / 4,
+          "the seed is wide enough to be worth committing (>= 1.25x)");
 
     // 1b. The reducers' budgets read the terminal size from the Model, which
     //     the host feeds as TerminalResized. So the answer is whatever the
