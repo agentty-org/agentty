@@ -259,11 +259,11 @@ form::Form build_appearance_form(const up::Prefs& p, const up::Detected& d) {
             up::Scrollback::Big, up::Scrollback::Full,
         };
         static constexpr std::array<const char*, 5> kScrollBlurbs = {
-            "match the terminal's scrollback",
-            "last ~1k rows \xc2\xb7 lightest",
-            "last ~5k rows",
-            "last ~20k rows",
-            "the whole thread \xc2\xb7 most memory",
+            "instant thread switch \xc2\xb7 full history on resize",
+            "last ~1k rows on open and resize \xc2\xb7 lightest",
+            "last ~5k rows on open and resize",
+            "last ~20k rows on open and resize",
+            "the whole thread on open \xc2\xb7 slow on big threads",
         };
         enum_choice(b, kApScrollback, "Scrollback", kScroll, p.scrollback,
                     "how much history is redrawn on open and resize", kScrollBlurbs);

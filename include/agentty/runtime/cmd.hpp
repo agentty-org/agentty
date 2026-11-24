@@ -30,6 +30,7 @@
 
 #include "agentty/domain/conversation.hpp"   // ImageContent
 #include "agentty/domain/id.hpp"
+#include "agentty/domain/ui_prefs.hpp"   // Scrollback: whether a content swap replays
 #include "agentty/util/sendable.hpp"       // Id<Tag>, fs::path, EffectSet
 #include "agentty/util/io.hpp"
 #include "agentty/io/http.hpp"               // http::CancelTokenPtr
@@ -191,13 +192,14 @@ namespace app::cmd {
     return Cmd(maya::ResetInline{.replay_history = true});
 }
 // Wipe the inline region for a CONTENT SWAP (thread switch, new thread,
-// fork, rewind) without reprinting history. The rehydrated live canvas
-// already shows the newest ~1300 rows; replaying the rest of a long thread
-// wrote ~14 MB through the terminal on every switch -- 3+ s of layout and a
-// visible scroll of the whole transcript in tmux -- to land on that same
-// screen. Older turns stay in the transcript (^O, the thread itself).
-[[nodiscard]] inline Cmd swap_content_inline() {
-    return Cmd(maya::ResetInline{.replay_history = false});
+// fork, rewind). Whether history is reprinted above it is Appearance ›
+// Scrollback's call: Auto (the default) reprints nothing -- the rehydrated
+// live canvas already shows the newest screens, and replaying a long thread
+// to the terminal's own length (tmux: 100k rows) wrote ~14 MB, 3+ s, on
+// every switch. An explicit level (1k / 5k / 20k / whole thread) is the
+// user asking for that much scroll-up on open, and gets it.
+[[nodiscard]] inline Cmd swap_content_inline(ui_prefs::Scrollback level) {
+    return Cmd(maya::ResetInline{.replay_history = level != ui_prefs::Scrollback::Auto});
 }
 [[nodiscard]] inline Cmd force_redraw() {
     return Cmd(maya::ForceRedraw{});

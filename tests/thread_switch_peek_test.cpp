@@ -156,3 +156,19 @@ TEST_CASE("thread switch: no scrollback replay, the content swap doesn't need on
     CHECK(!r->replay_history);
     (void)after;
 }
+
+TEST_CASE("thread switch: an explicit Scrollback level still replays history") {
+    install();
+    g_stamp = {100, 7};
+    Model m = picker_on_big();
+    m.d.persisted.ui.scrollback = ui_prefs::Scrollback::Big;   // "last ~20k rows"
+    m = fold(std::move(m), peek_landed());
+    auto [opened, c1] = app::update(std::move(m), Msg{msg::ThreadListMsg{ThreadListSelect{}}});
+    auto loaded = agtest::fx::run_tasks(std::move(c1));
+    REQUIRE(loaded.size() == 1);
+    auto [after, c2] = app::update(std::move(opened), std::move(loaded.front()));
+    const auto* r = agtest::fx::find<maya::ResetInline>(c2);
+    REQUIRE(r != nullptr);
+    CHECK(r->replay_history);
+    (void)after;
+}

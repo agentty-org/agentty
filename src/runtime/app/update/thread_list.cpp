@@ -266,7 +266,7 @@ constexpr auto kPeekSettle = std::chrono::milliseconds{40};
     // saved-lines (including pre-agentty shell history), acceptable precisely
     // because the user asked to switch threads. Do NOT extend it to per-turn
     // paths.
-    return Cmd::batch(cmd::prewarm_provider(m), cmd::swap_content_inline());
+    return Cmd::batch(cmd::prewarm_provider(m), cmd::swap_content_inline(m.d.ui().scrollback));
 }
 
 // Rename thread `id`, or with `clear` drop the chosen name and go back to
@@ -1090,7 +1090,7 @@ Cmd thread_list_update(Model& m, msg::ThreadListMsg tm) {
             // `\x1b[3J` cost (wipes the user's pre-agentty shell
             // scrollback) is acceptable because the user explicitly
             // asked for the content swap (picker select).
-            return cmd::swap_content_inline();
+            return cmd::swap_content_inline(m.d.ui().scrollback);
         },
     }, tm);
 }

@@ -64,7 +64,11 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   of 280. The thread was also being read from disk twice: once for the ^J
   preview and again on open. It is now read once, reused if the file hasn't
   changed since the preview read it, and pressing Enter while the preview
-  is still loading waits for it instead of starting a second read. Older
+  is still loading waits for it instead of starting a second read. Appearance ›
+  Scrollback decides how much history is reprinted on open: on Auto (the
+  default) none is, which makes switching instant; a fixed level (1k, 5k, 20k
+  rows or the whole thread) reprints that much, which is slower on a big
+  thread. Older
   messages are still in the conversation (^O) and in the file.
 - **The plan counter in the composer footer no longer jumps around while it
   updates.** Each todo update rewrites the whole list, and the partly-sent
