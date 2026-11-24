@@ -23,6 +23,7 @@
 // NOT restated. A previous backend restated them by hand and ended up granting
 // read on `/`, which handed ~/.ssh and ~/.aws to any approved bash call while
 // still reporting "sandbox: active". One list.
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/domain/sandbox_config.hpp"   // env_allowed
 #include "agentty/tool/util/sandbox_broker.hpp"
@@ -43,7 +44,7 @@
 // claybin's design: one description of the boundary, compiled per platform,
 // with a guarantee report saying what each host could actually enforce. The
 // three spawn paths differ because the mechanisms differ; the POLICY does not.
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 
 #include <algorithm>
 #include <cerrno>
@@ -56,11 +57,11 @@
 #include <utility>
 #include <vector>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -74,14 +75,14 @@ extern "C" char** environ;
 #include "claybin/policy/policy.hpp"
 #include "claybin/policy/profiles.hpp"
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include "claybin/policy/profiles_i386.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "claybin/broker/notify.hpp"
 #include "claybin/plan/spawn.hpp"
 #include <sys/syscall.h>   // SYS_kill: an i386 kill maps onto it
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
 #include "claybin/macos/backend.hpp"
 #else
 #ifndef WIN32_LEAN_AND_MEAN
@@ -128,7 +129,7 @@ constexpr std::uint16_t kProxyPort = 3128;   // the squid port, for familiarity
 //
 // 0 = could not read the machine's memory, so apply nothing.
 [[nodiscard]] std::uint64_t default_memory_high_bytes() noexcept {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     const long pages = ::sysconf(_SC_PHYS_PAGES);
     const long page_size = ::sysconf(_SC_PAGESIZE);
     if (pages <= 0 || page_size <= 0) return 0;
@@ -184,7 +185,7 @@ bool box_env_keeps(std::string_view key, int env_scope,
     return cfg::env_allowed(static_cast<cfg::EnvScope>(env_scope), key, keep, value);
 }
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 
 // The darwin proxy. ONE per agentty process, not one per command as on Linux:
 // macOS guests run through sandbox-exec in the argv (no adopt, see
@@ -495,7 +496,7 @@ namespace {
             for (auto port : p.allow_ports) d = std::move(d).connect("", port);
             break;
         default:
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
             // No private netns on darwin: the guest is pinned by seatbelt to
             // ONE loopback port, which agentty's own proxy serves. If that
             // proxy could not start, fail CLOSED (no network) -- compiling
@@ -555,8 +556,8 @@ namespace {
     // this is the same trade they were chosen for.
     if (p.wx_protect && p.syscall_mode == 2 /* Strict */)
         d = std::move(d).deny_write_execute();
-#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
-#if defined(__x86_64__)
+#if MAYA_OS_LINUX && (MAYA_CPU_X86_64 || MAYA_CPU_ARM64)
+#if MAYA_CPU_X86_64
     constexpr clay::SysNr kMmap = 9, kMprotect = 10;
 #else
     constexpr clay::SysNr kMmap = 222, kMprotect = 226;
@@ -592,7 +593,7 @@ namespace {
     // future reader does not have to work out whether `p.broker` means
     // something different on darwin -- there, it means nothing at all, and the
     // guarantee report says `syscall.filter: none` to match.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (p.broker && p.syscall_mode != 0) {
         for (auto nr : broker::brokered_syscalls()) sp.notify(nr);
     }
@@ -602,14 +603,14 @@ namespace {
     // the host's routes, links and addresses (the host netns is shared under
     // Full), and AF_VSOCK reaches a hypervisor -- neither is something a
     // build or a test needs. The family is arg 0, a 32-bit int.
-#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#if MAYA_OS_LINUX && (MAYA_CPU_X86_64 || MAYA_CPU_ARM64)
     if (p.syscall_mode != 0) {
         static constexpr std::uint32_t kFamilies[] = {
             1,   // AF_UNIX
             2,   // AF_INET
             10,  // AF_INET6
         };
-#if defined(__x86_64__)
+#if MAYA_CPU_X86_64
         constexpr clay::SysNr kSocket = 41;
 #else
         constexpr clay::SysNr kSocket = 198;
@@ -619,7 +620,7 @@ namespace {
                             clay::SysAction::errno_, 97 /* EAFNOSUPPORT */);
     }
 #endif
-#if defined(__linux__) && defined(__x86_64__)
+#if MAYA_OS_LINUX && MAYA_CPU_X86_64
     // 32-bit programs get claybin's i386 profile, which allows the same calls
     // as the native one by name (claybin's x86_audit checks). It is a second
     // filter, chosen by the call's audit arch, so native numbers are never
@@ -694,7 +695,7 @@ namespace {
     return std::move(d).seal();
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // execvp's lookup, done before the spawn: claybin's guest calls execve. A
 // name with a slash is a path already; anything not found stays as given,
 // so the guest's execve reports the real error. Linux-only: the macOS
@@ -720,7 +721,7 @@ std::string resolve_on_path(const std::string& name) {
 
 // The host's sandbox capabilities. Probed once (it forks), then reused: they
 // don't change while agentty runs, and the Sandbox pane asks on every key.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 const ::clay::macos::HostCapabilities& host() {
     static const ::clay::macos::HostCapabilities h = ::clay::macos::probe_host();
     return h;
@@ -759,7 +760,7 @@ maya::snapshot<std::uint64_t>& host_probes() {
 std::uint64_t host_probes_for_test() noexcept { return *host_probes().load(); }
 #endif
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 
 // ─────────────────────────── macOS ────────────────────────────────────
 //
@@ -887,7 +888,7 @@ std::string compile_profile(const Posture& p, std::string& error) {
     return std::move(compiled->profile);
 }
 
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
 
 // ─────────────────────────── Windows ──────────────────────────────
 //

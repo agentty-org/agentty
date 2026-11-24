@@ -10,7 +10,8 @@
 // Global malloc/free and operator new/delete are routed through the mimalloc
 // static library fetched by CMake when -DAGENTTY_USE_MIMALLOC=ON (the default).
 
-#if defined(_WIN32)
+#include <maya/core/target.hpp>
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -22,7 +23,7 @@
 #  include <mmsystem.h>          // timeBeginPeriod / timeEndPeriod
 #  include <io.h>               // _setmode
 #  include <fcntl.h>            // _O_BINARY
-#  if defined(_MSC_VER)
+#  if MAYA_CC_MSVC_ABI
 //   MSVC consumes the pragma and links winmm.lib automatically. GCC
 //   ignores it with a warning — we link winmm via target_link_libraries
 //   in CMakeLists.txt for the MinGW build, so the pragma is pointless
@@ -33,6 +34,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -43,7 +45,7 @@
 #include <utility>
 #include <vector>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>   // isatty (headless `run` stdin detection)
 #include <poll.h>     // poll (non-blocking stdin peek, see the run subcommand)
 #else
@@ -55,14 +57,14 @@
 
 // Portable process-id helper (POSIX getpid / Windows _getpid).
 [[nodiscard]] inline long agentty_pid() {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     return static_cast<long>(::_getpid());
 #else
     return static_cast<long>(::getpid());
 #endif
 }
 
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
 // Are we running under Wine rather than real Windows?
 //
 // Detected the way Wine itself documents: ntdll exports wine_get_version() and
@@ -164,7 +166,7 @@ namespace {
 // backtrace to stdout BEFORE the process dies. This catches crashes that
 // ASAN cannot intercept (e.g. mimalloc internal segfaults) and gives
 // the user a stack trace without needing GDB.
-#if !defined(NDEBUG) && !defined(_WIN32)
+#if !defined(NDEBUG) && !MAYA_OS_WINDOWS
 #include <execinfo.h>
 #include <unistd.h>
 
@@ -238,19 +240,20 @@ extern "C" void agentty_release_crash_handler(int sig) {
     //
     // On the second entry, stop cooperating: take the default action
     // immediately so the process dies with the right status and can dump
-    // core.
-    static volatile std::sig_atomic_t in_handler = 0;
-    if (in_handler) {
+    // core. atomic_flag, not `volatile sig_atomic_t`: the one type C++
+    // guarantees lock-free (so async-signal-safe), and right when two
+    // threads fault at once, where volatile's read-then-write raced.
+    static std::atomic_flag in_handler = ATOMIC_FLAG_INIT;
+    if (in_handler.test_and_set()) {
         std::signal(sig, SIG_DFL);
         std::raise(sig);
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         _exit(128 + sig);   // if the default was ignored, do not spin
 #endif
         return;
     }
-    in_handler = 1;
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     (void)agentty::logx::dump_flight_recorder(2);
 #else
     static const char hdr[] = "\n=== agentty crash ===\n";
@@ -261,7 +264,7 @@ extern "C" void agentty_release_crash_handler(int sig) {
     std::raise(sig);   // re-raise for the default disposition (core dump etc.)
 }
 void install_crash_handler() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     (void)std::signal(SIGSEGV, agentty_release_crash_handler);
     (void)std::signal(SIGABRT, agentty_release_crash_handler);
 #else
@@ -304,7 +307,7 @@ void install_crash_handler() {
 #endif
 
 void fputs_utf8(FILE* f, std::string_view s) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const int fd = fileno(f);
     if (fd >= 0 && ::_isatty(fd)) {
         const intptr_t raw = ::_get_osfhandle(fd);
@@ -378,15 +381,15 @@ int cmd_diagnostics() {
     section("agentty");
     out += std::string{"version: "} + ::agentty::version() + "\n";
     out += std::string{"os: "} +
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         "windows"
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
         "macos"
 #else
         "linux"
 #endif
         + "  arch: " +
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if MAYA_CPU_ARM64
         "arm64"
 #else
         "x86_64"
@@ -1072,7 +1075,7 @@ Args parse_args(int argc, char** argv) {
                     static_cast<int>(fmt.size()), fmt.data());
                 std::exit(2);
             }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             _putenv_s("AGENTTY_EVENTS", "jsonl");
 #else
             ::setenv("AGENTTY_EVENTS", "jsonl", 1);
@@ -1133,7 +1136,7 @@ Args parse_args(int argc, char** argv) {
 
 } // namespace
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 // RAII guard for Windows-specific tuning that must be undone at process exit:
 //   - timeBeginPeriod(1): bumps the system-wide timer interrupt from the
 //     default 15.625 ms down to 1 ms. Every Sleep, WaitForSingleObject
@@ -1264,7 +1267,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // gate abort was MAYA_NO_GATE_ABORT=0/false; translate it.
     if (const char* g = std::getenv("MAYA_NO_GATE_ABORT");
         g && (std::string_view{g} == "0" || std::string_view{g} == "false")) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("MAYA_GATE_ABORT", "1");
 #else
         setenv("MAYA_GATE_ABORT", "1", /*overwrite=*/0);
@@ -1324,7 +1327,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         }
     } teardown_guard{cap};
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     Win32PerfTuning win32_perf;
     // Swap the ANSI-codepage narrow argv for a UTF-8 one recovered from the
     // real UTF-16 command line, so non-ASCII path arguments survive. Keep the
@@ -1348,7 +1351,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // the stdio-pipe writes (MCP transport) can't, so ignore it globally and
     // handle write failures via EPIPE return codes instead. Must run FIRST,
     // before any child is spawned.
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     std::signal(SIGPIPE, SIG_IGN);
     // Dev bug-marker: `kill -USR1 $(pgrep agentty)` stamps the live log with
     // a MARK banner + flight-recorder snapshot at the moment a bug is SEEN.
@@ -1403,14 +1406,14 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // Resolve OS / arch / build / pid with plain #if blocks here instead of
     // embedding the directives inside the AGT_LOG(...) macro args — a directive
     // within macro arguments is not portable and trips -Wpedantic.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const char* os_name   = "windows";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     const char* os_name   = "macos";
 #else
     const char* os_name   = "linux";
 #endif
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if MAYA_CPU_ARM64
     const char* arch_name = "arm64";
 #else
     const char* arch_name = "x86_64";
@@ -1421,7 +1424,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     const char* build_kind = "debug";
 #endif
     const long long pid_ll = static_cast<long long>(
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _getpid()
 #else
         ::getpid()
@@ -1700,7 +1703,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         // with full network. Ask the compiled posture what it can actually
         // enforce and refuse unless the wall is strong. Fail closed.
         if (args.subcommand == "run" && args.cli_run_no_network) {
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
             const auto rep = tools::util::sandbox::claybin_backend::describe(
                 tools::util::sandbox::claybin_posture_for_test());
             bool net_strong = false;
@@ -1790,7 +1793,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
             if (::isatty(fileno(stderr))) {
                 // NativeHandle is an fd on POSIX but a HANDLE on Windows, so
                 // fileno() doesn't convert there.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                 const maya::platform::NativeHandle err_h = ::GetStdHandle(STD_ERROR_HANDLE);
 #else
                 const maya::platform::NativeHandle err_h = fileno(stderr);
@@ -2337,7 +2340,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         // distinguishes an empty-but-open pipe from a ready one on every
         // Windows console/redirect combination, and Windows CI never hit
         // this shape.
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
         auto stdin_has_data = []() noexcept {
             pollfd pfd{fileno(stdin), POLLIN, 0};
             return ::poll(&pfd, 1, 0) > 0
@@ -2435,7 +2438,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         // Raw read(2)/write(2) on stdin(0)/stdout(1). Flush any buffered C++
         // stream output first so it can't interleave with the raw writes.
         std::cout.flush();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         // On Windows fds 0/1 default to TEXT mode, which would translate every
         // '\n' the JSON-RPC framing emits into "\r\n" and mangle the wire.
         _setmode(_fileno(stdin),  _O_BINARY);
@@ -2494,7 +2497,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
     // The REAL stderr, kept across the redirect below. If maya can't take
     // the terminal there is no frame to protect, and a reason that only
     // lands in stderr.log is a silent exit 70 from the user's chair.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const int real_stderr = _dup(_fileno(stderr));
 #else
     const int real_stderr = ::dup(fileno(stderr));
@@ -2596,7 +2599,10 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
         // The launch environment, read here once and handed to init() as the
         // program's Flags (jaal: the data a run starts with is passed in).
         app::LaunchFlags flags{app::read_launch_env(::agentty::IoAccess::grant())};
-        if (const int rc = maya::run<app::AgenttyApp, app::Host>(cfg, {}, std::move(flags));
+        // Kernel options: the fold budget and where a slow fold is reported
+        // (agentty.log, not the stderr redirect) -- app::run_options().
+        if (const int rc = maya::run<app::AgenttyApp, app::Host>(
+                cfg, app::run_options(), std::move(flags));
             rc == 70) {
             // Couldn't take the terminal (or a fault stopped the program).
             // The why went to stderr.log; say so where the user is looking.
@@ -2605,7 +2611,7 @@ int run_main(int argc, char** argv, const maya::unlocked& cap) {
                     "agentty: couldn't start the terminal UI (exit 70). "
                     "Is stdin/stdout a terminal? Details: "
                     + (util::user_logs_dir() / "stderr.log").string() + "\n";
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                 (void)_write(real_stderr, msg.data(), static_cast<unsigned>(msg.size()));
 #else
                 (void)!::write(real_stderr, msg.data(), msg.size());

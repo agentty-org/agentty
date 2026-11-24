@@ -3,6 +3,7 @@
 // update.cpp — self-update against the GitHub releases of agentty-org/agentty.
 // See include/agentty/util/update.hpp for the design contract.
 
+#include <maya/core/target.hpp>
 #include "agentty/util/update.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/digits.hpp"
@@ -24,7 +25,7 @@
 #include <fstream>
 #include <string>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>     // readlink
 #include <sys/stat.h>   // chmod
 #endif
@@ -46,7 +47,7 @@ fs::path cache_path() { return util::user_cache_dir() / "update_check.json"; }
 
 // Where is the running binary? (Windows self-replace isn't wired; MSI is the channel.)
 fs::path self_path() {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     return {};
 #else
     return util::self_exe_path();
@@ -146,18 +147,18 @@ bool version_less(const std::string& a, const std::string& b) {
 std::string current_version() { return ::agentty::version(); }
 
 std::string platform_asset() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return "agentty-windows-x86_64.exe";
-#elif defined(__APPLE__)
-#  if defined(__aarch64__) || defined(__arm64__)
+#elif MAYA_OS_APPLE
+#  if MAYA_CPU_ARM64
     return "agentty-macos-arm64";
 #  else
     return "agentty-macos-x86_64";
 #  endif
-#elif defined(__linux__)
-#  if defined(__aarch64__)
+#elif MAYA_OS_LINUX
+#  if MAYA_CPU_ARM64
     return "agentty-linux-aarch64";
-#  elif defined(__i386__)
+#  elif MAYA_CPU_X86_32
     return "agentty-linux-i686";
 #  else
     return "agentty-linux-x86_64";
@@ -281,7 +282,7 @@ CheckResult check_latest(bool force) {
 }
 
 bool self_update_possible(std::string& reason) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     reason = "self-update is not supported on Windows yet — download the "
              "installer from https://github.com/agentty-org/agentty/releases";
     return false;
@@ -322,7 +323,7 @@ bool self_update_possible(std::string& reason) {
     }
     // Writable check on the parent dir (the atomic rename target).
     auto dir = self.parent_path();
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     if (::access(dir.c_str(), W_OK) != 0) {
         reason = "no write permission for " + dir.string() +
                  " — re-run with appropriate permissions";
@@ -377,7 +378,7 @@ std::string perform_update(
         return "downloaded binary suspiciously small (" +
                std::to_string(r.body.size()) + " bytes) — aborting";
     // ELF/Mach-O magic sanity: never install an HTML error page as a binary.
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     const bool looks_binary =
         (r.body.size() > 4)
         && ((r.body[0] == 0x7f && r.body[1] == 'E' && r.body[2] == 'L'

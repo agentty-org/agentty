@@ -77,7 +77,7 @@ function(_agentty_test_link_full name)
     endif()
     # libstdc++ ships std::print's Windows terminal path (__open_terminal /
     # __write_to_terminal) in the experimental archive, not libstdc++ proper.
-    if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(MAYA_TARGET_MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_link_libraries(${name} PRIVATE stdc++exp)
     endif()
     # registry.cpp routes the whole tool set through the mcp-cpp bridge.
@@ -104,11 +104,11 @@ function(_agentty_test_link_full name)
         target_link_libraries(${name} PRIVATE mimalloc-static)
         target_compile_definitions(${name} PRIVATE AGENTTY_USE_MIMALLOC=1)
     endif()
-    if(WIN32)
+    if(MAYA_TARGET_WINDOWS)
         target_link_libraries(${name} PRIVATE
             ws2_32 crypt32 shell32 winmm user32 gdi32 gdiplus shlwapi)
     endif()
-    if(APPLE)
+    if(MAYA_TARGET_APPLE)
         target_link_libraries(${name} PRIVATE
             "-framework Security" "-framework CoreFoundation")
     endif()
@@ -165,7 +165,7 @@ function(agentty_test name)
     # And no module scanning: it makes every TU uncacheable by ccache (the scan
     # adds -fmodule-mapper, which ccache rejects). See agentty_objlib().
     set_target_properties(${name} PROPERTIES CXX_SCAN_FOR_MODULES OFF)
-    if(T_UNIX_LIBS AND UNIX AND NOT APPLE)
+    if(T_UNIX_LIBS AND MAYA_TARGET_ELF_UNIX)
         target_link_libraries(${name} PRIVATE ${T_UNIX_LIBS})
     endif()
 
@@ -296,7 +296,7 @@ function(agentty_finalize_fold)
     _agentty_test_link_full(agentty_standalone_tests)
     target_link_libraries(agentty_standalone_tests PRIVATE ${FF_LIBS})
     get_property(_ulibs DIRECTORY PROPERTY AGENTTY_FOLD_UNIX_LIBS)
-    if(_ulibs AND UNIX AND NOT APPLE)
+    if(_ulibs AND MAYA_TARGET_ELF_UNIX)
         target_link_libraries(agentty_standalone_tests PRIVATE ${_ulibs})
     endif()
     # Test binaries never ship — no LTO (faster + dodges the GCC init-order

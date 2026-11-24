@@ -34,6 +34,7 @@
 // `describe_state()` are exposed for status surfaces (banner, "agentty
 // status", README docs).
 
+#include <maya/core/target.hpp>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -299,7 +300,7 @@ struct DegradedWall {
     int err_fd = -1,    // -1: stderr shares out_fd
     int in_fd = -1);    // -1: stdin is /dev/null
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 // macOS counterpart of spawn_in_sandbox for the jaal exec path. jaal cannot
 // adopt a child someone else forked on darwin (no pidfd, so no watchable
 // exit), so instead of handing back a pid this hands back the argv to spawn:

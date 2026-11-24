@@ -4,6 +4,7 @@
 // hosted ladder shape (a total cap) cuts it, the local ladder (no total cap)
 // lets it finish.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include <atomic>
@@ -16,7 +17,7 @@
 #include "agentty/provider/stream_scaffold.hpp"
 #include "agentty/util/io.hpp"
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #else
@@ -31,7 +32,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 using socket_t = SOCKET;
 constexpr socket_t kInvalid = INVALID_SOCKET;
 void close_socket(socket_t s) { if (s != kInvalid) ::closesocket(s); }
@@ -45,7 +46,7 @@ void close_socket(socket_t s) { if (s != kInvalid) ::close(s); }
 class TrickleServer {
 public:
     TrickleServer(int n, std::chrono::milliseconds gap) : n_(n), gap_(gap) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         WSADATA d{};
         (void)::WSAStartup(MAKEWORD(2, 2), &d);
 #endif
@@ -60,7 +61,7 @@ public:
             fd_ = kInvalid;
             return;
         }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int len = sizeof(a);
 #else
         socklen_t len = sizeof(a);
@@ -73,7 +74,7 @@ public:
         stop_.store(true);
         close_socket(fd_);   // unblocks accept() if the client never came
         if (worker_.joinable()) worker_.join();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         ::WSACleanup();
 #endif
     }
@@ -84,7 +85,7 @@ private:
     void send_all(socket_t c, const std::string& s) {
         std::size_t off = 0;
         while (off < s.size()) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const auto r = ::send(c, s.data() + off, static_cast<int>(s.size() - off), 0);
 #else
             // The capped client hangs up mid-stream; that must not SIGPIPE

@@ -1,6 +1,7 @@
 // agentty::provider — external ACP agent registry (config surface).
 // See acp_agents.hpp for the format + resolution rules.
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/acp_agents.hpp"
 #include "agentty/io/persistence.hpp"   // write_json_atomic
 #include "agentty/util/user_root.hpp"
@@ -216,7 +217,7 @@ const std::vector<KnownAgent>& known_agents() {
 
 // `name` on PATH as an executable file. Stats only.
 bool on_path(std::string_view name, std::string_view path) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     constexpr char sep = ';';
     static constexpr const char* exts[] = {".exe", ".cmd", ".bat", ""};
 #else

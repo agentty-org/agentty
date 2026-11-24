@@ -6,6 +6,7 @@
 //     cmake --build build --target sandbox_multilib_check
 //     ./build/sandbox_multilib_check            # skips what the host can't do
 //     ./build/sandbox_multilib_check --require  # ...or fails on it
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/tool/util/subprocess.hpp"
 #include "agentty/domain/sandbox_config.hpp"
@@ -19,7 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <unistd.h>
 #endif
 
@@ -67,7 +68,7 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-#if !defined(__linux__) || !defined(__x86_64__)
+#if !MAYA_OS_LINUX || !MAYA_CPU_X86_64
     return skip(require, "requires native Linux x86_64");
 #else
     // The scratch workspace can't live in /tmp: the sandbox mounts its own

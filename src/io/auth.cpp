@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/auth/auth.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
@@ -51,7 +52,7 @@
 #include "agentty/io/http.hpp"
 #include "agentty/util/env.hpp"
 
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
 #  include <io.h>
 #  include <windows.h>
 #  include <shellapi.h>
@@ -215,7 +216,7 @@ void prewarm_anthropic() {
 // ---------------------------------------------------------------------------
 
 static void restrict_perms(const fs::path& p) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // The credentials file is already AES-256-GCM sealed and bound to this
     // (machine, user), so a copy is cryptographically useless elsewhere. This
     // is the matching defence-in-depth for the POSIX 0600: replace the file's
@@ -971,7 +972,7 @@ AuthHeader fresh_auth_header_locked(Io io, const maya::held<locks::auth_refresh>
 // ---------------------------------------------------------------------------
 
 void open_browser(const std::string& url) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // ShellExecuteA passes the URL as a single argument to the shell's URL
     // handler — no command line is composed, so there is no shell-quoting
     // surface. Safe as-is.
@@ -984,7 +985,7 @@ void open_browser(const std::string& url) {
     // carries. (The OAuth URL is all url-escaped today, so this is
     // defense-in-depth — but it keeps a future caller who passes an
     // arbitrary URL here safe by construction rather than by luck.)
-#  if defined(__APPLE__)
+#  if MAYA_OS_APPLE
     const char* opener = "open";
 #  else
     const char* opener = "xdg-open";

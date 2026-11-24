@@ -19,6 +19,7 @@
 // that needs a live tool provider. The bridge call site is three lines and
 // exercised by every real write; the interesting logic is all here.
 
+#include <maya/core/target.hpp>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -28,7 +29,7 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>   // getpid — unique symlink sandbox per run
 #endif
 
@@ -357,7 +358,7 @@ TEST_CASE("handoff: a symlinked directory cannot hide a trusted shape") {
 
 // ── step 4: the agent cannot loosen its own box ──────────────────────────────
 
-#if !defined(_WIN32)   // setenv/getpid/symlinks; the logic is not platform code
+#if !MAYA_OS_WINDOWS // setenv/getpid/symlinks; the logic is not platform code
 namespace {
 // A private $AGENTTY_HOME for one case, restored on the way out.
 struct OwnRoot {

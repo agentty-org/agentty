@@ -11,6 +11,7 @@
 // otherwise it flushes as ordinary prose. Once any structured tool_calls frame
 // arrives, salvage is disabled (the model can drive the real channel).
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/ollama/transport.hpp"
 #include "agentty/domain/reasoning_off.hpp"
 #include "agentty/version.hpp"
@@ -1536,10 +1537,10 @@ std::string system_prompt() {
     catch (const std::exception& e) { util::dbglog("ollama.system_prompt.cwd", e.what()); }
     catch (...) { util::dbglog("ollama.system_prompt.cwd", "non-std exception"); }
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const char* os_name = "Windows";
     const char* shell   = "cmd.exe";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     const char* os_name = "macOS";
     const char* shell   = "sh";
 #else

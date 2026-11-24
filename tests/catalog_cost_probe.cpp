@@ -4,6 +4,7 @@
 // and the trust gate added a file read plus a SHA-256 over every skill body
 // to that path. This measures it rather than assuming.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/skills.hpp"
 
 #include <chrono>
@@ -65,7 +66,7 @@ int main() {
     // Linux, so the same healthy pass measures ~3 ms there. The re-parse
     // regression this guards against costs several times that again (every
     // SKILL.md opened, read and hashed), so the shape still shows.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     constexpr long long kBudgetUs = 6000;
 #else
     constexpr long long kBudgetUs = 1500;

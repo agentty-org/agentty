@@ -3,6 +3,7 @@
 // carries the same `x-session-id`. These tests stream a real turn through the
 // OpenAI-compatible transport to a loopback server and read what arrived.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include <atomic>
@@ -19,7 +20,7 @@
 #include "agentty/provider/openai/provider.hpp"
 #include "agentty/provider/openai/transport.hpp"
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #else
@@ -35,7 +36,7 @@ namespace oai = agentty::provider::openai;
 
 namespace {
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 using socket_t = SOCKET;
 constexpr socket_t kInvalid = INVALID_SOCKET;
 void close_socket(socket_t s) { if (s != kInvalid) ::closesocket(s); }
@@ -49,7 +50,7 @@ void close_socket(socket_t s) { if (s != kInvalid) ::close(s); }
 class ChatServer {
 public:
     ChatServer() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         WSADATA d{};
         if (::WSAStartup(MAKEWORD(2, 2), &d) != 0) return;
         wsa_ = true;
@@ -65,7 +66,7 @@ public:
             fd_ = kInvalid;
             return;
         }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int len = sizeof(a);
 #else
         socklen_t len = sizeof(a);
@@ -90,7 +91,7 @@ public:
         }
         if (worker_.joinable()) worker_.join();
         close_socket(fd_);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         if (wsa_) ::WSACleanup();
 #endif
     }
@@ -132,7 +133,7 @@ private:
             const socket_t c = ::accept(fd_, nullptr, nullptr);
             if (c == kInvalid) continue;
             if (stop_.load()) { close_socket(c); break; }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const DWORD ms = 5000;
             (void)::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO,
                                reinterpret_cast<const char*>(&ms), sizeof(ms));
@@ -201,7 +202,7 @@ private:
     mutable std::mutex mu_;
     std::string last_head_, last_body_, required_;
     std::atomic<int> requests_{0};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     bool wsa_ = false;
 #endif
 };

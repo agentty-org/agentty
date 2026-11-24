@@ -20,6 +20,7 @@
 //   - alternating prose-only and tool-heavy turns across enough turns to
 //     trigger the frozen front-trim (commit_scrollback) repeatedly.
 
+#include <maya/core/target.hpp>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -30,7 +31,7 @@
 #include <vector>
 
 #include <fcntl.h>
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include <util.h>       // openpty on macOS
 #else
 #include <pty.h>        // openpty on glibc (link -lutil)

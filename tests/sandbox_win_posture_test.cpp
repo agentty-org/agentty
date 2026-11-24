@@ -6,12 +6,13 @@
 // and which walls the report promises. It runs in the agentty_tests binary
 // on every host; the LIVE enforcement question is claybin's windows_live_
 // check, which runs (and currently passes) on a windows box.
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/domain/sandbox_config.hpp"
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

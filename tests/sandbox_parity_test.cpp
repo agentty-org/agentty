@@ -5,6 +5,7 @@
 // this one. mcp-cpp runs nothing itself any more (every command goes through
 // agentty's exec), so there is one sandbox and nothing to keep in step.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/tool/util/sandbox.hpp"
@@ -15,7 +16,7 @@
 // Linux-only, like claybin's apply step. The userns case below compiles a
 // plan for a DESCRIBED host, which is portable, but the policy types it needs
 // are not.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <claybin/plan/compile.hpp>
 #include <claybin/policy/policy.hpp>
 #include <claybin/policy/profiles.hpp>
@@ -33,7 +34,7 @@
 namespace ag = agentty::tools::util::sandbox;
 namespace sandbox_cfg = agentty::sandbox_cfg;
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 TEST_CASE("sandbox: claybin does not need a user namespace to be useful") {
     // The Ubuntu 24.04 case (KhazAkar's issue). That host ships an AppArmor
     // profile denying the uid_map write to unconfined binaries, so bwrap dies
@@ -97,7 +98,7 @@ TEST_CASE("sandbox: claybin does not need a user namespace to be useful") {
     CHECK(compiled->guarantees.strength(CapId::proc_isolation) == Enforcement::none);
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 TEST_CASE("sandbox: agentty's own config is read-only in the box (roadmap step 4)") {
     // The workspace at $HOME exposes ~/.agentty through the workspace bind:
     // settings.json (the policy itself), mcp.json and the approval store. The
@@ -183,7 +184,7 @@ TEST_CASE("sandbox: the SHIPPED posture compiles and masks on a no-userns host")
 }
 #endif  // __linux__
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 TEST_CASE("sandbox: a microvm request is REFUSED, never downgraded") {
     // The invariant that makes "we do not implement kernel isolation" an honest
     // position rather than a gap.
@@ -288,7 +289,7 @@ TEST_CASE("sandbox: asking for claybin on a host that refuses it yields bwrap, n
     ag::reset_config_for_test();
     (void)ag::init(ag::Mode::Auto);
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (ag::is_active()) {
         const auto b = ag::detected_backend();
         // Exactly one of the two Linux engines. Never None while active, and
@@ -394,7 +395,7 @@ TEST_CASE("sandbox: the denied path is read out of the usual error shapes") {
     CHECK(ag::denied_paths("all good\n", "/").empty());
 }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 TEST_CASE("sandbox: only a denial the host user would not have hit is recorded") {
     // The feed is "what the sandbox stopped". A file the user cannot write
     // anyway (/etc/shadow) is the file's own mode, not the box, and stays
@@ -528,7 +529,7 @@ TEST_CASE("sandbox masks: a suffix rule needs its marker to be a suffix") {
     CHECK_FALSE(has("scoped.npmrc"));
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // ── the cgroup has to actually hold the guest ───────────────────────────
 //
 // describe() reports `resource.memory strong via cgroup2` whenever compile()

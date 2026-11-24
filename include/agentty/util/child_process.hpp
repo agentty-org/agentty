@@ -7,7 +7,8 @@
 // A `cmd /c <payload>` argv passes the payload to cmd.exe as written.
 #pragma once
 
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#include <maya/core/target.hpp>
+#if MAYA_OS_POSIX || MAYA_OS_WINDOWS
 #  define AGENTTY_HAVE_CHILD_PROCESS 1
 #else
 #  define AGENTTY_HAVE_CHILD_PROCESS 0
@@ -31,7 +32,7 @@
 
 #include <maya/runtime.hpp>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -157,7 +158,7 @@ protected:
     int_type underflow() override {
         for (;;) {
             if (interrupted_.load(std::memory_order_acquire)) return traits_type::eof();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             bool eof = false;
             const auto n = maya::platform::read_some(h_, in_, sizeof(in_), eof);
             if (n > 0) { setg(in_, in_, in_ + n); return traits_type::to_int_type(in_[0]); }
@@ -253,7 +254,7 @@ private:
 
     static int write_all(maya::platform::borrowed_handle h, const char* p, std::size_t left) {
         while (left > 0) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             DWORD put = 0;
             if (!::WriteFile(static_cast<HANDLE>(h.get()), p, static_cast<DWORD>(left), &put, nullptr)
                 || put == 0)
@@ -309,7 +310,7 @@ public:
 
     explicit ChildProcess(const Spawn& s) {
         namespace pf = maya::platform;
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         if (s.spawner) {
             if (auto a = s.spawner(s)) {
                 adopt(std::move(*a), s.command);
@@ -394,7 +395,7 @@ public:
     }
 
 private:
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     // Take over a child the sandbox started. The pipes and pidfd are TAKEN;
     // after this the object is indistinguishable from a plain spawn.
     void adopt(Spawn::Adopt a, const std::string& command) {
@@ -432,7 +433,7 @@ private:
     // Is the exit handle signalled within `d`? Level-triggered, so any
     // thread may ask without a shared reactor.
     [[nodiscard]] bool exit_ready(std::chrono::milliseconds d) noexcept {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         return ::WaitForSingleObject(static_cast<HANDLE>(exit_h_.get()),
                                      static_cast<DWORD>(d.count())) == WAIT_OBJECT_0;
 #else

@@ -1,6 +1,7 @@
 // The system clipboard. Reads go through richpaste; writes use the
 // platform tool. See include/agentty/io/clipboard.hpp.
 
+#include <maya/core/target.hpp>
 #include "agentty/io/clipboard.hpp"
 #include "agentty/util/logx.hpp"
 #include "agentty/util/snapshot.hpp"   // AtomicSnapshot
@@ -13,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <unistd.h>   // access/X_OK (tool_in_path), getuid
 #endif
 
@@ -288,7 +289,7 @@ ClipboardForward clipboard_ssh_forward(std::string* error) {
 
 namespace {
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 
 // Run a clipboard tool and feed it `data` on stdin. True iff it exited 0.
 bool popen_write(const char* cmd, std::string_view data) {
@@ -302,7 +303,7 @@ bool popen_write(const char* cmd, std::string_view data) {
     return c.started && c.exited && c.exit_code == 0;
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 // Is `name` an executable on PATH? No shell, and no names with a slash.
 bool tool_in_path(const char* name) {
@@ -409,11 +410,11 @@ bool write_clipboard_text(std::string_view text, std::string* error_out) {
         return false;
     };
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     if (popen_write("pbcopy", text)) return true;
     return fail("pbcopy failed (is it on PATH?)");
 
-#elif defined(__linux__)
+#elif MAYA_OS_LINUX
     const DisplayEnv disp = discover_display();
     // Try every installed tool; detection only orders them. wl-copy first on
     // Wayland: xclip reaches it only through XWayland.
@@ -431,7 +432,7 @@ bool write_clipboard_text(std::string_view text, std::string* error_out) {
     AGT_LOG(Ui, Warn, "clipboard.write.failed", "wayland={} x11={}", disp.wayland, disp.x11);
     return fail("no clipboard tool — install wl-clipboard or xclip");
 
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // Win32 CF_UNICODETEXT directly: clip.exe mangles non-ASCII text.
     auto r = rp::write_clipboard_text(text);
     if (r) return true;

@@ -23,6 +23,7 @@
 // The other half is honesty about WHICH clock fired. "Timed out" sends you
 // hunting for a hang when the command was fine and just needed longer, so
 // the outcome names the budget and the two get opposite advice.
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/tool/util/exec.hpp"
@@ -58,7 +59,7 @@ std::shared_ptr<mt::Exec> exec() {
 }
 
 mt::ExecResult sh(std::string script, mt::Budgets b) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // The platform shell on Windows is cmd.exe (what the shell tool and
     // process_start use), so the scripts below have cmd.exe spellings there:
     // `ping -n N 127.0.0.1 >nul` sleeps ~N-1 s, `for /l %i in (0,0,1)` loops
@@ -84,7 +85,7 @@ TEST_CASE("exec: a chatty runaway is reaped by the wall clock") {
     // THE bug. Output resets the idle clock forever, so only an absolute
     // ceiling can end this. Without one the call never returns.
     const auto t0 = std::chrono::steady_clock::now();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     auto r = sh("for /l %i in (0,0,1) do @echo spin", {.idle = 30s, .wall = 2s});
 #else
     auto r = sh("while :; do echo spin; done", {.idle = 30s, .wall = 2s});
@@ -105,7 +106,7 @@ TEST_CASE("exec: a long chatty job is NOT cut off") {
     // default rather than a wall clock. Runtime here exceeds the idle
     // budget several times over; progress is what keeps it alive, and that
     // is correct.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // cmd.exe has no sub-second sleep short of a ~300ms PowerShell start, so
     // each step sleeps ~1s (ping -n 2) and the idle budget is 3s instead of
     // 1s. The property is unchanged: total runtime (~6s) is double the idle
@@ -123,7 +124,7 @@ TEST_CASE("exec: a long chatty job is NOT cut off") {
 }
 
 TEST_CASE("exec: a silent hang is caught by the idle clock") {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     auto r = sh("ping -n 31 127.0.0.1 >nul", {.idle = 1s, .wall = 60s});
 #else
     auto r = sh("sleep 30", {.idle = 1s, .wall = 60s});
@@ -137,7 +138,7 @@ TEST_CASE("exec: which budget fired is part of the answer") {
     // was working fine, give it longer or run it in the background". A
     // single timed_out flag forces the caller to guess, and it guesses
     // wrong half the time.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     auto hung    = sh("ping -n 31 127.0.0.1 >nul", {.idle = 1s, .wall = 60s});
     auto runaway = sh("for /l %i in (0,0,1) do @echo x", {.idle = 30s, .wall = 2s});
 #else
@@ -157,7 +158,7 @@ TEST_CASE("exec: output printed before the exit survives it") {
     // The exit says the bytes are finished, not that we have them: what was
     // written before it is still in the pipe. jaal's conformance suite pins
     // this for the platform; this pins that the policy layer honours it.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     auto r = sh("<nul set /p \"=last-bytes\"& exit /b 3", {.idle = 5s, .wall = 30s});
 #else
     auto r = sh("printf 'last-bytes'; exit 3", {.idle = 5s, .wall = 30s});
@@ -186,7 +187,7 @@ TEST_CASE("exec: a program that never ran is not a program that failed") {
 TEST_CASE("exec: a clean command reports no timeout at all") {
     // The negative case, so a bug that reports every run as timed-out does
     // not hide behind the checks above.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // `set /p` at EOF leaves errorlevel 1, hence the explicit clean exit.
     auto r = sh("<nul set /p \"=ok\"& exit /b 0", {.idle = 5s, .wall = 30s});
 #else
@@ -216,7 +217,7 @@ TEST_CASE("exec: the sandboxed path spawns, is watched, and still obeys the cloc
 
     // The shell is the platform's: the sandbox contract is not "linux only",
     // it is "whatever shell this host runs the command with".
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const std::vector<std::string> echo_cmd = {"cmd.exe", "/d", "/s", "/c", "echo inside"};
     const std::vector<std::string> spin_cmd = {"cmd.exe", "/d", "/s", "/c",
                                                "for /l %i in () do @echo s"};
@@ -255,7 +256,7 @@ TEST_CASE("exec: the sandboxed path spawns, is watched, and still obeys the cloc
 TEST_CASE("exec: node runs sandboxed under the default policy") {
     // V8 needs RWX pages. Below Strict a JIT command gets W^X lifted.
     namespace sb = agentty::tools::util::sandbox;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (::access("/usr/bin/node", X_OK) != 0) return;
     if (!sb::init(sb::Mode::On) || !sb::is_active()) return;
     auto e = agentty::tools::util::make_exec();
@@ -276,7 +277,7 @@ TEST_CASE("exec: the request's env reaches a sandboxed child") {
     namespace sb = agentty::tools::util::sandbox;
     if (!sb::init(sb::Mode::On) || !sb::is_active()) return;
     auto e = agentty::tools::util::make_exec();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     auto r = e->run(mt::Call{}, {.program = {"cmd.exe", {"/d", "/s", "/c", "echo %AGT_PROBE%"}},
                                  .env = {{"AGT_PROBE", "from-request"}},
                                  .budgets = {.idle = 10s, .wall = 20s}});
@@ -298,7 +299,7 @@ TEST_CASE("exec: the request's env reaches a sandboxed child") {
 // nobody services never gets past it.
 TEST_CASE("exec: a sandboxed background session gets its brokered syscalls answered") {
     namespace sb = agentty::tools::util::sandbox;
-#if !defined(__linux__)
+#if !MAYA_OS_LINUX
     // the broker is seccomp-notify: a linux-only mechanism. on windows the
     // sandbox reports syscall.filter as `partial` (mitigation policies, no
     // programmable filter) and there is no listener to service -- python3's
@@ -352,7 +353,7 @@ TEST_CASE("exec: a sandboxed background session gets its brokered syscalls answe
 // what matters is that the three tools still compose, since the lifetime
 // spans three separate calls.
 TEST_CASE("process session: start, poll, stop through the registry") {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     constexpr const char* kTicks =
         "for /l %i in (1,1,3) do @(echo tick%i& ping -n 1 127.0.0.1 >nul)& echo done";
 #else
@@ -403,7 +404,7 @@ TEST_CASE("process session: start, poll, stop through the registry") {
 // has a path. agentty holds credential stores and logs open while it runs
 // tools, so the exec has to close everything but the child's own three.
 // (Moved from mcp-cpp's fd_leak_test when spawning moved to agentty.)
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 TEST_CASE("exec: a child cannot read the host's open descriptors") {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / ("fd_leak_" + std::to_string(::getpid()));
@@ -454,7 +455,7 @@ TEST_CASE("exec: a tool call streams progress and stops on cancel") {
     {
         agentty::tools::CallContext ctx;
         ctx.progress = [&](std::string_view) { ++calls; };
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         // ~1s apart (ping -n 2) so each tick is a separate progress event.
         constexpr const char* kStream =
             "for /l %i in (1,1,3) do @(echo tick%i& ping -n 2 127.0.0.1 >nul)";
@@ -473,7 +474,7 @@ TEST_CASE("exec: a tool call streams progress and stops on cancel") {
     {
         agentty::tools::CallContext ctx;
         ctx.cancel.push_back(src.get_token());
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         constexpr const char* kLong = "ping -n 21 127.0.0.1 >nul& echo done";
 #else
         constexpr const char* kLong = "sleep 20; echo done";

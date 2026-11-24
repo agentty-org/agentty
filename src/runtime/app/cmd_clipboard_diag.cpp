@@ -5,11 +5,12 @@
 // runs on a worker and replies with ClipboardDiagnosed. The reducer only
 // shows the message.
 
+#include <maya/core/target.hpp>
 #include "agentty/runtime/app/cmd_factory.hpp"
 
 #include <string>
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
@@ -23,7 +24,7 @@ namespace agentty::app::cmd {
 
 namespace {
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // Walk up from `pid` through /proc looking for mosh-server. mosh exports no
 // reliable env marker into its child shell, so ancestry is the only signal.
 bool mosh_above(int pid) {
@@ -54,7 +55,7 @@ bool mosh_above(int pid) {
 #endif
 
 bool mosh_session() {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (mosh_above(static_cast<int>(::getppid()))) return true;
     // Ancestry misses persistent tmux: when the tmux server was started by
     // systemd or an older login, mosh-server is a sibling of the server, not

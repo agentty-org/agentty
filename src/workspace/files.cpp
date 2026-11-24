@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/workspace/files.hpp"
 
 #include <algorithm>
@@ -19,11 +20,11 @@
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/tool/util/subprocess.hpp"
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #  include <pthread.h>
 #  include <sched.h>
 #endif
-#if defined(__unix__) || defined(__APPLE__)
+#if MAYA_OS_POSIX
 #  include <sys/resource.h>
 #endif
 
@@ -431,7 +432,7 @@ void prewarm_workspace_files(std::stop_token stop, std::size_t cap) {
 }
 
 void deprioritize_prewarm_thread() noexcept {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     // SCHED_IDLE, not nice(19): a niced thread still competes for
     // timeslices, while SCHED_IDLE only runs when the runqueue is otherwise
     // empty. That is exactly the contract a speculative prewarm wants — use
@@ -441,7 +442,7 @@ void deprioritize_prewarm_thread() noexcept {
     if (::pthread_setschedparam(::pthread_self(), SCHED_IDLE, &p) == 0) return;
     // Some containers refuse sched_setscheduler; fall through to nice().
 #endif
-#if defined(__unix__) || defined(__APPLE__)
+#if MAYA_OS_POSIX
     (void)::setpriority(PRIO_PROCESS, 0, 19);
 #endif
 }

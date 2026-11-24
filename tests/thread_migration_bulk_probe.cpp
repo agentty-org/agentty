@@ -18,6 +18,7 @@
 //
 // No argument = no-op pass, so this costs nothing in CI.
 
+#include <maya/core/target.hpp>
 #include <agentty/domain/conversation.hpp>
 #include "agtest_cap.hpp"
 #include <agentty/io/persistence.hpp>
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
     // AGENTTY_HOME to a sandbox; override it so threads_dir() resolves
     // here instead.
     const auto home = dir.parent_path();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", home.string().c_str());
 #else
     ::setenv("AGENTTY_HOME", home.string().c_str(), 1);

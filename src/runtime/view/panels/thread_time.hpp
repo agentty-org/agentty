@@ -1,6 +1,7 @@
 #pragma once
 // thread_time.hpp — the ^J list's day groups and short ages.
 
+#include <maya/core/target.hpp>
 #include <chrono>
 #include <ctime>
 #include <string>
@@ -27,7 +28,7 @@ namespace thread_time_detail {
 [[nodiscard]] inline long local_day(std::chrono::system_clock::time_point tp) {
     const std::time_t tt = std::chrono::system_clock::to_time_t(tp);
     std::tm tm{};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     localtime_s(&tm, &tt);
 #else
     localtime_r(&tt, &tm);

@@ -7,6 +7,7 @@
 //
 // Run it when touching the sandbox:
 //   cmake --build build --target sandbox_audit && ./build/sandbox_audit
+#include <maya/core/target.hpp>
 #include "agentty/util/io.hpp"
 #include "agentty//tool/util/sandbox_claybin.hpp"
 #include "agentty/tool/util/sandbox.hpp"
@@ -14,10 +15,10 @@
 
 #include <claybin/plan/compile.hpp>
 #include <claybin/policy/policy.hpp>
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #include <claybin/windows/backend.hpp>
 #endif
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include <claybin/macos/backend.hpp>
 #endif
 
@@ -84,7 +85,7 @@ int main(int argc, char** argv) {
     // NOTHING, while the capability tables below report seatbelt walls doing
     // real work. Two contradictory answers on one screen, and the wrong one
     // first.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     const auto mhost = ::clay::macos::probe_host();
     std::printf("host: darwin=%u seatbelt=%d\n", mhost.darwin_major,
                 (int)mhost.seatbelt);
@@ -162,7 +163,7 @@ int main(int argc, char** argv) {
 
     sb::reset_config_for_test();
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // 4. LIVE spawn, through the shipped path, with the shipped posture. The
     // audit above grades compile-time walls; this answers the question the
     // walls cannot: does a real child survive them on THIS host? The exec

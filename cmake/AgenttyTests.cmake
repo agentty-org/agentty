@@ -262,7 +262,7 @@ set_target_properties(tool_gallery PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 # diffed against tests/fixtures/ui_snapshots. Catches a change that alters
 # how something looks. Accept an intended change with
 #     tests/ui_snapshots.sh build/tool_gallery --update
-if(UNIX)
+if(MAYA_TARGET_POSIX)
     add_test(NAME ui_snapshots
              COMMAND sh ${CMAKE_SOURCE_DIR}/tests/ui_snapshots.sh
                      $<TARGET_FILE:tool_gallery>)
@@ -355,7 +355,7 @@ target_compile_definitions(exec_exit_probe PRIVATE
 # i386 path:
 #     cmake --build build --target sandbox_multilib_check && ./build/sandbox_multilib_check
 # claybin's x86_audit covers the profiles themselves on every build.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$"
+if(MAYA_TARGET_LINUX AND MAYA_TARGET_X86_64
    AND NOT CMAKE_CROSSCOMPILING)
     add_executable(sandbox_multilib_check EXCLUDE_FROM_ALL
         ${CMAKE_SOURCE_DIR}/tests/sandbox_multilib_check.cpp
@@ -518,7 +518,7 @@ agentty_fold_test(frame_per_key_probe TIMEOUT 120 ARGS)
 # A theme change recolours every cell, so the whole viewport goes on the
 # wire per keypress. Compares that against a plain cursor move.
 agentty_fold_test(theme_wire_cost_probe TIMEOUT 120 ARGS)
-if(UNIX)
+if(MAYA_TARGET_POSIX)
     # PTY-driven (openpty); full-runtime ghost-caret repro — see the
     # header of tests/test_ghost_caret_runtime.cpp (credit: davidwed).
     agentty_fold_test(test_ghost_caret_runtime TIMEOUT 60 SKIP_CODE 77 UNIX_LIBS util)
@@ -529,7 +529,7 @@ agentty_fold_test(plugin_disabled_tools_test TIMEOUT 60)
 agentty_fold_test(tool_budget_env_test     TIMEOUT 60)
 agentty_fold_test(frozen_invariant_fuzz)
 agentty_fold_test(scrollback_wire_fuzz     TIMEOUT 120)
-if(UNIX)
+if(MAYA_TARGET_POSIX)
     # Both drive the runtime through openpty — POSIX only (see the .def).
     agentty_fold_test(reveal_scrollback_test   TIMEOUT 180 UNIX_LIBS util)
     agentty_fold_test(scrollback_oracle_test   TIMEOUT 600 UNIX_LIBS util)
@@ -824,7 +824,7 @@ if(TARGET mcp::tools)
     # Not a TSan target: claybin's setup child is a raw clone3 of the TSan
     # runtime, which reports and stalls inside it. Run uninstrumented, it is
     # what caught spawns hanging on glibc's abort lock (claybin spawn.cpp).
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT AGENTTY_SANITIZE_ALL)
+    if(MAYA_TARGET_LINUX AND NOT AGENTTY_SANITIZE_ALL)
         agentty_test(exec_session_race_sandboxed MODE raw LABELS sandbox)
         add_executable(exec_session_race_sandboxed EXCLUDE_FROM_ALL
             tests/exec_session_race_test.cpp tests/sandbox_config_race_stubs.cpp
@@ -947,7 +947,7 @@ set_tests_properties(logx_rotation_test PROPERTIES TIMEOUT 30
 # under ASan (~390 files) until the runner was killed.
 agentty_test(keystore_test MODE standalone
     OBJS $<TARGET_OBJECTS:agentty_acp_obj> LIBS acp::acp)
-if(WIN32 AND TARGET keystore_test)
+if(MAYA_TARGET_WINDOWS AND TARGET keystore_test)
     target_link_libraries(keystore_test PRIVATE advapi32)   # CredReadW & co
 endif()
 
@@ -1042,7 +1042,7 @@ add_test(NAME cli_arg_order_test
 set_tests_properties(cli_arg_order_test PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 
 # `agentty config move` / doctor against the real binary in a scratch home.
-if(NOT WIN32)
+if(NOT MAYA_TARGET_WINDOWS)
     add_test(NAME config_move_test
              COMMAND sh ${CMAKE_SOURCE_DIR}/tests/config_move_test.sh $<TARGET_FILE:agentty>)
     set_tests_properties(config_move_test PROPERTIES TIMEOUT 60)
@@ -1181,6 +1181,24 @@ add_test(NAME layering_jaal
          COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR}/third_party/maya/third_party/jaal
                  -P ${CMAKE_SOURCE_DIR}/third_party/maya/third_party/jaal/tests/lint/layering.cmake)
 set_tests_properties(layering_maya layering_jaal PROPERTIES LABELS static TIMEOUT 120)
+# one_os: the platform is decided once, by jaal, and reaches agentty only as
+# maya's re-export (maya/core/target.hpp: MAYA_OS_* / MAYA_CC_* /
+# MAYA_CPU_* / MAYA_ISA_*). No agentty file reads a raw _WIN32 / __APPLE__
+# / _MSC_VER / __x86_64__. jaal's rule, through maya's door, so this file
+# never names jaal either.
+add_test(NAME one_os
+         COMMAND ${CMAKE_COMMAND}
+                 "-DROOTS=${CMAKE_SOURCE_DIR}/src;${CMAKE_SOURCE_DIR}/include;${CMAKE_SOURCE_DIR}/tests;${CMAKE_SOURCE_DIR}/tools"
+                 -P ${CMAKE_SOURCE_DIR}/third_party/maya/tests/lint/one_os.cmake)
+set_tests_properties(one_os PROPERTIES LABELS static TIMEOUT 60)
+# ...and the build asks the headers too (cmake/AgenttyTarget.cmake:
+# MAYA_TARGET_*): no if(WIN32 / APPLE / UNIX / CMAKE_SYSTEM_NAME) anywhere.
+file(GLOB _agentty_cmake_files ${CMAKE_SOURCE_DIR}/cmake/*.cmake)
+add_test(NAME one_os_cmake
+         COMMAND ${CMAKE_COMMAND}
+                 "-DFILES=${CMAKE_SOURCE_DIR}/CMakeLists.txt;${_agentty_cmake_files}"
+                 -P ${CMAKE_SOURCE_DIR}/third_party/maya/tests/lint/one_os_cmake.cmake)
+set_tests_properties(one_os_cmake PROPERTIES LABELS static TIMEOUT 60)
 # maya's seam.sh: only host/ and the re-export headers touch jaal, no
 # detached threads, one SIGWINCH owner. Nothing ran it, so it went stale.
 add_test(NAME maya_seam

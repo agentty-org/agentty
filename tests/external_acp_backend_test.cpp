@@ -17,6 +17,7 @@
 //   5. User Esc (cancel token) → we send session/cancel and settle cancelled.
 //   6. map_acp_stop_reason pure-function table.
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/external_acp_backend.hpp"
 
 #include <acp/acp.hpp>
@@ -38,7 +39,7 @@
 #include <thread>
 #include <vector>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>   // getpid
 #endif
 
@@ -629,7 +630,7 @@ void test_default_sandbox_delegate_roundtrip() {
     // Out-of-workspace write is refused by the write gate.
     CHECK(del.write_text_file("/etc/acp_should_not_write", "nope") == false);
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     // An agent's terminal/create with no args sends a whole shell line
     // (Devin: "ls -la | head -3"). It must run as shell, pipes and all --
     // not as one program named "ls -la | head -3".

@@ -15,6 +15,7 @@
 //
 // Exit code 0 = all assertions held.
 
+#include <maya/core/target.hpp>
 #include <acp/acp.hpp>
 
 #include <atomic>
@@ -32,7 +33,7 @@
 #include <vector>
 
 #include <unistd.h>
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #include <fcntl.h>   // _O_BINARY
 #include <io.h>      // _pipe
 #endif
@@ -198,7 +199,7 @@ TEST_CASE("acp integration end-to-end") {
     // ── Wire two real OS pipes between agent and client ────────────────────
     // c2a = client→agent, a2c = agent→client. Both sides run on rpc::Peer.
     int c2a[2], a2c[2];
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // _O_NOINHERIT: _pipe's handles are inheritable by default, so any child
     // a tool spawns mid-test would hold the write ends open and the readers
     // would never see EOF at teardown (the process then hangs on exit).

@@ -5,13 +5,14 @@
 // and file_event_osc() is a pure string builder. With no cached probe there
 // is nothing to isolate, so every case runs in one process, on every
 // platform.
+#include <maya/core/target.hpp>
 #include "agentty/runtime/view/host_escape.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 static void set_env(const char* k, const char* v) { _putenv_s(k, v); }
 static void unset_env(const char* k)              { _putenv_s(k, ""); }
 #else

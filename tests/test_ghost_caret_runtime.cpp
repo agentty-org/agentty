@@ -13,6 +13,7 @@
 // above, and the previously-caret-holding row must be empty.
 //
 // Build: link against the agentty tests lib (see CMake agentty_test()).
+#include <maya/core/target.hpp>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -26,7 +27,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include <util.h>
 #else
 #include <pty.h>

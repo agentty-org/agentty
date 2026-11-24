@@ -10,6 +10,7 @@
 // A doctest case in the consolidated binary (links the shared object set, so
 // auth.cpp comes for free). It points XDG_CONFIG_HOME at a unique temp dir and
 // disables the keystore so save/load go straight to the sealed file.
+#include <maya/core/target.hpp>
 #include <doctest/doctest.h>
 
 #include "agentty/auth/auth.hpp"
@@ -45,7 +46,7 @@ void isolate_config_dir() {
     auto dir = fs::temp_directory_path() /
                ("agentty_proactive_" + std::to_string(now_ms()));
     fs::create_directories(dir);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", dir.string().c_str());
     _putenv_s("AGENTTY_USE_KEYSTORE", "0");
 #else

@@ -12,11 +12,12 @@
 // for the user-facing design (interactive-first, capture to the composer
 // only on request, Windows degradation).
 
+#include <maya/core/target.hpp>
 #include "agentty/runtime/app/cmd_code_block_run.hpp"
 
 #include "agentty/runtime/app/update/internal.hpp"
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     #include <cerrno>
     #include <csignal>
     #include <cstdio>
@@ -52,7 +53,7 @@ namespace {
 // the real terminal with a stdout/stderr tee — fully interactive, output
 // captured. Windows: non-interactive captured runner (subprocess), same
 // as the bash tool.
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 
 // Run `command` via /bin/sh -c on the REAL terminal (we're inside maya's
 // suspend: cooked tty, TUI escapes torn down). stdin is inherited — the

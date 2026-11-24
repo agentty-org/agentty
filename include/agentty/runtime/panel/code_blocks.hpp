@@ -33,6 +33,7 @@
 // update/codeblock.cpp, key dispatch in subscribe.cpp, the view in
 // view/pickers.cpp — the same file split as the other pickers.
 
+#include <maya/core/target.hpp>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -81,7 +82,7 @@ enum class BlockShell {
         lang == "cmd" || lang == "bat" || lang == "batch" || lang == "dos"
         || lang == "winbatch" || lang == "cmd.exe";
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // On Windows the *native* shell for a bare fence is cmd.exe. A
     // PowerShell block runs through powershell; an explicit posix block
     // is handed to the default shell wrapper too (cmd.exe) as a best

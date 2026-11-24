@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/io/tls.hpp"
 #include "agentty/util/env.hpp"
 
@@ -19,10 +20,10 @@
 
 #include <maya/runtime.hpp>
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #  include <Security/Security.h>
 #  include <CoreFoundation/CoreFoundation.h>
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
 // Declared before windows.h to quiet min/max + cert cruft.
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
@@ -32,7 +33,7 @@
 #  endif
 #  include <windows.h>
 #  include <wincrypt.h>
-#  ifdef _MSC_VER
+#  if MAYA_CC_MSVC_ABI
 #    pragma comment(lib, "crypt32.lib")
 #  endif
 #endif
@@ -153,7 +154,7 @@ int new_session_cb(SSL* ssl, SSL_SESSION* sess) {
 // the union — belt and suspenders.
 // --------------------------------------------------------------------------
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 // macOS: enumerate the admin + system keychain trust settings.  Any cert
 // marked with kSecTrustSettingsResultTrustRoot or TrustAsRoot goes into
 // OpenSSL's store.  Not all roots have explicit trust settings (the system
@@ -199,7 +200,7 @@ bool load_system_roots(SSL_CTX* ctx) {
     return true;
 }
 
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
 // Windows: pull every cert out of the system ROOT store and add to OpenSSL.
 // We go through CertEnumCertificatesInStore instead of the legacy A-variant
 // so unicode cert names don't trip us up.

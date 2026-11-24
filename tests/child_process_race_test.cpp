@@ -5,6 +5,7 @@
 // owner's destructor terminates and reaps. This hammers those together so
 // TSan (build-tsan) sees any unsynchronised access, and the plain build
 // checks nothing deadlocks or crashes.
+#include <maya/core/target.hpp>
 #include "agentty/util/child_process.hpp"
 
 #include <atomic>
@@ -23,7 +24,7 @@ void check(bool ok, const char* what) {
 
 agentty::util::ChildProcess::Spawn cat_spawn() {
     agentty::util::ChildProcess::Spawn s;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     s.command = "cmd";   // `more` echoes stdin and exits on EOF, like cat
     s.args    = {"/c", "more"};
 #else

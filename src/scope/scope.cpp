@@ -7,6 +7,7 @@
 //   • current_env() — read HOME / project_root / writability once, at the edge.
 //   • trust_of() + Approvals — the content-hash trust store (the MCPoison fix).
 
+#include <maya/core/target.hpp>
 #include "agentty/scope/scope.hpp"
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/user_root.hpp"
@@ -18,7 +19,7 @@
 #include <fstream>
 #include <system_error>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <unistd.h>   // access(), W_OK
 #endif
 
@@ -44,7 +45,7 @@ namespace {
         probe = parent;
     }
     if (probe.empty() || !fs::is_directory(probe, ec)) return false;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return true;  // no cheap W_OK; the write itself surfaces failure via Io
 #else
     return ::access(probe.c_str(), W_OK) == 0;

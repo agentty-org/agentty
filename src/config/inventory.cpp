@@ -5,13 +5,14 @@
 // Nothing re-derives a location, which is what makes the output trustworthy
 // rather than a second opinion. See inventory.hpp for the argument.
 
+#include <maya/core/target.hpp>
 #include "agentty/config/inventory.hpp"
 
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/logx.hpp"
 #include "agentty/util/storage_lock.hpp"
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>
 #endif
 #if AGENTTY_MCP
@@ -578,7 +579,7 @@ int cmd_move(std::span<const std::string> argv) {
     } else {
         std::printf("  renamed in place (same disk)\n");
     }
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     if (entry->write->owner_only) fs::permissions(to, fs::perms::owner_all, ec);
 #endif
     print_export();
@@ -609,7 +610,7 @@ int cmd_doctor() {
         const fs::path& p = r->path;
         if (!fs::exists(p, ec)) { good(name + ": " + p.string() + " (made on first use)"); continue; }
         if (!fs::is_directory(p, ec)) { bad(name + ": " + p.string() + " is not a folder"); continue; }
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
         if (::access(p.c_str(), W_OK) != 0) { bad(name + ": " + p.string() + " is not writable"); continue; }
         if (e.write->owner_only) {
             const auto perms = fs::status(p, ec).permissions();
@@ -622,7 +623,7 @@ int cmd_doctor() {
         good(name + ": " + p.string() + (r->origin == dirs::Origin::Override ? "  (moved)" : ""));
     }
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     // Secrets must be 0600 each, wherever the folder is.
     if (auto c = dirs::resolve_dry(kCredentialsSpec)) {
         std::error_code ec;

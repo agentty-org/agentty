@@ -18,6 +18,7 @@
 // waitable exit; jaal's windows_process::adopt consumes it), and `kill_tree`
 // closes in on the JOB handle (KILL_ON_JOB_CLOSE = the tree kill).
 
+#include <maya/core/target.hpp>
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -37,7 +38,7 @@ namespace agentty::tools::util::sandbox::claybin_backend {
                                  std::span<const std::string> keep,
                                  std::string_view value = {}) noexcept;
 
-#if !defined(__APPLE__)
+#if !MAYA_OS_APPLE
 // clay::probe_host() calls made for spawns (each forks probe children).
 // A work budget for tests: back-to-back spawns must share one probe.
 [[nodiscard]] std::uint64_t host_probes_for_test() noexcept;
@@ -227,12 +228,12 @@ struct SpawnResult {
 
 // The host's capabilities, probed once per process (probing forks). For the
 // preview and pickers; the spawn path probes live.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include "claybin/macos/backend.hpp"
 namespace agentty::tools::util::sandbox::claybin_backend {
 [[nodiscard]] const ::clay::macos::HostCapabilities& host();
 }
-#elif defined(__linux__)
+#elif MAYA_OS_LINUX
 #include "claybin/plan/compile.hpp"
 namespace agentty::tools::util::sandbox::claybin_backend {
 [[nodiscard]] const ::clay::HostCapabilities& host();
@@ -245,7 +246,7 @@ namespace agentty::tools::util::sandbox::claybin_backend {
 // anything.
 [[nodiscard]] Report describe(const Posture& p);
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // The same, against a DESCRIBED host rather than this one: what the shipped
 // posture would do on a machine with no user namespaces (Ubuntu 24.04's
 // AppArmor default), asked from a machine that has them. Tests use it; the
@@ -273,7 +274,7 @@ namespace agentty::tools::util::sandbox::claybin_backend {
 [[nodiscard]] SpawnResult spawn_shell(const Posture& p, const std::string& shell_cmd,
                                       int stdout_fd, int stderr_fd, int stdin_fd = -1);
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 // The posture compiled to seatbelt profile text -- exactly what spawn_shell
 // hands sandbox_init(). For spawners that cannot use claybin's fork (jaal on
 // darwin has no pidfd to adopt a foreign child by), so they run the same

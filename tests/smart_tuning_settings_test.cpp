@@ -18,6 +18,7 @@
 //      and a malformed one leaves the configured value standing rather than
 //      resetting it to the shipped default.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agtest_fx.hpp"
@@ -41,7 +42,7 @@
 #include <fstream>
 #include <string>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <process.h>
 #else
 #  include <unistd.h>
@@ -81,7 +82,7 @@ fs::path isolate_config_dir() {
     auto dir = fs::temp_directory_path()
              / ("agentty_smarttune_" + std::to_string(now_ms())
                 + "_" + std::to_string(
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                       static_cast<long>(::_getpid())
 #else
                       static_cast<long>(::getpid())
@@ -89,7 +90,7 @@ fs::path isolate_config_dir() {
                   )
                 + "_" + std::to_string(seq.fetch_add(1)));
     fs::create_directories(dir);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", dir.string().c_str());
 #else
     setenv("AGENTTY_HOME", dir.string().c_str(), 1);
@@ -98,7 +99,7 @@ fs::path isolate_config_dir() {
 }
 
 void clear_env() {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     unsetenv("AGENTTY_SMART_COMPLEX_THRESHOLD");
     unsetenv("AGENTTY_SMART_DEEP_MARGIN");
     unsetenv("AGENTTY_SMART_BIAS_CLAMP");
@@ -258,7 +259,7 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     CHECK(num->max == tun::kComplexMax);
 }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 TEST_CASE("smart tuning: an env override locks the row in the pane") {
     // Provenance and locking are the REGISTRY's, not the pane's. The pane used
     // to compute "is an env var shadowing this?" itself and pass three lock
@@ -482,7 +483,7 @@ TEST_CASE("smart tuning: registry::apply_env is the one resolution rule") {
         CHECK(c.bias_clamp == 3);
         CHECK(c.complex_threshold == 7);
     }
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     // An env override beats the stored value — the same layering the locked
     // row in the pane advertises.
     {
@@ -497,7 +498,7 @@ TEST_CASE("smart tuning: registry::apply_env is the one resolution rule") {
 #endif
 }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 TEST_CASE("smart tuning: an env var overrides the stored value") {
     isolate_config_dir();
     clear_env();

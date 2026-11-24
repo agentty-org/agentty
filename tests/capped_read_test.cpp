@@ -22,6 +22,7 @@
 // alternative cannot be reached through an empty string, and this test keeps
 // the fourth copy from being written.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/util/capped_read.hpp"
@@ -32,7 +33,7 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <process.h>
 #  define getpid _getpid
 #else

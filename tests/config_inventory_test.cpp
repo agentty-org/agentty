@@ -18,6 +18,7 @@
 //
 // So it is checked mechanically, against the source, on every build.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/config/inventory.hpp"
@@ -263,7 +264,7 @@ TEST_CASE("an unreadable subtree is flagged, not silently dropped") {
     // Root can read anything, so this would pass vacuously there. Windows
     // can't express "unlistable" through fs::permissions at all (it only
     // toggles the read-only attribute), so the precondition can't be built.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return;
 #else
     if (::geteuid() == 0) return;

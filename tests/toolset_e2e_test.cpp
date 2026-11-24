@@ -15,6 +15,7 @@
 // redirected to the temp dir BEFORE any agentty code runs, so remember/
 // forget/wipe_memory land in the sandbox, never in the user's real store.
 
+#include <maya/core/target.hpp>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -77,7 +78,7 @@ bool has(const tools::ExecResult& r, std::string_view needle) {
 // The exec tools run through the platform shell: /bin/sh on POSIX, cmd.exe
 // on Windows. A case that exercises shell SEMANTICS picks the spelling for
 // the shell that will actually run it; the assertions stay identical.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #define popen _popen
 #define pclose _pclose
 constexpr const char* posix_or_cmd(const char*, const char* cmd) { return cmd; }

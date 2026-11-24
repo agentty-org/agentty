@@ -1,5 +1,6 @@
 // acp_agents_test — generic, config-driven external ACP registry.
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/acp_agents.hpp"
 #include "agentty/provider/selection.hpp"
 
@@ -10,7 +11,7 @@
 #include <iostream>
 #include <string>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>
 #else
 #ifndef WIN32_LEAN_AND_MEAN
@@ -52,7 +53,7 @@ TEST_CASE("no builtin acp agents when unconfigured") {
 TEST_CASE("configured acp agents resolve") {
     fs::path tmp = fs::temp_directory_path() /
         ("acp-agents-" + std::to_string(
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
              local_pid()
 #else
              ::getpid()

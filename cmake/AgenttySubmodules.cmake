@@ -429,7 +429,7 @@ endif()
 # commit can't brick every build on the platforms where mimalloc IS enabled.
 set(AGENTTY_MIMALLOC_TAG "v3.4.5" CACHE STRING
     "mimalloc git tag to fetch. Pin to a stable release; do NOT track main/HEAD.")
-if(APPLE AND AGENTTY_USE_MIMALLOC)
+if(MAYA_TARGET_APPLE AND AGENTTY_USE_MIMALLOC)
     message(STATUS "agentty: mimalloc DISABLED on Apple — its macOS malloc-zone "
                    "override corrupts the heap; using the system allocator.")
     set(AGENTTY_USE_MIMALLOC OFF CACHE BOOL "" FORCE)

@@ -19,6 +19,7 @@
 // sight of an index, StreamToolUseDelta per arguments fragment, and
 // StreamToolUseEnd when the index is superseded or the stream ends.
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/openai/transport.hpp"
 #include "agentty/domain/reasoning_off.hpp"
 #include "agentty/version.hpp"
@@ -2803,10 +2804,10 @@ std::string local_model_system_prompt() {
     catch (const std::exception& e) { util::dbglog("openai.local_prompt.cwd", e.what()); }
     catch (...) { util::dbglog("openai.local_prompt.cwd", "non-std exception"); }
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const char* os_name = "Windows";
     const char* shell   = "cmd.exe";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     const char* os_name = "macOS";
     const char* shell   = "sh";
 #else

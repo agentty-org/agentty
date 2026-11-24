@@ -6,6 +6,7 @@
 // are covered indirectly by the reducer; here we lock the pure registry
 // semantics that the switcher UI depends on.
 
+#include <maya/core/target.hpp>
 #include "agtest_cap.hpp"
 #include "agentty/auth/accounts.hpp"
 
@@ -13,7 +14,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <sys/wait.h>
 #include <unistd.h>   // getpid, fork
 #endif
@@ -99,7 +100,7 @@ TEST_CASE("accounts registry list/upsert/get/remove/set_active") {
 // took a cross-process section, each read accounts.json, added its slot and
 // renamed its copy over the others' (through ONE shared ".tmp" name, so two
 // could even write the same temp): the losers' accounts silently vanished.
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 TEST_CASE("accounts registry: concurrent processes never lose an account") {
     auto root = fs::temp_directory_path() /
                 ("agentty_accounts_x_" + std::to_string(::getpid()));

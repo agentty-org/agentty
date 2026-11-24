@@ -1,5 +1,6 @@
 // The disk as mcp-cpp's FileSystem, plus the read/write helpers agentty's
 // own code uses. The one place agentty's tool layer touches file bytes.
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/disk_files.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"   // read_file / write_file
 
@@ -13,7 +14,7 @@
 #include <system_error>
 #include <vector>
 
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -30,7 +31,7 @@
 #  include <fcntl.h>
 #  include <unistd.h>
 #  include <sys/stat.h>
-#  if defined(__linux__)
+#  if MAYA_OS_LINUX
 #    include <sys/vfs.h>   // statfs: rename_orders_data
 #  endif
 #endif
@@ -42,7 +43,7 @@ using ::mcp::tools::FileStat;
 using ::mcp::tools::WalkStep;
 
 namespace {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // Does a rename that REPLACES a file on this filesystem commit only after
 // the new file's data is on disk? btrfs always; ext4 under its default
 // auto_da_alloc. Anything else (xfs, f2fs, nfs, tmpfs, overlay...) answers
@@ -108,7 +109,7 @@ std::string read_file(const fs::path& p) {
     // (e.g. /proc, pipes) — those produce file_size==0 or throw.
     std::error_code ec;
     auto sz = fs::file_size(p, ec);
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // Native Win32 path: CreateFileW with FILE_FLAG_SEQUENTIAL_SCAN tells
     // the cache manager to read ahead aggressively (larger prefetch window,
     // pages discarded after use). For the read / grep / edit hot path —
@@ -201,7 +202,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     // retrying with a new suffix if it exists, so no counter is shared
     // between concurrent writers. The suffix mixes pid, a stack address and
     // the attempt, which is enough to make collisions rare.
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     const unsigned long pid = static_cast<unsigned long>(::GetCurrentProcessId());
 #else
     const unsigned long pid = static_cast<unsigned long>(::getpid());
@@ -216,7 +217,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     };
 
     // Preserve existing mode on POSIX so the rename doesn't regress perms.
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     mode_t target_mode = 0644;
     bool   had_mode    = false;
     nlink_t links      = 1;
@@ -259,7 +260,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
             d += n;
             left -= static_cast<std::size_t>(n);
         }
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
         (void)::fsync(fd);
 #else
         (void)::fdatasync(fd);
@@ -274,7 +275,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     // power-loss / crash can still lose the bytes, and on some FUSE and
     // network filesystems the data isn't readable by the next open until
     // fsync completes.
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // Use the wide-char variant so Unicode paths (e.g. under a non-ASCII
     // %USERPROFILE%) round-trip correctly. `_sopen_s` takes an ANSI/MBCS
     // path which silently corrupts multi-byte sequences on some MinGW
@@ -312,7 +313,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     const char* data = content.data();
     size_t remaining = content.size();
     while (remaining > 0) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
         int n2 = _write(fd, data, static_cast<unsigned>(
             remaining > 0x7fffffff ? 0x7fffffff : remaining));
 #else
@@ -322,7 +323,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
         if (n2 <= 0) {
             std::string err = std::string("write to '") + p.string()
                 + "' failed: " + explain_errno(errno);
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
             _close(fd);
 #else
             ::close(fd);
@@ -335,7 +336,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     }
 
     // fsync temp: data is durable before the rename publishes it.
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     (void)_commit(fd);
     _close(fd);
 #else
@@ -344,7 +345,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     // macOS only has fsync. The durability guarantee we need is the same —
     // file contents committed to disk before the rename publishes them —
     // so falling back to fsync on Apple costs a metadata block at most.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     (void)::fsync(fd);
 #else
     // btrfs and ext4 (data=ordered, auto_da_alloc: the default) flush a
@@ -362,7 +363,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
     // Atomic publish. Windows MoveFileExW with REPLACE_EXISTING is atomic on
     // NTFS (single MFT update); WRITE_THROUGH flushes the directory entry.
     // POSIX rename() is atomic by spec when src/dst are on the same FS.
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     auto tmp_w = tmp.wstring();
     auto dst_w = real.wstring();
     if (!::MoveFileExW(tmp_w.c_str(), dst_w.c_str(),

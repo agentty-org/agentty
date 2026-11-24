@@ -8,6 +8,7 @@
 //   2. SettingsAddDone{ok} for Plugins toasts "… — connecting…" and starts
 //      a plugin reload; a failure toasts the message and reloads nothing.
 
+#include <maya/core/target.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -39,7 +40,7 @@ int main() {
     const fs::path home = fs::temp_directory_path() / "agentty_settings_add_effect";
     fs::remove_all(home);
     fs::create_directories(home);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", (home / ".agentty").string().c_str());
 #else
     ::setenv("AGENTTY_HOME", (home / ".agentty").c_str(), 1);

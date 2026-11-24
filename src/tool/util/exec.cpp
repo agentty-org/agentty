@@ -6,6 +6,7 @@
 // suite that runs on every backend. What is left is the policy, and policy
 // is the part that should be readable.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/exec.hpp"
 
 #include <algorithm>
@@ -27,7 +28,7 @@
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/tool/host_call.hpp"   // the dispatcher's per-call data
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -37,7 +38,7 @@
 #include <windows.h>
 #endif
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <fcntl.h>
 #  include <sys/stat.h>    // FullLog: mkdir/lstat
 #  include <unistd.h>
@@ -46,7 +47,7 @@
 #  include <cstdlib>      // mkstemp
 #  include <filesystem>
 #endif
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #  include <sys/mman.h>   // MFD_CLOEXEC
 #  include <sys/syscall.h>
 #endif
@@ -91,7 +92,7 @@ void stop_trace(clock_t_::time_point since, const char* fmt, ...) {
 }
 
 
-#if defined(__linux__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_WINDOWS
 /// The sandbox's way in, or empty when no sandbox is active. Linux and
 /// Windows only: adopting a foreign child needs a pidfd or a process handle.
 /// Darwin confines by wrapping the argv instead (see JaalExec::confine).
@@ -144,10 +145,10 @@ struct started {
 [[nodiscard]] std::expected<started, std::string>
 start_child(const ChildRun& run) {
     if (run.argv.empty()) return std::unexpected(std::string{"empty command"});
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     if (run.spawn_adopted) {
         auto make_pipe = [](int fds[2]) -> bool {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
             return ::pipe2(fds, O_CLOEXEC) == 0;
 #else
             // No pipe2 on macOS/BSD: set CLOEXEC after the fact. The race
@@ -172,7 +173,7 @@ start_child(const ChildRun& run) {
         // at spawn time, and a pipe's write end held there means the guest
         // never reads EOF. A file has no write end. It also can't fill up.
         if (!run.stdin_data.empty()) {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
             in[0] = static_cast<int>(::syscall(SYS_memfd_create, "agentty-stdin", MFD_CLOEXEC));
 #endif
             if (in[0] < 0) {
@@ -217,7 +218,7 @@ start_child(const ChildRun& run) {
     }
 #endif
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (run.spawn_adopted) {
         // Anonymous pipes; the sandbox gets the child ends duplicated
         // inheritable, we keep ours. Same shape as the posix arm, with
@@ -281,7 +282,7 @@ start_child(const ChildRun& run) {
 
 /// Read up to `cap` bytes without blocking. 0 with `eof` = the writer closed.
 std::size_t read_ready(pf::borrowed_handle h, char* buf, std::size_t cap, bool& eof) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return pf::read_some(h, buf, cap, eof);
 #else
     eof = false;
@@ -297,7 +298,7 @@ std::size_t read_ready(pf::borrowed_handle h, char* buf, std::size_t cap, bool& 
 
 /// Write without blocking past what the pipe takes. `closed` = reader gone.
 std::size_t write_ready(pf::borrowed_handle h, const char* buf, std::size_t len, bool& closed) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return pf::write_some(h, buf, len, closed);
 #else
     closed = false;
@@ -383,13 +384,13 @@ class FullLog {
     FullLog(const FullLog&) = delete;
     FullLog& operator=(const FullLog&) = delete;
     ~FullLog() {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         if (fd_ >= 0) ::close(fd_);
 #endif
     }
 
     void open() {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         std::error_code ec;
         const auto base = std::filesystem::temp_directory_path(ec);
         if (ec || base.empty()) return;
@@ -418,7 +419,7 @@ class FullLog {
 
     // Pump thread only.
     void append(std::string_view s) noexcept {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         if (fd_ < 0 || capped_ || s.empty()) return;
         const std::size_t room = kCap - written_;
         const std::size_t n = std::min(room, s.size());
@@ -436,7 +437,7 @@ class FullLog {
     [[nodiscard]] std::string path() const { return path_; }
 
   private:
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     void write_all(std::string_view s) noexcept {
         while (!s.empty()) {
             const auto w = ::write(fd_, s.data(), s.size());
@@ -705,7 +706,7 @@ class JaalSession final : public mt::Session {
         // brokered syscall until it's answered, so this has to be watched
         // for as long as the child lives, same as run_child does. A POSIX fd:
         // Windows has no broker, and its reactor watches HANDLEs, not ints.
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         if (hooks.supervisor_fd >= 0 && hooks.service_broker)
             if (auto r = reactor.watch(hooks.supervisor_fd, pf::interest::read, kBrokerToken))
                 broker_reg = std::move(*r);
@@ -728,7 +729,7 @@ class JaalSession final : public mt::Session {
             // Stop: asked by the handle, or the process is shutting down.
             const bool stopping = core->stop.load() || pool_stop.stop_requested();
             if (stopping && !kill_at && !exited) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                 // A graceful stop only ends the leader here, and a surviving
                 // grandchild holds stdout open, so kill the job first.
                 if (hooks.kill_tree) (void)hooks.kill_tree();
@@ -833,11 +834,11 @@ class JaalExec final : public mt::Exec {
     [[nodiscard]] static std::optional<std::string> confine(const mt::Call& call, ChildRun& run) {
         std::vector<std::string> roots;
         for (const auto& r : call.scope_extra_roots) roots.push_back(r.string());
-#if defined(__linux__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_WINDOWS
         run.spawn_adopted = sandbox_spawner(run.argv, run.cwd, roots,
                                             ::agentty::tools::host_call(call.host).trusted,
                                             run.env);
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
         namespace sb = agentty::tools::util::sandbox;
         if (sb::is_active()) {
             auto wrapped = sb::wrap_argv_for_exec(run.argv, run.cwd, roots);
@@ -925,7 +926,7 @@ class JaalExec final : public mt::Exec {
     [[nodiscard]] bool stops_whole_tree() const noexcept override {
         // Windows: a job object holds the tree. POSIX: a process group is not
         // a tree, since a descendant that calls setsid() leaves it.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         return true;
 #else
         return false;
@@ -976,7 +977,7 @@ ChildResult run_child(const ChildRun& run) {
     }
     std::optional<reactor_t::registration> out_reg, err_reg, in_reg, broker_reg;
     bool err_truncated = false;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     ::agentty::util::WorkerGroup feeder{"exec.stdin_feed"};   // destroyed after the reap
     bool feeder_started = false;   // a feeder job is running, so there's something to join
 #endif
@@ -987,7 +988,7 @@ ChildResult run_child(const ChildRun& run) {
         if (auto h = proc.stderr_handle())
             if (auto reg = reactor->watch(h->get(), pf::interest::read, kErrToken))
                 err_reg = std::move(*reg);
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     // The seccomp broker, when the policy delegates syscalls. It MUST be
     // serviced: the kernel blocks the guest until someone answers.
     if (st->supervisor_fd >= 0 && st->service_broker)
@@ -1013,7 +1014,7 @@ ChildResult run_child(const ChildRun& run) {
         proc.close_stdin();
     };
     if (auto h = proc.stdin_handle()) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         // No writable readiness for an anonymous pipe, so the feed runs as a
         // job with its own copy of the handle. The loop keeps draining output
         // meanwhile; once the child ends, the write fails and the job ends.
@@ -1129,7 +1130,7 @@ ChildResult run_child(const ChildRun& run) {
                 // A graceful stop only ends the leader on Windows, and a
                 // surviving grandchild holds stdout open, so kill the job first.
                 bool tree_killed = false;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                 tree_killed = st->kill_tree && st->kill_tree();
 #endif
                 // Ask first: a shell given SIGTERM reaps its own children.
@@ -1179,7 +1180,7 @@ ChildResult run_child(const ChildRun& run) {
         r.signalled = true;   // gone, and nothing to tell us how
     }
     stop_trace(started_at, "reaped");
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // A grandchild can still hold the stdin pipe's read end, leaving the
     // feeder blocked in WriteFile. Ending the job closes every copy, so the
     // write fails and the barrier below can't hang.

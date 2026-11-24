@@ -1,6 +1,7 @@
 // agentty::tools::skills — implementation. See skills.hpp for the
 // progressive-disclosure rationale and the discovery-root table.
 
+#include <maya/core/target.hpp>
 #include "agentty/util/user_root.hpp"
 #include "agentty/tool/skills.hpp"
 #include "agentty/util/sendable.hpp"
@@ -23,7 +24,7 @@
 #include <sstream>
 #include <system_error>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #  endif
@@ -595,7 +596,7 @@ std::size_t debug_cap_resolutions() noexcept {
 // answers all of it from the directory entry without opening the file.
 struct StatSig { bool dir = false; bool file = false; long long mtime = 0; std::uintmax_t size = 0; };
 [[nodiscard]] std::optional<StatSig> stat_sig(const fs::path& p) noexcept {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     WIN32_FILE_ATTRIBUTE_DATA a{};
     if (!::GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &a)) return std::nullopt;
     StatSig s;
@@ -611,7 +612,7 @@ struct StatSig { bool dir = false; bool file = false; long long mtime = 0; std::
     StatSig s;
     s.dir   = S_ISDIR(st.st_mode);
     s.file  = S_ISREG(st.st_mode);
-#  if defined(__APPLE__)
+#  if MAYA_OS_APPLE
     s.mtime = static_cast<long long>(st.st_mtimespec.tv_sec) * 1'000'000'000LL + st.st_mtimespec.tv_nsec;
 #  else
     s.mtime = static_cast<long long>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec;
@@ -639,7 +640,7 @@ void scan_root_signature(const fs::path& root, std::string& sig) {
     sig += "|";
 
     std::vector<fs::path> dirs;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // One FindFirstFile pass yields every child's name + attributes without
     // a handle per entry; std::filesystem's iterator stats each entry again
     // for is_directory(), which is most of the per-turn cost on Windows.
@@ -672,7 +673,7 @@ void scan_root_signature(const fs::path& root, std::string& sig) {
             continue;
         }
         std::vector<fs::path> subs;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         list_subdirs(d, subs);
 #else
         for (fs::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {

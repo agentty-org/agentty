@@ -10,6 +10,7 @@
 // clause and FAILS CLOSED (no workspace write access) rather than emitting a
 // broken/injected profile.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/tool/util/sandbox.hpp"
@@ -32,7 +33,7 @@ TEST_CASE("sandbox: JIT commands are recognised for the W^X exemption") {
                           "echo $(node -v)", "exec java -jar x.jar", "x=1; node a",
                           "if true; then node a; fi"})
         check(sb::command_needs_jit(c), c);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     check(sb::command_needs_jit("C:\\x\\node.exe a.js"), "windows path");
 #endif
     for (const char* c : {"ls -la", "python3 x.py", "cargo build", "make -j8",
@@ -91,7 +92,7 @@ TEST_CASE("sandbox escape") {
     check(sb::sbpl_escape(std::string("/tmp/a\0b", 8)).empty(),
           "embedded NUL → empty");
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     // The claybin posture carries the equivalent walls, and sandbox_pane_test
     // asserts them against claybin_posture_for_test(). The bwrap argv checks
     // that used to live here went with bwrap itself.

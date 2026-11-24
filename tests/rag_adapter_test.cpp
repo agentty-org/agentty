@@ -17,6 +17,7 @@
 //   4. warm()/retrieve() are safe to call repeatedly (idempotent reindex).
 //   5. retrieve_code() indexes the cwd source tree and finds a symbol.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/rag/rag_adapter.hpp"
@@ -36,7 +37,7 @@
 
 #include <nlohmann/json.hpp>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #else
@@ -58,7 +59,7 @@ static void write_file(const fs::path& p, const std::string& body) {
 namespace {
 
 using json = nlohmann::json;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 using socket_t = SOCKET;
 constexpr socket_t kInvalidSocket = INVALID_SOCKET;
 #else
@@ -68,7 +69,7 @@ constexpr socket_t kInvalidSocket = -1;
 
 void close_socket(socket_t s) noexcept {
     if (s == kInvalidSocket) return;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     ::closesocket(s);
 #else
     ::close(s);
@@ -81,7 +82,7 @@ public:
     // overlap (and what else is possible meanwhile).
     explicit LoopbackEmbeddingServer(std::chrono::milliseconds delay = std::chrono::milliseconds{0})
         : delay_(delay) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         WSADATA data{};
         if (::WSAStartup(MAKEWORD(2, 2), &data) != 0) return;
         winsock_started_ = true;
@@ -101,7 +102,7 @@ public:
             listener_ = kInvalidSocket;
             return;
         }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int len = sizeof(addr);
 #else
         socklen_t len = sizeof(addr);
@@ -133,7 +134,7 @@ public:
         for (auto& t : handlers_)
             if (t.joinable()) t.join();
         close_socket(listener_);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         if (winsock_started_) ::WSACleanup();
 #endif
     }
@@ -181,7 +182,7 @@ private:
         std::size_t sent = 0;
         while (sent < bytes.size()) {
             const auto left = bytes.size() - sent;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const int n = ::send(fd, bytes.data() + sent, static_cast<int>(left), 0);
 #else
             const auto n = ::send(fd, bytes.data() + sent, left, 0);
@@ -198,7 +199,7 @@ private:
         std::size_t header_end = std::string::npos;
         std::size_t content_length = 0;
         for (;;) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const int n = ::recv(fd, buf, sizeof(buf), 0);
 #else
             const auto n = ::recv(fd, buf, sizeof(buf), 0);
@@ -233,7 +234,7 @@ private:
 
     void serve() {
         while (!stop_.load(std::memory_order_acquire)) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const socket_t client = ::accept(listener_, nullptr, nullptr);
 #else
             const socket_t client = ::accept(listener_, nullptr, nullptr);
@@ -245,7 +246,7 @@ private:
             // A client that connects and never sends (or a kept-alive socket
             // the client forgot) must not wedge this thread: the destructor
             // joins it, and a stuck join hangs ctest instead of failing.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const DWORD ms = 5000;
             (void)::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
                                reinterpret_cast<const char*>(&ms), sizeof(ms));
@@ -277,7 +278,7 @@ private:
     std::chrono::milliseconds delay_{0};
     std::string only_model_;
     std::atomic<int> refused_{0};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     bool winsock_started_ = false;
 #endif
 };
@@ -293,7 +294,7 @@ public:
 
     ~EnvironmentRestore() {
         for (const auto& [name, value] : saved_) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             _putenv_s(name.c_str(), value ? value->c_str() : "");
 #else
             if (value) ::setenv(name.c_str(), value->c_str(), 1);
@@ -310,7 +311,7 @@ private:
 };
 
 void set_test_env(const char* name, const std::string& value) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s(name, value.c_str());
 #else
     ::setenv(name, value.c_str(), 1);
@@ -558,7 +559,7 @@ TEST_CASE("rag adapter") {
     const auto old_ws = ::agentty::tools::util::workspace_root();
     ::agentty::tools::util::set_workspace_root(::agentty::IoAccess::grant(), tmp);
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_DOCS_DIR", docs.string().c_str());
     // Force the offline path: one bounded probe, then BM25-only retrieval.
     _putenv_s("AGENTTY_OLLAMA_HOST", "127.0.0.1:1");
@@ -670,7 +671,7 @@ TEST_CASE("rag adapter") {
 
         // Generator seam is callable and drives HyDE when enabled.
         {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             _putenv_s("AGENTTY_RAG_HYDE", "1");
 #else
             ::setenv("AGENTTY_RAG_HYDE", "1", 1);
@@ -687,7 +688,7 @@ TEST_CASE("rag adapter") {
             auto hy = r2.retrieve("how to authenticate", 5);
             check(hy.error.empty(), "HyDE-enabled retrieve succeeds");
             check(gen_called, "generator seam is invoked when HyDE is on");
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             _putenv_s("AGENTTY_RAG_HYDE", "0");
 #else
             ::setenv("AGENTTY_RAG_HYDE", "0", 1);
@@ -877,7 +878,7 @@ TEST_CASE("rag adapter") {
         while (blob.size() < 3u * 1024 * 1024) blob += "filler filler filler\n";
         write_file(big / "huge.md", blob);
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_DOCS_DIR", big.string().c_str());
 #else
         ::setenv("AGENTTY_DOCS_DIR", big.string().c_str(), 1);
@@ -897,7 +898,7 @@ TEST_CASE("rag adapter") {
     {
         fs::path empty_dir = tmp / "empty";
         fs::create_directories(empty_dir);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_DOCS_DIR", empty_dir.string().c_str());
         _putenv_s("AGENTTY_RAG_SKILLS", "0");
         _putenv_s("AGENTTY_RAG_MEMORY", "0");

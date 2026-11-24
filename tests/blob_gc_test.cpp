@@ -12,6 +12,7 @@
 //     references cannot be assumed absent,
 //   * dry_run touches nothing.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include <agentty/io/blob_gc.hpp>
@@ -202,7 +203,7 @@ TEST_CASE("blob gc: an unlistable threads dir deletes nothing") {
     // Root can read anything, so this would pass vacuously there. Windows
     // can't express "unlistable" through fs::permissions at all (it only
     // toggles the read-only attribute), so the precondition can't be built.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return;
 #else
     if (::geteuid() == 0) return;

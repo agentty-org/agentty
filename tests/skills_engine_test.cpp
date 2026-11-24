@@ -15,6 +15,7 @@
 // stage writes new files, so cross-stage contamination is impossible
 // as long as stages use distinct skill names.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/domain/conversation.hpp"   // Thread, visible_text
@@ -59,7 +60,7 @@ TEST_CASE("skills engine") {
     fs::create_directories(home);
     fs::create_directories(work);
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("HOME", home.string().c_str());
     // The user-scope base is util::user_root() ($AGENTTY_HOME, falling
     // back to $HOME/.agentty). Point it at THIS test's home so the
@@ -496,7 +497,7 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     fs::create_directories(home);
     fs::create_directories(work);
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("HOME", home.string().c_str());
     _putenv_s("AGENTTY_HOME", "");
 #else
@@ -518,7 +519,7 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     struct Restore {
         const bool had; const std::string val;
         ~Restore() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             if (had) _putenv_s("AGENTTY_MAX_SKILLS", val.c_str());
             else     _putenv_s("AGENTTY_MAX_SKILLS", "");
 #else
@@ -529,14 +530,14 @@ TEST_CASE("skills catalog cap: AGENTTY_MAX_SKILLS override") {
     } _restore{had_old, old_val};
 
     auto set_env = [](const char* v) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_MAX_SKILLS", v);   // empty value removes (CRT)
 #else
         setenv("AGENTTY_MAX_SKILLS", v, 1);
 #endif
     };
     auto unset_env = []() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_MAX_SKILLS", "");
 #else
         unsetenv("AGENTTY_MAX_SKILLS");
@@ -658,7 +659,7 @@ TEST_CASE("skills: an oversized SKILL.md is reported, not dropped") {
     fs::path work = base / "work";
     fs::create_directories(home / ".agentty/skills", ec);
     fs::create_directories(work / ".agentty/skills", ec);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("HOME", home.string().c_str());
     _putenv_s("AGENTTY_HOME", "");
 #else
@@ -734,7 +735,7 @@ TEST_CASE("skills: unloadable files never take a real skill's cap slot") {
     fs::path work = base / "work";
     fs::create_directories(home, ec);
     fs::create_directories(work / ".agentty/skills", ec);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("HOME", home.string().c_str());
     _putenv_s("AGENTTY_HOME", "");
     _putenv_s("AGENTTY_MAX_SKILLS", "8");
@@ -771,7 +772,7 @@ TEST_CASE("skills: unloadable files never take a real skill's cap slot") {
     CHECK(probs[1].what == "3 SKILL.md files too large to load");
     CHECK(probs[2].what == "1 SKILL.md unreadable, empty or nameless");
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_MAX_SKILLS", "");
 #else
     unsetenv("AGENTTY_MAX_SKILLS");

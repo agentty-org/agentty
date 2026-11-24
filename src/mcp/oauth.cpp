@@ -6,6 +6,7 @@
 // redirect URIs are dynamic, unlike Codex's fixed 1455), the browser open, and
 // an at-rest-encrypted per-server token store.
 
+#include <maya/core/target.hpp>
 #include "agentty/mcp/oauth.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
@@ -26,7 +27,7 @@
 #include <string_view>
 #include <thread>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -137,7 +138,7 @@ struct Callback {
 
 struct CallbackResult { std::string code, state, iss, error; };
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 using sock_t = SOCKET;
 #else
 using sock_t = int;
@@ -145,7 +146,7 @@ using sock_t = int;
 
 // Bind 127.0.0.1:0, return the socket + assigned port. kInvalid on failure.
 sock_t open_loopback(std::uint16_t& out_port, std::string& err) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     static std::once_flag wsa_once;
     maya::once(wsa_once, []{ WSADATA w; WSAStartup(MAKEWORD(2,2), &w); });
     const sock_t kInvalid = INVALID_SOCKET;
@@ -161,7 +162,7 @@ sock_t open_loopback(std::uint16_t& out_port, std::string& err) {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(0);                       // ephemeral
     if (::bind(srv, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         closesocket(srv);
 #else
         ::close(srv);
@@ -170,7 +171,7 @@ sock_t open_loopback(std::uint16_t& out_port, std::string& err) {
     }
     sockaddr_in bound{}; socklen_t blen = sizeof(bound);
     if (::getsockname(srv, reinterpret_cast<sockaddr*>(&bound), &blen) != 0) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         closesocket(srv);
 #else
         ::close(srv);
@@ -179,7 +180,7 @@ sock_t open_loopback(std::uint16_t& out_port, std::string& err) {
     }
     out_port = ntohs(bound.sin_port);
     if (::listen(srv, 1) != 0) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         closesocket(srv);
 #else
         ::close(srv);
@@ -222,7 +223,7 @@ std::string query_param(std::string_view target, std::string_view key) {
 // Borrows `srv`: the caller's SockGuard closes it on every path.
 CallbackResult wait_for_callback(sock_t srv, int timeout_s) {
     CallbackResult out;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const sock_t kInvalid = INVALID_SOCKET;
     auto close_sock = [](sock_t s){ closesocket(s); };
 #else
@@ -258,7 +259,7 @@ CallbackResult wait_for_callback(sock_t srv, int timeout_s) {
             const int ready = ::select(static_cast<int>(cli + 1), &cfds, nullptr, nullptr, &rtv);
             if (ready < 0) break;
             if (ready == 0) continue;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             int n = ::recv(cli, buf, sizeof(buf), 0);
 #else
             auto n = ::recv(cli, buf, sizeof(buf), 0);
@@ -445,7 +446,7 @@ LoginResult login(Io io, const std::string& server_name, const std::string& endp
     // 4. Open the loopback callback FIRST (need the port for the redirect URI).
     std::uint16_t port = 0; std::string sockerr;
     sock_t srv = open_loopback(port, sockerr);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (srv == INVALID_SOCKET) { r.message = sockerr; return r; }
 #else
     if (srv < 0) { r.message = sockerr; return r; }
@@ -457,7 +458,7 @@ LoginResult login(Io io, const std::string& server_name, const std::string& endp
         sock_t s;
         explicit SockGuard(sock_t v) : s(v) {}
         ~SockGuard() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             closesocket(s);
 #else
             ::close(s);

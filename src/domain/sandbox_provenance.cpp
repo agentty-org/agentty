@@ -11,6 +11,7 @@
 // claybin has no view on whether ".vscode/tasks.json" matters -- that is a
 // statement about how developer tooling behaves, not about the kernel.
 
+#include <maya/core/target.hpp>
 #include "agentty/domain/sandbox_provenance.hpp"
 #include "agentty/domain/sandbox_config.hpp"   // Config, kAlwaysMasked*, mask_paths
 
@@ -22,7 +23,7 @@
 #include <string>
 #include <vector>
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <sys/inotify.h>   // SweepWatch: change detection for the mask sweep
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -149,7 +150,7 @@ constexpr std::array kRules{
 
 bool is_host_trusted(std::string_view path, TrustKind* out_kind) {
     std::uint32_t t = 0;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // claybin's shape rules split on '/'. A Windows path from
     // std::filesystem ("C:\\repo\\.git\\hooks\\post-commit") had no '/' at
     // all, so NO trusted file ever matched and the handoff gate reported
@@ -310,7 +311,7 @@ std::uint64_t dir_stamp(const std::filesystem::path& dir, int depth_left) {
     return h;
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // "Has anything under the swept dirs changed?" -- answered without walking.
 //
 // dir_stamp re-walks every directory down to mask_scan_depth on EVERY spawn
@@ -419,7 +420,7 @@ maya::snapshot<std::uint64_t>& mask_tree_walks() {
     static maya::snapshot<std::uint64_t> n;
     return n;
 }
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 // Re-arm if no one else is; 0 when another spawn holds the lane.
 std::uint64_t try_rearm(const std::filesystem::path& root, int depth) {
@@ -501,7 +502,7 @@ std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspac
         const int depth = static_cast<int>(cfg.mask_scan_depth);
         std::vector<std::string> hits;
         bool done = false;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
         // Fast path: a quiet watch that vouches for exactly this sweep.
         if (const auto gen = sweep_watch_slot().watch.quiet(workspace, depth); gen != 0) {
             auto cur = cache.load();
@@ -515,7 +516,7 @@ std::vector<std::string> mask_paths(const Config& cfg, std::string_view workspac
             mask_tree_walks().update([](const std::uint64_t& n) { return n + 1; });
             // Arm FIRST, so whatever changes while we walk is already queued.
             std::uint64_t gen = 0;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
             gen = try_rearm(std::filesystem::path{workspace}, depth);
 #endif
             // OUTSIDE any lock: stat-ing the tree is the slow part, and
@@ -592,10 +593,10 @@ constexpr std::string_view kEnvEssential[] = {
     // Who a commit is from. Identity, not a secret, and git ranks these above
     // every config file, so a user who exports them means it.
     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     // TMPDIR above points at the /var/folders dir the sandbox grants.
     "__CF_USER_TEXT_ENCODING",
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // PATHEXT resolves `git` to git.exe; without SYSTEMROOT, Winsock and
     // crypto fail to initialise in the child. MSYS* drive Git Bash's PATH.
     "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "TEMP", "TMP",
@@ -640,12 +641,12 @@ constexpr std::string_view kEnvToolchain[] = {
     // and CI flips a good share of test suites into their non-interactive mode.
     "COLORTERM", "NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE",
     "COLUMNS", "LINES", "CI",
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     // xcrun reads these.
     "DEVELOPER_DIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
     "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
     "HOMEBREW_PREFIX", "HOMEBREW_CELLAR", "HOMEBREW_REPOSITORY",
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // MSVC's developer prompt: without these cl.exe finds no headers or libs.
     "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCTOOLSINSTALLDIR",
     "VSINSTALLDIR", "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "UCRTVERSION",
@@ -704,7 +705,7 @@ constexpr std::string_view kEnvSecretSuffixes[] = {"_KEY", "_PAT", "_PASS", "_PW
 }
 
 [[nodiscard]] bool env_name_eq(std::string_view a, std::string_view b) noexcept {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return ieq(a, b);
 #else
     return a == b;

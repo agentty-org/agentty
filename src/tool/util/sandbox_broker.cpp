@@ -1,6 +1,7 @@
 // The syscall supervisor's decision policy. Scalars only — see the header for
 // why that constraint is structural rather than a simplification.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox_broker.hpp"
 
 #include <maya/runtime.hpp>
@@ -10,7 +11,7 @@
 #include <string_view>
 #include <utility>
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <signal.h>
@@ -27,7 +28,7 @@ namespace agentty::tools::util::sandbox::broker {
 
 namespace {
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 // ptrace(2) requests we are willing to reason about. The rest are denied, not
 // because each is dangerous but because a supervisor that allows requests it
@@ -301,7 +302,7 @@ void clear_blocked_feed() {
 }
 
 std::vector<std::uint32_t> brokered_syscalls() {
-#if defined(__linux__) && defined(SYS_ptrace) && defined(SYS_kill)
+#if MAYA_OS_LINUX && defined(SYS_ptrace) && defined(SYS_kill)
     // Exactly two, and the shortness of this list is the design.
     //
     // A syscall belongs here only if ALL of:
@@ -335,7 +336,7 @@ Verdict decide(std::uint32_t nr, const std::uint64_t args[6],
         return allowed ? Verdict::Allow : Verdict::Deny;
     };
 
-#if defined(__linux__) && defined(SYS_ptrace) && defined(SYS_kill)
+#if MAYA_OS_LINUX && defined(SYS_ptrace) && defined(SYS_kill)
     if (nr == static_cast<std::uint32_t>(SYS_ptrace)) {
         const std::uint64_t request = args[0];
         const auto target = static_cast<std::uint32_t>(args[1]);

@@ -29,6 +29,7 @@
 // is bundled with modern Windows but we leave the orchestration to a
 // future contributor with a Win32 box to test on.
 
+#include <maya/core/target.hpp>
 #include "agentty/airgap/airgap.hpp"
 #include "agentty/auth/auth.hpp"
 #include "agentty/io/clipboard.hpp"
@@ -55,7 +56,7 @@ namespace {
 // (or %HOMEDRIVE%%HOMEPATH%) on Windows. Empty when none is set.
 std::string home_dir() {
     if (const char* h = std::getenv("HOME"); h && *h) return h;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (const char* up = std::getenv("USERPROFILE"); up && *up) return up;
     const char* hd = std::getenv("HOMEDRIVE");
     const char* hp = std::getenv("HOMEPATH");
@@ -422,7 +423,7 @@ void print_acp_config(const std::string& remote,
 
     // Best-effort: tell the user exactly which file to paste into.
     std::string settings_hint;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (const char* appdata = std::getenv("APPDATA"); appdata && *appdata)
         settings_hint = (fs::path{appdata} / "Zed" / "settings.json").string();
 #else

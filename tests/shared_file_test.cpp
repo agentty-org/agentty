@@ -19,6 +19,7 @@
 // Fork, not threads. A threaded version passes under the in-process mutex
 // alone and would prove nothing about the half that was missing.
 
+#include <maya/core/target.hpp>
 #include "agentty/io/shared_file.hpp"
 #include <thread>
 #include "agtest_cap.hpp"
@@ -30,7 +31,7 @@
 #include <optional>
 #include <string>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <cerrno>
 #  include <sys/wait.h>
 #  include <unistd.h>

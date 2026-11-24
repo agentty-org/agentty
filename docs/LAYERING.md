@@ -105,6 +105,21 @@ All are static ctest entries (label `static`), no build needed:
   jaal Flags (`AgenttyApp::Flags`): `main` reads it and passes it to
   `maya::run`, which hands it to `init(Model&, const Flags&)`. init reads no
   process environment of its own.
+- **one_os / one_os_cmake** — the platform is decided once, by jaal
+  (`jaal/meta/target.hpp`), and reaches agentty only as maya's re-export
+  (`maya/core/target.hpp`: `MAYA_OS_*`, `MAYA_CC_*`, `MAYA_CPU_*`,
+  `MAYA_ISA_*`). No agentty file tests `_WIN32`, `__APPLE__`, `_MSC_VER`,
+  `__x86_64__` or the like, and a file that tests a `MAYA_*` name includes
+  the header that defines it (an undefined one reads as 0, silently). The
+  build asks the same headers: `cmake/AgenttyTarget.cmake` sets
+  `MAYA_TARGET_WINDOWS`/`_APPLE`/`_LINUX`/... through maya's
+  `maya_target_is()`, and no build file branches on `WIN32`, `APPLE`, `UNIX`
+  or `CMAKE_SYSTEM_NAME`. Both are jaal's lints, run through maya's
+  `tests/lint/` wrappers so agentty never names jaal's tree.
+- **Slow folds** — timed by jaal's kernel, not by agentty: a fold over one
+  frame (16 ms) is logged as `loop.slow update <leaf message>` in
+  agentty.log through `app::run_options()`. agentty times only view() and
+  subscribe(), which are not folds.
 - **spawn_via_jaal** — every child starts through `maya::platform::
   native_process`: no fork/exec/popen/system, and on Windows no
   CreateProcess/_popen/_spawn. Windows-only code is scanned too; that is

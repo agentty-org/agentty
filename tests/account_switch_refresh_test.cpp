@@ -11,6 +11,7 @@
 // Driven through the REAL app::update reducer. Points XDG_CONFIG_HOME at a temp
 // dir and disables the keystore so the credential + registry round-trips hit
 // sealed files, exactly like oauth_proactive_refresh_test.
+#include <maya/core/target.hpp>
 #include "agtest_cap.hpp"
 #include "agtest.hpp"
 #include "agtest_fx.hpp"
@@ -29,7 +30,7 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <process.h>   // _getpid
 #else
 #  include <unistd.h>    // getpid
@@ -72,7 +73,7 @@ void isolate_config_dir() {
     auto dir = fs::temp_directory_path()
              / ("agentty_acctsw_" + std::to_string(now_ms())
                 + "_" + std::to_string(
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
                       static_cast<long>(::_getpid())
 #else
                       static_cast<long>(::getpid())
@@ -80,7 +81,7 @@ void isolate_config_dir() {
                   )
                 + "_" + std::to_string(seq.fetch_add(1)));
     fs::create_directories(dir);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", dir.string().c_str());
     _putenv_s("AGENTTY_USE_KEYSTORE", "0");
 #else

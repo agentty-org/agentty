@@ -12,6 +12,7 @@
 // (EXEC_RACE_REAL_SANDBOX) it links the real sandbox instead and runs the
 // same sessions under claybin, with brokered syscalls.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/exec.hpp"
 #include "agentty/tool/util/sandbox.hpp"
 
@@ -40,7 +41,7 @@ claybin_backend::SpawnResult spawn_in_sandbox(const std::vector<std::string>&, s
                                               int /*err_fd*/, int /*in_fd*/) {
     return {};
 }
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 std::expected<std::vector<std::string>, std::string>
 wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view,
                    const std::vector<std::string>&) {
@@ -71,7 +72,7 @@ struct Scripts {
     const char* print_fail;
     const char* short_then_print;
 };
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 constexpr Scripts kS{
     "echo x",
     "ping -n 1 127.0.0.1 >nul & echo y& exit /b 3",
@@ -190,7 +191,7 @@ int main() {
     std::thread dropper([p = std::move(pile)]() mutable { p.clear(); });
     dropper.join();
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     using clk = std::chrono::steady_clock;
     const auto ms_since = [](clk::time_point t0) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(clk::now() - t0).count();

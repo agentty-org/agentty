@@ -5,6 +5,7 @@
 // synchronously on a worker thread and sent to the client as session/update
 // notifications over an rpc::Peer.
 
+#include <maya/core/target.hpp>
 #include "agentty/acp/server.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/digits.hpp"
@@ -112,7 +113,7 @@ std::vector<std::string> extra_roots_of(const a::Maybe<a::List<std::string>>& di
 std::string iso8601(std::int64_t unix_s) {
     const std::time_t t = static_cast<std::time_t>(unix_s);
     std::tm tm{};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (::gmtime_s(&tm, &t) != 0) return {};
 #else
     if (!::gmtime_r(&t, &tm)) return {};
@@ -3644,7 +3645,7 @@ AgentServer::run_bash_via_terminal(const Cap& cap, const TurnCtx& ctx, ToolUse& 
     a::CreateTerminalParams cp;
     cp.sessionId = a::SessionId{ctx.id};
     // Run through a shell so pipes/redirects/globs behave like the bash tool.
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     cp.command = "cmd.exe";
     cp.args    = {"/S", "/C", command};
 #else

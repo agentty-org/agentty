@@ -40,20 +40,21 @@ struct LaunchFlags {
 
 [[nodiscard]] std::pair<Model, Cmd> init(const LaunchFlags& flags);
 
-// Log any loop step (an update arm, view, subscribe) that took longer than a
-// frame. Free when fast: one clock read and a compare. Lands in agentty.log
-// as `ui loop.slow: <what> <ms>`, so a user's "it lags when I open X"
-// becomes a line naming the arm instead of a guess.
-void note_slow(const char* what, std::chrono::steady_clock::time_point t0,
-               int alt = -1) noexcept;
+// Log a loop step that took longer than a frame. Free when fast: one clock
+// read and a compare. Lands in agentty.log as `ui loop.slow: <what> <ms>`,
+// so "it lags when I open X" becomes a line naming the step.
+//
+// For view() and subscribe() only. A FOLD (update) is timed by jaal's
+// kernel, which knows the leaf message by its type ("agentty::msg::
+// OpenPalette") where this could only say `ComposerMsg#7`; its report
+// reaches the log through run_options() below.
+void note_slow(const char* what, std::chrono::steady_clock::time_point t0) noexcept;
 
-// Which alternative of a domain Msg variant this is (-1 when not a variant),
-// so loop.slow can say `ComposerMsg#7` instead of just the family.
-template <class D>
-[[nodiscard]] int alt_index(const D& d) noexcept {
-    if constexpr (requires { d.index(); }) return static_cast<int>(d.index());
-    else return -1;
-}
+// The kernel options agentty runs with (main.cpp → maya::run). The fold
+// budget is one 60 Hz frame, and a fold over it is logged as `loop.slow`
+// instead of jaal's stderr line: agentty's stderr is a redirect to
+// stderr.log, which no one reads while the UI is up.
+[[nodiscard]] maya::run_options run_options();
 
 struct AgenttyApp {
     using Model = ::agentty::Model;
@@ -109,12 +110,9 @@ struct AgenttyApp {
 #define AGENTTY_FWD_UPDATE(DomainMsg)                                    \
     static Cmd update(Model& m, msg::DomainMsg d, Clock::time_point now) { \
         m.now = now;   /* the fold's time: see Model::now */             \
-        const auto t0 = std::chrono::steady_clock::now();                \
-        const auto alt = ::agentty::app::alt_index(d);                   \
         auto c = ::agentty::app::update(m, std::move(d));                \
-        auto out = ::agentty::app::publish_derived(m, std::move(c));      \
-        ::agentty::app::note_slow(#DomainMsg, t0, alt);                  \
-        return out;                                                       \
+        /* timed by the kernel: run_options() */                          \
+        return ::agentty::app::publish_derived(m, std::move(c));          \
     }
 
     AGENTTY_FWD_UPDATE(ComposerMsg)

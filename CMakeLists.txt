@@ -8,6 +8,12 @@ project(agentty
 # extracted toolchain/standalone/hardening includes) live under cmake/.
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
+# What platform this build is for, asked of the C++ headers (jaal decides it
+# once; maya re-exports it): MAYA_TARGET_WINDOWS / _APPLE / _LINUX / ...
+# Every platform branch below reads these, never WIN32 / APPLE / UNIX /
+# CMAKE_SYSTEM_NAME (the one_os_cmake test). See cmake/AgenttyTarget.cmake.
+include(AgenttyTarget)
+
 # ── Memory-aware Ninja job pools ─────────────────────────────────────────────
 # Ninja's default -j is cores+2, but a maya-heavy TU peaks at ~2.2 GB RSS in
 # cc1plus. -j12 on a 31 GB / 12-thread Linux box filled RAM and thrashed swap
@@ -35,7 +41,7 @@ if(CMAKE_GENERATOR MATCHES "Ninja")
         set(_agentty_mem_mb 1024)
     endif()
     set(AGENTTY_COMPILE_MEM_MB 3072 CACHE STRING "RAM budget per compile job (MiB) for pool sizing")
-    if(MINGW)
+    if(MAYA_TARGET_MINGW)
         set(_agentty_link_mb 1000000)        # effectively: one link at a time
     elseif(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
         set(_agentty_link_mb 8192)           # ThinLTO backends fan out per link (empty ⇒ Release later)
@@ -184,7 +190,7 @@ else()
     # arm64 macros that fire from any TU pulling in mach headers (e.g.
     # subprocess.cpp via <spawn.h>). Alias the C spelling to its C++
     # equivalent so the SDK headers parse under GCC's C++ frontend.
-    if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(MAYA_TARGET_APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_definitions(${tgt} PRIVATE
             _Static_assert=static_assert)
     endif()
@@ -556,7 +562,7 @@ if(AGENTTY_HAS_RAGCPP)
     target_link_libraries(agentty PRIVATE ragcpp::ragcpp)
     message(STATUS "agentty: rag-cpp retrieval engine enabled (vendored).")
 endif()
-if(WIN32)
+if(MAYA_TARGET_WINDOWS)
     # ws2_32   — Winsock2 (sockets, WSAPoll)
     # crypt32  — CertOpenSystemStoreW for the Windows root cert loader
     # shell32  — already needed by existing code paths
@@ -596,7 +602,7 @@ if(WIN32)
             -Wl,--allow-multiple-definition)
     endif()
 endif()
-if(APPLE)
+if(MAYA_TARGET_APPLE)
     # macOS root cert loader uses the Security and CoreFoundation frameworks.
     target_link_libraries(agentty PRIVATE
         "-framework Security"
@@ -605,7 +611,7 @@ endif()
 
 # ── Standalone link knobs (per-platform) ───────────────────────────────
 if(AGENTTY_STANDALONE AND NOT MSVC)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(MAYA_TARGET_LINUX)
         # Fold libstdc++ and libgcc into the binary so it runs on machines
         # with a different distro / ABI version. libc stays dynamic — a
         # fully-static glibc binary breaks the NSS resolver (DNS, /etc/
@@ -680,7 +686,7 @@ if(AGENTTY_STANDALONE AND NOT MSVC)
         if(ZLIB_STATIC)
             target_link_libraries(agentty PRIVATE ${ZLIB_STATIC})
         endif()
-    elseif(APPLE)
+    elseif(MAYA_TARGET_APPLE)
         # macOS doesn't allow truly-static system frameworks (libSystem
         # is required to be dynamic), but third-party libs can be static.
         # OPENSSL_USE_STATIC_LIBS already handled OpenSSL above.
@@ -829,7 +835,7 @@ if(NOT MSVC AND NOT AGENTTY_SANITIZE)
     # A fully-static build already carries its own PIE decision (-static-pie
     # or -no-pie); adding a bare -pie here would fight it. Only add -pie for
     # the non-static path.
-    if(UNIX AND NOT APPLE)
+    if(MAYA_TARGET_ELF_UNIX)
         # RELRO + BIND_NOW + non-exec stack are GNU-ld / lld (ELF) features.
         # Apple ld64 rejects -z; MSVC handled above.
         if(NOT AGENTTY_FULLY_STATIC)
@@ -838,7 +844,7 @@ if(NOT MSVC AND NOT AGENTTY_SANITIZE)
         target_link_options(agentty PRIVATE
             -Wl,-z,relro,-z,now
             -Wl,-z,noexecstack)
-    elseif(NOT APPLE AND NOT AGENTTY_FULLY_STATIC)
+    elseif(NOT MAYA_TARGET_APPLE AND NOT AGENTTY_FULLY_STATIC)
         # Non-ELF, non-Apple UNIX. On Apple, PIE is the linker default and a
         # bare -pie only trips clang's "argument unused during compilation"
         # warning, so skip it there.
@@ -853,7 +859,7 @@ endif()
 # on Apple (macOS+GCC keeps a live LTO LOAD segment strip can't touch — see the
 # IPO note above; the release path there strips via a separate step) and MSVC
 # (PDBs are external, nothing to strip off the .exe).
-if(NOT MSVC AND NOT APPLE AND NOT AGENTTY_SANITIZE
+if(NOT MSVC AND NOT MAYA_TARGET_APPLE AND NOT AGENTTY_SANITIZE
         AND (CMAKE_BUILD_TYPE STREQUAL "Release"
           OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
     target_link_options(agentty PRIVATE -Wl,--strip-all)
@@ -884,7 +890,7 @@ if(AGENTTY_BUILD_TESTS)
     # these separate executables; apply it directory-wide here so every
     # target defined below inherits it. AppleClang doesn't need it (and
     # can't build this tree anyway — it doesn't advertise cxx_std_26).
-    if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(MAYA_TARGET_APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         add_compile_definitions(_Static_assert=static_assert)
     endif()
 
@@ -899,7 +905,7 @@ if(AGENTTY_BUILD_TESTS)
     # source under tests/ force-includes one shim. A source property, so it
     # reaches every test target however it is defined (consolidated, standalone
     # or raw) and never the product.
-    if(WIN32)
+    if(MAYA_TARGET_WINDOWS)
         file(GLOB_RECURSE _agentty_test_srcs CONFIGURE_DEPENDS
              ${CMAKE_SOURCE_DIR}/tests/*.cpp)
         set_source_files_properties(${_agentty_test_srcs} PROPERTIES

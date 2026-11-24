@@ -12,7 +12,8 @@
 // for alarm). The openpty-driven tests are UNIX-only in AgenttyTests.cmake.
 #pragma once
 
-#if defined(_WIN32)
+#include <maya/core/target.hpp>
+#if MAYA_OS_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

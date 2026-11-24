@@ -4,6 +4,7 @@
 // blocks, the OS/shell environment stanza, and the full vs lean (subagent)
 // instruction text, plus the per-provider overlay seam. Baked into the binary.
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/prompt.hpp"
 
 #include "agentty/provider/msg_shared.hpp"   // wire::home_dir / read_capped_file
@@ -304,7 +305,7 @@ namespace {
 } // namespace
 
 std::string default_system_prompt(Io io, bool lean) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     constexpr const char* os_name  = "Windows";
     constexpr const char* shell    = "cmd.exe (Windows Command Prompt)";
     constexpr const char* shell_hint =
@@ -314,7 +315,7 @@ std::string default_system_prompt(Io io, bool lean) {
         "`awk`, or shell heredocs (`<<EOF`) — they will fail. "
         "Commands chain with `&&` and `||` under cmd.exe, but path separators "
         "are backslashes and paths with spaces must be quoted.";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     constexpr const char* os_name  = "macOS (Darwin)";
     constexpr const char* shell    = "sh";
     constexpr const char* shell_hint =

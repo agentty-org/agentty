@@ -5,11 +5,12 @@
 // running after the tool had returned. The runner now spawns the child
 // in its own session/process group and signals the group.
 
+#include <maya/core/target.hpp>
 #include "agtest.hpp"
 
 #include "agentty/tool/util/subprocess.hpp"
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -112,7 +113,7 @@ TEST_CASE("subprocess normal exit is unaffected") {
 }
 #endif
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 // ── the wall-clock ceiling ───────────────────────────────────────────────
 //
 // The idle watchdog caps SILENCE, so a child that never stops printing

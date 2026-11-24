@@ -10,6 +10,7 @@
 // registers each TEST_CASE as its own ctest entry (`ctest -j` parallelism and
 // per-case failure reporting are preserved), and `agentty_tests --test-case=X`
 // runs one in isolation.
+#include <maya/core/target.hpp>
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
@@ -18,7 +19,7 @@
 #include <filesystem>
 #include <string>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <process.h>   // _getpid
 #else
 #  include <unistd.h>    // getpid
@@ -62,7 +63,7 @@ int main(int argc, char** argv) {
         // ctest workers starting in the same tick (coarse clocks, -j N on a
         // busy box) got the SAME home and stomped each other's threads,
         // images and indexes -- the source of a family of -j-only flakes.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         const auto pid = static_cast<long long>(_getpid());
 #else
         const auto pid = static_cast<long long>(::getpid());
@@ -75,7 +76,7 @@ int main(int argc, char** argv) {
         // never its parent: agentty refuses writes into its own config
         // (handoff::is_own_config), so a TMPDIR inside the root made every
         // test workspace read as agentty's config.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_HOME", (sandbox / "home").string().c_str());
         _putenv_s("AGENTTY_UNDER_TEST", "1");
         _putenv_s("AGENTTY_NO_PREWARM", "1");
@@ -147,7 +148,7 @@ int main(int argc, char** argv) {
     // Tests make their own temp dirs with temp_directory_path(). Point it
     // inside the sandbox so they all go when the sandbox does. Set after the
     // sweep above, which must look at the real /tmp.
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     {
         const fs::path tmp = sandbox / "tmp";
         std::error_code ec;

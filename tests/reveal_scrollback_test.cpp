@@ -40,6 +40,7 @@
 // perturbs the committed scrollback prefix or forces a from-the-top
 // re-emit — the production duplication bug.
 
+#include <maya/core/target.hpp>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -50,7 +51,7 @@
 #include <vector>
 
 #include <fcntl.h>
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include <util.h>       // openpty on macOS
 #else
 #include <pty.h>        // openpty on glibc (link -lutil)

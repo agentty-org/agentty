@@ -38,6 +38,7 @@
 // on each keystroke, and running it there is what keeps the report from ever
 // describing a config the rows no longer say.
 
+#include <maya/core/target.hpp>
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
@@ -71,14 +72,14 @@ namespace sb = agentty::tools::util::sandbox;
 // make the limitation invisible, which is the failure mode this whole pane
 // exists to avoid.
 [[nodiscard]] bool claybin_here() {
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
     // The real probe on both platforms, and real in the same sense: on Linux
     // it forks and attempts the uid_map write; on macOS it forks and actually
     // calls sandbox_init(). Neither guesses from a feature flag, because
     // guessing is how issue #21 happened -- "sandbox: active" while every
     // command died on the denial.
     return sb::claybin_backend::available();
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // The windows backend APPLIES policies since the appcontainer/restricted-
     // token integration: available() runs the real probe (it creates and
     // deletes an appcontainer profile and runs a child under the walls) and
@@ -96,7 +97,7 @@ namespace sb = agentty::tools::util::sandbox;
 }
 
 [[nodiscard]] std::uint32_t landlock_abi_here() {
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     return sb::claybin_backend::landlock_abi();   // 0 = absent, probed once
 #else
     return 0;
@@ -114,11 +115,11 @@ namespace sb = agentty::tools::util::sandbox;
     pn::HostFacts f;
     f.claybin_available = claybin_here();
     f.landlock_abi = landlock_abi_here();
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     f.per_port_net = f.claybin_available
                      && sb::claybin_backend::host().sbpl_network_filters;
     f.ipc_scoped = f.claybin_available;
-#elif defined(__linux__)
+#elif MAYA_OS_LINUX
     f.per_port_net = f.landlock_abi >= 4;
     f.ipc_scoped = f.landlock_abi >= 6;
 #endif

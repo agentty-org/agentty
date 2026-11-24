@@ -5,6 +5,25 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Built on the latest jaal, with the platform decided in one place.**
+  jaal now decides which OS, compiler and CPU agentty is being built for
+  (`jaal/meta/target.hpp`), and agentty sees that only through maya
+  (`maya/core/target.hpp`, the `MAYA_OS_*` and `MAYA_CC_*` macros). About
+  550 checks of raw compiler macros (`_WIN32`, `__APPLE__`, `_MSC_VER`,
+  `__x86_64__`, …) in agentty and maya were rewritten to those names. A
+  script compiled every changed file for 15 targets (Linux, Android, macOS,
+  the BSDs and Windows, on x86-64, arm64 and i386, with MSVC, clang-cl, GCC
+  and clang) and confirmed the same code is chosen on each one. The build
+  scripts ask the same headers too: `cmake/AgenttyTarget.cmake` instead of
+  `if(WIN32)` / `if(APPLE)`. New `one_os` and `one_os_cmake` tests keep it
+  that way.
+- **Slow updates are logged with their message name.** jaal's kernel times
+  each update and reports the specific message type that ran over budget,
+  e.g. `loop.slow update msg::OpenPalette 23.1 ms`. Before, agentty timed
+  updates itself and logged a domain plus an index (`ComposerMsg#7`).
+- **Crash handlers use `std::atomic_flag` as the re-entry guard** instead of
+  `volatile sig_atomic_t`. It is just as signal-safe, it is also correct if
+  two threads crash at once, and it passes jaal's concurrency checks.
 - **The activity bar explains what the stream is going through.** Retries,
   stalls and slow starts are shown inline next to the phase indicator
   instead of in a banner that covered the bar:

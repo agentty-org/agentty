@@ -4,6 +4,7 @@
 //
 //     cmake --build build --target exec_exit_probe && ./build/exec_exit_probe
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/domain/sandbox_config.hpp"
@@ -40,7 +41,7 @@ int main(int argc, char** argv) {
     const bool on = !(argc > 2 && std::string{argv[2]} == "off");
     sb::init(on ? sb::Mode::On : sb::Mode::Off);
     std::printf("sandbox %s: %s\n", on ? "on" : "off", sb::describe_state().c_str());
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     // PROBE_DUMP=1: print the exact sandbox-exec argv a command gets.
     if (std::getenv("PROBE_DUMP") && on) {
         auto w = sb::wrap_argv_for_exec({"/bin/sh", "-c", "true"}, {}, {});

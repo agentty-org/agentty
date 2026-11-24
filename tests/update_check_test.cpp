@@ -5,6 +5,7 @@
 // asset naming, and the cache-staleness rule (a cache written by an older
 // binary must not survive the update it announced).
 
+#include <maya/core/target.hpp>
 #include "agentty/util/update.hpp"
 
 #include <doctest/doctest.h>
@@ -80,7 +81,7 @@ TEST_CASE("cached_check: fresh cache honoured, stale/foreign rejected") {
                 std::chrono::system_clock::now().time_since_epoch()).count()));
     std::error_code sec;
     fs::create_directories(sandbox, sec);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_HOME", sandbox.string().c_str());
 #else
     ::setenv("AGENTTY_HOME", sandbox.string().c_str(), 1);

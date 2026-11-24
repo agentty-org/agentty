@@ -18,6 +18,7 @@
 // is linked against logx.cpp directly, so it sets the internal knob rather
 // than requiring an env var — logging stays something nobody configures.
 
+#include <maya/core/target.hpp>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -88,7 +89,7 @@ long long live_size() {
     return static_cast<long long>(read_file(std::string{logx::log_file()}).size());
 }
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 // The fd number the process currently has open on `path`, or -1. Reading
 // /proc/self/fd is the only way to observe the sink descriptor from
 // outside logx without widening its public API for a test's benefit.
@@ -214,7 +215,7 @@ TEST_CASE("logx: concurrent writers lose nothing across a rotation") {
 
 TEST_CASE("logx: rotation re-points the sink fd instead of replacing it") {
     require_logging();
-#if !defined(__linux__)
+#if !MAYA_OS_LINUX
     MESSAGE("fd-identity check needs /proc; skipped on this platform");
 #else
     // THE load-bearing test for the dup2 fix, and the only one here with

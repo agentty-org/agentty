@@ -1,10 +1,11 @@
 // The sandbox's filtered outbound network. See the header for why.
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox_netproxy.hpp"
 
 #include "agentty/util/background.hpp"
 #include "agentty/util/logx.hpp"
 
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -90,7 +91,7 @@ bool v6_blocked(const unsigned char b[16]) noexcept {
 }  // namespace
 
 bool is_blocked_address(std::string_view addr) noexcept {
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
     // A string_view is not nul-terminated; inet_pton needs a C string.
     char buf[64];
     if (addr.empty() || addr.size() >= sizeof buf) return true;
@@ -401,7 +402,7 @@ HttpRequest parse_http_request(std::string_view head) {
 
 }  // namespace agentty::tools::util::sandbox::netproxy
 
-#if !(defined(__linux__) || defined(__APPLE__)) || defined(AGENTTY_NETPROXY_PARSERS_ONLY)
+#if !(MAYA_OS_LINUX || MAYA_OS_APPLE) || defined(AGENTTY_NETPROXY_PARSERS_ONLY)
 
 // The parsers above are the whole file when AGENTTY_NETPROXY_PARSERS_ONLY is
 // set (the fuzz harness) or when this is not Linux. A Proxy still has to
@@ -428,7 +429,7 @@ namespace {
 // creation; the fork-without-exec window that leaves is closed by claybin's
 // close_inherited_fds in every guest anyway.
 void sock_prep(int fd) {
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     int one = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
@@ -437,7 +438,7 @@ void sock_prep(int fd) {
 #endif
 }
 int sock_stream(int family) {
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     const int s = ::socket(family, SOCK_STREAM, 0);
     if (s >= 0) sock_prep(s);
     return s;
@@ -797,7 +798,7 @@ bool Proxy::start(int listen_fd, std::vector<std::string> allow_hosts) {
                 if (fds[0].revents & (POLLERR | POLLNVAL)) break;
                 if (fds[0].revents & POLLIN) {
                     for (;;) {
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
                         const int c = ::accept(lfd, nullptr, nullptr);
                         if (c >= 0) {
                             sock_prep(c);

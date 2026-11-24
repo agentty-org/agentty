@@ -16,6 +16,7 @@
 // Writer doesn't own its handle), matching the behaviour these tests had.
 #pragma once
 
+#include <maya/core/target.hpp>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -25,7 +26,7 @@
 #include <maya/platform/io.hpp>
 #include <maya/terminal/writer.hpp>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <fcntl.h>
 #  include <io.h>
 #  include <windows.h>
@@ -36,7 +37,7 @@
 
 namespace wire_pipe {
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 // Larger than any single frame the wire tests emit (full-screen redraws
 // of wide fuzz terminals are a few hundred KB).
 inline constexpr unsigned kPipeBytes = 16u << 20;
@@ -44,7 +45,7 @@ inline constexpr unsigned kPipeBytes = 16u << 20;
 
 [[nodiscard]] inline std::pair<maya::Writer, int> make_writer() {
     int fds[2];
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (::_pipe(fds, kPipeBytes, _O_BINARY | _O_NOINHERIT) != 0) { std::perror("_pipe"); std::abort(); }
     const auto h = reinterpret_cast<maya::platform::NativeHandle>(::_get_osfhandle(fds[1]));
     return {maya::Writer{h}, fds[0]};
@@ -60,7 +61,7 @@ inline constexpr unsigned kPipeBytes = 16u << 20;
 [[nodiscard]] inline std::string drain(int rfd) {
     std::string out;
     char buf[8192];
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const auto h = reinterpret_cast<HANDLE>(::_get_osfhandle(rfd));
     for (;;) {
         DWORD avail = 0;

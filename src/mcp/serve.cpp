@@ -19,6 +19,7 @@
 // The heavy mcp-cpp templates stay confined to this TU (it's part of the
 // agentty_mcp object library); the agentty-facing header is mcp-cpp-free.
 
+#include <maya/core/target.hpp>
 #include "agentty/mcp/serve.hpp"
 #include "agentty/version.hpp"
 
@@ -35,7 +36,7 @@
 #include <iostream>
 #include <string>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <fcntl.h>
 #  include <io.h>
 #endif
@@ -176,7 +177,7 @@ int serve_stdio(const maya::unlocked& cap) {
         server.handle(note);
     };
     std::cout.flush();
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // Text mode would turn every '\n' of the framing into "\r\n".
     _setmode(_fileno(stdin),  _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);

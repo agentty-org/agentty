@@ -11,6 +11,7 @@
 // path rewrites the file atomically through util::write_file (which
 // itself uses write+flush+rename when the underlying impl supports it).
 
+#include <maya/core/target.hpp>
 #include "agentty/util/user_root.hpp"
 #include "agentty/tool/memory_store.hpp"
 
@@ -34,7 +35,7 @@
 #include <unordered_map>
 #include <vector>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #  include <pwd.h>
 #  include <sys/types.h>
 #  include <unistd.h>
@@ -64,7 +65,7 @@ StoreLock& store() { static StoreLock f; return f; }
 
 [[nodiscard]] fs::path home_dir() noexcept {
     if (auto* h = std::getenv("HOME"); h && *h) return fs::path{h};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (auto* h = std::getenv("USERPROFILE"); h && *h) return fs::path{h};
 #else
     // HOME can legitimately be unset (cron, systemd units with
@@ -101,7 +102,7 @@ StoreLock& store() { static StoreLock f; return f; }
 // race between this and the actual write is harmless: the writer's own
 // errno surfaces if the race lands the wrong way.
 [[nodiscard]] bool dir_path_writable(const fs::path& dir) noexcept {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // ::access(W_OK) on Windows is famously unreliable for directory
     // ACL checks. Defer to the write itself — return true and let the
     // failure path produce the real Windows error message. The fall-

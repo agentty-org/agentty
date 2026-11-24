@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/sandbox.hpp"
 
 #include "agentty/tool/util/fs_helpers.hpp"
@@ -21,7 +22,7 @@
 #include <memory>   // shared_ptr — the config snapshot
 #include <optional>
 #include <string_view>
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 #include <fcntl.h>    // pipe2, open: spawn_long_lived's pipes
 #include <unistd.h>
 #endif
@@ -42,7 +43,7 @@
 // compiles a plan anywhere, and can APPLY one on Linux (namespaces, landlock,
 // seccomp, cgroup2) and on macOS (seatbelt, rlimits). Windows compiles the
 // policy and refuses to apply it, so the include stays out there.
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 #include "agentty/tool/util/sandbox_claybin.hpp"
 #include "agentty/tool/util/handoff_gate.hpp"   // snapshot_trusted: ONE path table
 #endif
@@ -135,7 +136,7 @@ maya::published<const std::string> g_degraded_reason;
 // Only the macOS sandbox-exec backend needs the "can we run this binary?"
 // probe: Linux asks bwrap for a real namespace instead (see below), and the
 // Windows/unsupported branch just hard-codes Backend::None.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 
 // One-shot probe: try to spawn `<exe> --version` and observe the
 // outcome. Replaces a fragile PATH walk with the actual semantic
@@ -152,7 +153,7 @@ maya::published<const std::string> g_degraded_reason;
 
 #endif // __APPLE__
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 // A GENUINE minimal-sandbox probe. `bwrap --version` (the old check via
 // can_invoke) only proved the BINARY EXISTS — it never creates a namespace, so
@@ -183,7 +184,7 @@ maya::published<const std::string> g_degraded_reason;
     // boundary and the syscall filter here. The wall report says per
     // capability what a given host did not reach, so a reduced posture is
     // visible rather than silent.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (claybin_backend::available()) return Backend::Claybin;
 #endif
     return Backend::None;
@@ -226,13 +227,13 @@ maya::published<const std::string> g_degraded_reason;
 // definition, extended rather than paraphrased, however many backends read it.
 #endif  // __linux__ (reopened below)
 
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
 
 // System roots: the toolchain and shared libraries. Read-only, and no /etc —
 // see kEtcReadable.
 constexpr const char* kSystemReadRoots[] = {
     "/usr", "/bin", "/lib", "/lib64", "/sbin", "/opt",
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     // darwin's toolchain is NOT under /usr: /usr/bin/git, cc, python3, make
     // are xcrun shims that dlopen libxcrun from the active developer dir
     // and re-exec the real tool there. Without these every one of them died
@@ -306,7 +307,7 @@ constexpr const char* kHomeToolSubdirs[] = {
 // the user profile is where the credential hygiene still bites (a Windows
 // .ssh is at %USERPROFILE%\\.ssh, .aws at %USERPROFILE%\\.aws, just like
 // posix). claybin's windows compiler takes NATIVE paths; these are native.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 // {env var, fallback}. Windows isn't always on C:, so read the real roots.
 constexpr std::pair<const char*, const char*> kSystemReadRootsWin[] = {
     {"SystemRoot", "C:\\Windows"},                  // loader, DLLs, System32
@@ -332,7 +333,7 @@ constexpr const char* kHomeToolSubdirsWin[] = {
 #endif  // _WIN32
 
 // Back into the per-platform arm the shared read set interrupted.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 
 // The read set, handed to claybin as DATA rather than restated in its backend.
@@ -469,7 +470,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     return file.string();
 }
 
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 // The directory a trusted file under one of these is protected through, or
 // nullopt. These hold many files (and running binaries), so one read-only
 // bind of the directory replaces a bind per file.
@@ -516,7 +517,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     // by the mask list, but your other projects are readable by an approved
     // command. On Windows the lists are native paths (kSystemReadRootsWin etc.);
     // the home env var is USERPROFILE there and HOME nowhere else.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     for (const auto& r : kSystemReadRootsWin) p.system_read_roots.push_back(win_dir(r));
     for (const auto& f : kEtcReadableWin) p.etc_readable.push_back(win_dir(f));
     if (cfg.fs_scope == sandbox_cfg::FsScope::Toolchain) {
@@ -532,7 +533,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     }
 #else
     for (const char* r : kSystemReadRoots) p.system_read_roots.emplace_back(r);
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     // /usr/lib32 (and Debian's /usr/lib/i386-linux-gnu) are already under
     // the read-only /usr bind. Separate top-level multilib roots are optional.
     for (const char* r : {"/lib32", "/libx32"}) {
@@ -572,7 +573,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     // relative paths).
     p.workspace = workspace_root().string();
     {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         const char* h = std::getenv("USERPROFILE");
 #else
         const char* h = std::getenv("HOME");
@@ -596,7 +597,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
             p.handoff_ro.push_back(*f);
         }
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     // darwin's per-user temp and cache dirs (/var/folders/xx/yyy/{T,C}).
     // This is where $TMPDIR points, NOT /tmp: mktemp, python's tempfile,
     // xcrun's tool cache, clang's module cache, swift and every Cocoa tool
@@ -628,7 +629,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     // prefix differs (%USERPROFILE% instead of $HOME); the list is POSIX
     // vocabulary, so each platform prefixes its own home onto the same names.
     {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         const char* home = std::getenv("USERPROFILE");
 #else
         const char* home = std::getenv("HOME");
@@ -640,7 +641,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
                         std::make_move_iterator(masks.end()));
     }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     // ── /dev/tty: the controlling terminal is agentty's own screen ────
     //
     // Not a credential, so it is not in kAlwaysMasked (that list is $HOME
@@ -861,7 +862,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 // the third. The guard must stay linux-ONLY: a `|| _WIN32` here would take
 // the linux branch on Windows and the probe() definition below would never
 // compile -- the one thing init() needs.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 [[nodiscard]] SubprocessResult run_wrapped(std::string_view cmd,
                                            std::size_t max_bytes,
@@ -874,7 +875,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     opts.stdin_data = std::move(stdin_data);
     opts.split_stderr = split_stderr;
 
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
     if (detected_backend() == Backend::Claybin) {
         // claybin is a library, so there is no argv prefix to build. It forks,
         // applies the plan, and execs itself -- but only the SPAWN; the
@@ -927,7 +928,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     opts.max_bytes   = max_bytes;
     opts.timeout     = timeout;
 
-#if defined(__linux__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_WINDOWS
     if (detected_backend() == Backend::Claybin) {
         opts.command = SubprocessOptions::Argv{user_argv};
         std::vector<std::string> argv = user_argv;
@@ -947,7 +948,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     return unconfined;
 }
 
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
 
 [[nodiscard]] Backend probe() {
     // claybin first, when asked for AND usable.
@@ -1113,7 +1114,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
     return Subprocess::run(std::move(opts));
 }
 
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
 
 // A REAL capability probe, not a table lookup: claybin's probe_host() creates
 // and deletes an appcontainer profile, proves a restricted token by RUNNING a
@@ -1210,7 +1211,7 @@ void relax_wx_for_jit(claybin_backend::Posture& p, std::string_view cmd) {
 bool init(Mode requested) {
     g_mode.store(requested, std::memory_order_release);
     auto found = (requested == Mode::Off) ? Backend::None : probe();
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
     // "A backend exists" is not "the posture we ship compiles here". A host
     // that can build SOME wall but refuses THIS policy (a mask that cannot be
     // expressed, a network promise that cannot be kept) used to report
@@ -1230,7 +1231,7 @@ bool init(Mode requested) {
         // One cause covers nearly every degraded host: no user namespaces
         // (Ubuntu 24.04's AppArmor default, most containers). Name it once.
         std::string reason;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
         if (!degraded.empty()) {
             const auto& h = claybin_backend::host();
             if (!h.user_namespaces || !h.mount_namespaces) reason = "no user namespaces";
@@ -1362,7 +1363,7 @@ bool config_enforceable() noexcept {
     // Nothing configured ⇒ nothing to ignore. A default config is exactly the
     // posture the bwrap argv already builds, so both backends "enforce" it.
     if (!cfg->configured) return true;
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
     // Off is not a failure to enforce, it is a choice not to sandbox, which
     // the banner already reports on its own.
     if (requested_mode() == Mode::Off) return true;
@@ -1476,12 +1477,12 @@ std::string describe_state() {
              + *err + ")";
     if (m == Mode::On)
         return "sandbox: requested but no backend "
-#if defined(__linux__)
+#if MAYA_OS_LINUX
                "(the kernel offers neither landlock nor seccomp \xe2\x80\x94 "
                "nothing left to build a boundary from; run with --sandbox off)";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
                "(sandbox-exec missing \xe2\x80\x94 system integrity issue)";
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
                "(no sandbox wall could be built on this host \xe2\x80\x94 "
                "appcontainer profiles unavailable and no job objects; "
                "run with --sandbox off)";
@@ -1490,11 +1491,11 @@ std::string describe_state() {
 #endif
     // Mode::Auto + no backend → falling through unsandboxed
     return "sandbox: unavailable, running unsandboxed "
-#if defined(__linux__)
+#if MAYA_OS_LINUX
            "(the kernel offers neither landlock nor seccomp)";
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
            "(sandbox-exec missing)";
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
            "(no sandbox wall available: appcontainer unavailable)";
 #else
            "(no backend on this platform)";
@@ -1630,7 +1631,7 @@ std::vector<std::string> denied_paths(std::string_view out, std::string_view cwd
 }
 
 void record_denials(std::string_view out, std::string_view cwd) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
     for (const auto& p : denied_paths(out, cwd)) {
         // Could the host user have done it? If the file allows read+write,
         // or does not exist and its directory allows creating it, the
@@ -1682,7 +1683,7 @@ void record_denials(std::string_view out, std::string_view cwd) {
     } else
         n += " Private, loopback and cloud-metadata addresses are refused.";
     n += " The workspace is writable; most paths outside it are not.";
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     n += " Opening apps, Finder or URLs (open, osascript) needs macOS "
          "services the sandbox blocks.";
 #endif
@@ -1748,7 +1749,7 @@ claybin_backend::SpawnResult spawn_in_sandbox(
         const handoff::TrustedSnapshot* trusted,
         const std::vector<std::pair<std::string, std::string>>& env,
         int err_fd, int in_fd) {
-#if defined(__linux__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_WINDOWS
     if (detected_backend() == Backend::Claybin) {
         return claybin_backend::spawn_argv(
             command_posture(join_argv(argv), cwd, extra_roots, trusted), argv, out_fd,
@@ -1764,7 +1765,7 @@ claybin_backend::SpawnResult spawn_in_sandbox(
     return r;
 }
 
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 std::expected<std::vector<std::string>, std::string>
 wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
                    const std::vector<std::string>& extra_roots) {
@@ -1799,7 +1800,7 @@ wrap_argv_for_exec(const std::vector<std::string>& argv, std::string_view cwd,
 #endif
 
 claybin_backend::Posture claybin_posture_for_test() {
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
     return build_claybin_posture();
 #else
     return {};
@@ -1843,10 +1844,10 @@ constexpr std::string_view kRunnerCaches[] = {
 }  // namespace
 
 claybin_backend::Posture posture_for(Role role, const std::vector<std::string>& argv) {
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
     // Role::Command's posture, then what the role changes.
     auto p = command_posture(argv.empty() ? std::string{} : join_argv(argv));
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     const char* home_env = std::getenv("USERPROFILE");
 #else
     const char* home_env = std::getenv("HOME");
@@ -1945,7 +1946,7 @@ spawn_long_lived(Role role, const std::vector<std::string>& argv,
     if (argv.empty()) return std::unexpected(std::string{"empty argv"});
     // Off is the user's choice: spawn plainly, as before.
     if (requested_mode() == Mode::Off) return std::optional<LongLived>{};
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (!is_active() || detected_backend() != Backend::Claybin) {
         // Auto on a host with no usable sandbox: the banner already says
         // commands run unsandboxed, and the same goes for servers. On never
@@ -2058,7 +2059,7 @@ bool command_needs_jit(std::string_view cmd) noexcept {
     bool have = false;
     auto flush = [&] { if (have) toks.push_back({cur, false}); cur.clear(); have = false; };
     // sh escapes with backslash; cmd.exe (Windows) treats it as a path char.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     constexpr bool kBackslashEscapes = false;
 #else
     constexpr bool kBackslashEscapes = true;

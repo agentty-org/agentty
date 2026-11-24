@@ -2,6 +2,7 @@
 // appends, and the async-signal-safe flight recorder. See logx.hpp for
 // the design contract.
 
+#include <maya/core/target.hpp>
 #include "agentty/util/logx.hpp"
 
 #include <array>
@@ -19,7 +20,7 @@
 
 #include <maya/runtime.hpp>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
   #include <io.h>
   #include <fcntl.h>
   #include <sys/stat.h>
@@ -426,7 +427,7 @@ void parse_filter(std::string_view spec) noexcept {
 // the log grew without bound. Open through CreateFile with full sharing and
 // wrap the handle in a CRT fd so the rest of logx stays fd-based.
 int open_append(const char* path) noexcept {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     HANDLE h = ::CreateFileA(path, FILE_APPEND_DATA,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -517,7 +518,7 @@ void rotate_locked(Rotation&, std::int64_t limit) noexcept {
     // closed, and nothing else has ever seen it.
     const int nfd = open_append(g_path.c_str());
     if (nfd >= 0) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         (void)::_dup2(nfd, g_fd.load(std::memory_order_relaxed));
         ::_close(nfd);
 #else
@@ -617,7 +618,7 @@ bool init() {
             root = ah;
         else if (const char* home = std::getenv("HOME"); home && *home)
             root = std::string{home} + "/.agentty";
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         if (root.empty())
             if (const char* prof = std::getenv("USERPROFILE"); prof && *prof)
                 root = std::string{prof} + "\\.agentty";
@@ -628,7 +629,7 @@ bool init() {
         // one directory rather than one per launch directory.
         const char* logs_env = std::getenv("AGENTTY_LOGS_DIR");
         const bool have_env = logs_env && *logs_env;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         const bool env_abs =
             have_env && (logs_env[0] == '\\' || logs_env[0] == '/' ||
                          (logs_env[0] != '\0' && logs_env[1] == ':'));
@@ -638,7 +639,7 @@ bool init() {
         // An absolute override needs no root, which is the case that keeps
         // logging alive on a host with no usable HOME.
         if (!root.empty() || env_abs) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             if (!root.empty()) ::_mkdir(root.c_str());
             const std::string dir = !have_env  ? root + "\\logs"
                                     : env_abs  ? std::string{logs_env}
@@ -723,7 +724,7 @@ void emit(Channel ch, Level lv, std::string_view site,
         const int  ms   = static_cast<int>(
             duration_cast<milliseconds>(now.time_since_epoch()).count() % 1000);
         std::tm tm{};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         localtime_s(&tm, &secs);
 #else
         localtime_r(&secs, &tm);
@@ -859,7 +860,7 @@ std::size_t dump_flight_recorder(int fd) noexcept {
 
 bool dump_flight_recorder_to(const char* path) noexcept {
     if (!path || !*path) return false;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     int fd = AGT_OPEN(path, _O_WRONLY | _O_APPEND | _O_CREAT | _O_BINARY,
                       _S_IREAD | _S_IWRITE);
 #else
@@ -867,7 +868,7 @@ bool dump_flight_recorder_to(const char* path) noexcept {
 #endif
     if (fd < 0) return false;
     const auto n = dump_flight_recorder(fd);
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     ::_close(fd);
 #else
     ::close(fd);

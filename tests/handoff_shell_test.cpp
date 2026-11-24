@@ -26,13 +26,14 @@
 //       hooksPath at a large dir
 //   13. check_with refuses a write to a git-config target
 //   14. review reports a git dir moved away (via its config), and a new one with a live hook
+#include <maya/core/target.hpp>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <thread>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>   // getpid — unique sandbox dir per test run
 #else
 #ifndef WIN32_LEAN_AND_MEAN
@@ -55,7 +56,7 @@ namespace {
 // FILE_FLAG_BACKUP_SEMANTICS, which a DIRECTORY needs, so it throws
 // "Permission denied". Set it through a directory-capable handle there.
 void set_mtime(const fs::path& p, fs::file_time_type t) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (!fs::is_directory(p)) { fs::last_write_time(p, t); return; }
     // file_time_type -> FILETIME via the regular-file path: stamp a scratch
     // file with t and copy its FILETIME (avoids clock-epoch arithmetic).

@@ -20,6 +20,7 @@
 // The tasks co-own Core, so a reader stuck in a blocking read can be
 // abandoned at shutdown without touching a dead Peer.
 
+#include <maya/core/target.hpp>
 #include "agentty/rpc/peer.hpp"
 
 #include <algorithm>
@@ -31,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #include <io.h>
 #else
 #include <unistd.h>
@@ -69,7 +70,7 @@ Channel fd_channel(int in_fd, int out_fd) {
     Channel ch;
     ch.read = [in_fd](const maya::unlocked&, char* buf, std::size_t cap) -> std::size_t {
         for (;;) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const int n = ::_read(in_fd, buf, static_cast<unsigned>(cap));
 #else
             const auto n = ::read(in_fd, buf, cap);
@@ -80,7 +81,7 @@ Channel fd_channel(int in_fd, int out_fd) {
     };
     ch.write = [out_fd](const maya::unlocked&, std::string_view bytes) {
         while (!bytes.empty()) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             const int n = ::_write(out_fd, bytes.data(), static_cast<unsigned>(bytes.size()));
 #else
             const auto n = ::write(out_fd, bytes.data(), bytes.size());

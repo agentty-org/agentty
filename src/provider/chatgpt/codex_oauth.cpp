@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/provider/chatgpt/codex_oauth.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
@@ -15,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -419,7 +420,7 @@ struct WakeFds {
 
 void shut_read(std::intptr_t fd) noexcept {
     if (fd < 0) return;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     ::shutdown(static_cast<SOCKET>(fd), SD_RECEIVE);
 #else
     ::shutdown(static_cast<int>(fd), SHUT_RD);
@@ -429,7 +430,7 @@ void shut_read(std::intptr_t fd) noexcept {
 CallbackResult wait_for_callback_impl(int timeout_s, const CodexCancelProbe& cancelled,
                                       WakeFds& wake, int port) {
     CallbackResult out;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         out.error = "WSAStartup failed"; return out;
@@ -542,7 +543,7 @@ CallbackResult wait_for_callback_impl(int timeout_s, const CodexCancelProbe& can
                                           nullptr, nullptr, &cli_tv);
             if (readable < 0) break;
             if (readable == 0) continue;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             int n = ::recv(cli, buf, sizeof(buf), 0);
 #else
             auto n = ::recv(cli, buf, sizeof(buf), 0);
@@ -601,7 +602,7 @@ CallbackResult wait_for_callback(int timeout_s, const CodexCancelProbe& cancelle
 // Codex login left running). Both are on OpenAI's redirect allow-list for
 // this client; codex-rs falls back the same way. 0 = neither is free.
 int pick_callback_port() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return OAuthConfig::callback_port;
     struct WsaGuard { ~WsaGuard() { WSACleanup(); } } g;

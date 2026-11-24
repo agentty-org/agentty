@@ -21,6 +21,7 @@
 // and made it obvious agentty had no vocabulary for "this skill will run
 // programs and reach the network".
 
+#include <maya/core/target.hpp>
 #include "agtest_cap.hpp"
 #include "agentty/tool/skills.hpp"
 #include "agentty/scope/scope.hpp"
@@ -28,7 +29,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
 #include <process.h>
 #define getpid _getpid
 #else
@@ -64,7 +65,7 @@ Skill effectful_skill() {
 }
 
 void set_env(const char* name, const std::string& value) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s(name, value.c_str());
 #else
     ::setenv(name, value.c_str(), 1);
@@ -72,7 +73,7 @@ void set_env(const char* name, const std::string& value) {
 }
 
 void unset_env(const char* name) {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s(name, "");
 #else
     ::unsetenv(name);

@@ -7,6 +7,7 @@
 //   /api/oauth/token (grant_type=urn:ietf:params:oauth:grant-type:device_code),
 //   /api/oauth/token (grant_type=refresh_token)
 
+#include <maya/core/target.hpp>
 #include "agentty/provider/kimi/kimi_oauth.hpp"
 #include "agentty/version.hpp"
 #include "agentty/util/lock_levels.hpp"
@@ -21,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <windows.h>
 #else
 #  include <sys/stat.h>    // chmod
@@ -73,7 +74,7 @@ std::string ascii_header(std::string_view v, const char* fallback = "unknown") {
 
 std::string host_name() {
     char buf[256] = {0};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     DWORD n = sizeof(buf);
     if (::GetComputerNameA(buf, &n)) return ascii_header(buf);
 #else
@@ -83,7 +84,7 @@ std::string host_name() {
 }
 
 std::string os_version() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return "Windows";
 #else
     struct utsname u{};
@@ -93,7 +94,7 @@ std::string os_version() {
 }
 
 std::string device_model() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return "Windows";
 #else
     struct utsname u{};

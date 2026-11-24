@@ -11,6 +11,7 @@
 // Distinct from wire.hpp (byte-level SSE framing, deliberately domain-light):
 // this one legitimately needs the domain Message + filesystem.
 
+#include <maya/core/target.hpp>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -221,7 +222,7 @@ tool_search_references(const ToolUse& tc) {
 [[nodiscard]] inline std::filesystem::path home_dir() noexcept {
     if (const char* h = std::getenv("HOME"); h && *h)
         return std::filesystem::path{h};
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     if (const char* h = std::getenv("USERPROFILE"); h && *h)
         return std::filesystem::path{h};
 #endif

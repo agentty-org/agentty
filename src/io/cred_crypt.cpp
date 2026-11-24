@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/auth/cred_crypt.hpp"
 
 #include <array>
@@ -19,7 +20,7 @@
 
 #include "agentty/util/base64.hpp"
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <windows.h>
 #else
 #  include <termios.h>
@@ -51,7 +52,7 @@ void init_crypto() {
 std::string machine_seed() {
     std::string seed;
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // MachineGuid is a stable per-install identifier.
     HKEY hk{};
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -138,7 +139,7 @@ constexpr uint32_t kScryptP = 1;
 // doesn't paint on screen). Returns std::nullopt if there is no controlling
 // tty (e.g. piped/headless) — the caller then errors instead of prompting.
 std::optional<std::string> prompt_passphrase() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return std::nullopt;   // interactive prompt unsupported here; use env var
 #else
     FILE* tty = std::fopen("/dev/tty", "r+");

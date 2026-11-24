@@ -14,6 +14,7 @@
 // The 3 sanitizer-narrow tests (concurrency_primitives / cred_crypt / keystore)
 // are NOT here — they link a deliberately minimal source subset to stay
 // asan-clean, which folding into the full object set would defeat.
+#include <maya/core/target.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -53,7 +54,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         fs::create_directories(sandbox / "home", ec);
         // home/ beside tmp/, never tmp/ inside the root: see test_main.cpp.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         _putenv_s("AGENTTY_HOME", (sandbox / "home").string().c_str());
         _putenv_s("AGENTTY_UNDER_TEST", "1");
 #else
@@ -108,7 +109,7 @@ int main(int argc, char** argv) {
     // calls join_prewarm(), so that thread would outlive main() and race
     // libcrypto/allocator atexit teardown — an intermittent shutdown SIGSEGV
     // (e.g. fork_test's ForkThread reducer). Tests don't need the latency win.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("AGENTTY_NO_PREWARM", "1");
     _putenv_s("AGENTTY_NO_UPDATE_CHECK", "1");
 #else

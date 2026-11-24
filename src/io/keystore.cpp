@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/auth/keystore.hpp"
 
 #include "agentty/tool/util/subprocess.hpp"
@@ -8,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include "agentty/tool/util/exec.hpp"   // run_child
 #else
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -19,7 +20,7 @@
 #  endif
 #  include <windows.h>
 #  include <wincred.h>
-#  ifdef _MSC_VER
+#  if MAYA_CC_MSVC_ABI
 #    pragma comment(lib, "advapi32.lib")
 #  endif
 #endif
@@ -56,14 +57,14 @@ bool env_enabled() {
 enum class Backend { None, LibSecret, MacKeychain, WinCred };
 
 Backend detect_backend() {
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     if (can_invoke({"security", "help"})) return Backend::MacKeychain;
     return Backend::None;
-#elif defined(__linux__)
+#elif MAYA_OS_LINUX
     // `secret-tool --help` returns non-zero but spawns cleanly when present.
     if (can_invoke({"secret-tool", "--help"})) return Backend::LibSecret;
     return Backend::None;
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // Windows Credential Manager is always present on supported Windows.
     return Backend::WinCred;
 #else
@@ -76,7 +77,7 @@ Backend backend() {
     return b;
 }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 // Spawn argv, write `input` to its stdin, discard stdout/stderr, and return
 // the exit code (or -1 on spawn failure). Used for `secret-tool store`, which
 // reads the secret from stdin — so the secret never appears in the process
@@ -96,7 +97,7 @@ int spawn_feed_stdin(const std::vector<std::string>& argv, const std::string& in
 }
 #endif // !_WIN32
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 // The credential target name shown in Windows Credential Manager. One item
 // per logical key, namespaced so we never collide with other apps.
 std::wstring win_target(const std::string& key) {
@@ -128,7 +129,7 @@ std::string backend_name() {
 Status store(const std::string& key, const std::string& secret) {
     if (!available()) return Status::Unsupported;
     switch (backend()) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         case Backend::LibSecret: {
             // secret-tool store --label=<label> <attr> <key>  (secret on stdin)
             int rc = spawn_feed_stdin(
@@ -176,7 +177,7 @@ Status store(const std::string& key, const std::string& secret) {
 Status retrieve(const std::string& key, std::string& out) {
     if (!available()) return Status::Unsupported;
     switch (backend()) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         case Backend::LibSecret: {
             auto r = run_argv_s({"secret-tool", "lookup", kAttrKey, key},
                                 1u << 20, std::chrono::seconds{10});
@@ -220,7 +221,7 @@ Status retrieve(const std::string& key, std::string& out) {
 Status remove(const std::string& key) {
     if (!available()) return Status::Unsupported;
     switch (backend()) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         case Backend::LibSecret: {
             auto r = run_argv_s({"secret-tool", "clear", kAttrKey, key},
                                 4096, std::chrono::seconds{5});

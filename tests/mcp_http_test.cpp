@@ -11,6 +11,7 @@
 //
 // POSIX-only (raw sockets). SKIPS (exit 0) on Windows.
 
+#include <maya/core/target.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +19,7 @@
 #include <thread>
 #include <atomic>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 int main() { std::printf("mcp_http_test: SKIP (POSIX-only)\n"); return 0; }
 #else
 

@@ -60,7 +60,7 @@ if(NOT MSVC AND NOT "cxx_std_26" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
             "no C++26-only library facility is used).")
     else()
         set(_agentty_is_termux OFF)
-        if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android"
+        if(MAYA_TARGET_ANDROID
                    OR DEFINED ENV{TERMUX_VERSION}
                    OR EXISTS "/data/data/com.termux/files/usr")
             set(_agentty_is_termux ON)
@@ -96,7 +96,7 @@ option(AGENTTY_OPTIMIZE_SIZE "Release builds use -Os instead of -O3 (maya keeps 
 # exception vtables/typeinfo, and the static link against libstdc++.a fails
 # with 42 duplicate symbols (v0.9.44 release, gcc 16.2). Apple's clang and
 # the other platforms are fine.
-if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(MAYA_TARGET_APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(AGENTTY_OPTIMIZE_SIZE OFF CACHE BOOL "" FORCE)
 endif()
 if(AGENTTY_OPTIMIZE_SIZE AND NOT MSVC)

@@ -1,5 +1,6 @@
 // src/io/shared_file.cpp — see include/agentty/io/shared_file.hpp
 
+#include <maya/core/target.hpp>
 #include "agentty/io/shared_file.hpp"
 
 #include <algorithm>
@@ -13,7 +14,7 @@
 
 #include "agentty/util/logx.hpp"
 
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -56,7 +57,7 @@ bool first_failure_for(const std::string& path) {
 fs::path temp_for(const fs::path& target) {
     static maya::snapshot<unsigned long long> seq{0ull};
     const auto n = *seq.update([](const unsigned long long& v) { return v + 1; });
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     const unsigned long pid = ::GetCurrentProcessId();
 #else
     const unsigned long pid = static_cast<unsigned long>(::getpid());
@@ -68,7 +69,7 @@ fs::path temp_for(const fs::path& target) {
 
 bool write_all(int fd, const char* p, std::size_t n) {
     while (n > 0) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
         const int w = ::_write(fd, p, static_cast<unsigned>(n > 0x40000000u ? 0x40000000u : n));
 #else
         const ssize_t w = ::write(fd, p, n);
@@ -82,9 +83,9 @@ bool write_all(int fd, const char* p, std::size_t n) {
 }
 
 bool sync_fd(int fd) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     return ::_commit(fd) == 0;
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     // fsync on macOS only reaches the drive cache; F_FULLFSYNC reaches media.
     return ::fcntl(fd, F_FULLFSYNC) == 0 || ::fsync(fd) == 0;
 #else
@@ -93,7 +94,7 @@ bool sync_fd(int fd) {
 }
 
 void sync_dir(const fs::path& dir) {
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     if (dir.empty()) return;
     const int d = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (d >= 0) { (void)::fsync(d); ::close(d); }
@@ -103,7 +104,7 @@ void sync_dir(const fs::path& dir) {
 }
 
 int open_new(const fs::path& p, unsigned mode, bool append) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     (void)mode;
     int fd = -1;
     const int flags = _O_WRONLY | _O_CREAT | _O_BINARY | _O_NOINHERIT
@@ -120,7 +121,7 @@ int open_new(const fs::path& p, unsigned mode, bool append) {
 }
 
 void close_fd(int fd) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     ::_close(fd);
 #else
     ::close(fd);
@@ -128,7 +129,7 @@ void close_fd(int fd) {
 }
 
 bool publish(const fs::path& tmp, const fs::path& target) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     // Windows won't replace a file another process has open without
     // FILE_SHARE_DELETE, and plain readers (ifstream) open without it. They
     // hold it for microseconds, so retry briefly instead of dropping the
@@ -186,7 +187,7 @@ bool write_atomic(Io, const fs::path& target, std::string_view bytes, WriteOptio
     if (const auto dir = target.parent_path(); !dir.empty()) fs::create_directories(dir, ec);
 
     unsigned mode = o.mode;
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     if (o.keep_mode) {
         struct stat st{};
         if (::stat(target.c_str(), &st) == 0) mode = st.st_mode & 07777;
@@ -196,7 +197,7 @@ bool write_atomic(Io, const fs::path& target, std::string_view bytes, WriteOptio
     const fs::path tmp = temp_for(target);
     const int fd = open_new(tmp, mode, /*append=*/false);
     if (fd < 0) return false;
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     // O_CREAT's mode is masked by the umask; a kept mode must be exact.
     if (o.keep_mode) (void)::fchmod(fd, static_cast<mode_t>(mode));
 #endif
@@ -263,7 +264,7 @@ bool create_exclusive(Io io, const fs::path& target, std::string_view bytes, uns
     bool ok = write_all(fd, bytes.data(), bytes.size()) && sync_fd(fd);
     close_fd(fd);
     if (ok) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
         // MoveFileEx without REPLACE_EXISTING fails if the name is taken.
         ok = ::MoveFileExW(tmp.wstring().c_str(), target.wstring().c_str(),
                            MOVEFILE_WRITE_THROUGH) != 0;
@@ -297,7 +298,7 @@ std::optional<std::uint64_t> append_record(Io, const fs::path& target, std::stri
     if (fd < 0) return std::nullopt;
     bool ok = write_all(fd, bytes.data(), bytes.size());
     if (ok && d == Durability::Durable) ok = sync_fd(fd);
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     const long long end = ok ? ::_lseeki64(fd, 0, SEEK_CUR) : -1;
 #else
     const off_t end = ok ? ::lseek(fd, 0, SEEK_CUR) : -1;
@@ -308,7 +309,7 @@ std::optional<std::uint64_t> append_record(Io, const fs::path& target, std::stri
 }
 
 std::optional<std::string> read_file(Io, const fs::path& p) {
-#ifdef _WIN32
+#if MAYA_OS_WINDOWS
     FILE* f = ::_wfopen(p.wstring().c_str(), L"rb");
 #else
     FILE* f = std::fopen(p.c_str(), "rb");

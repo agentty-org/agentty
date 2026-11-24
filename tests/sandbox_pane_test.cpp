@@ -18,6 +18,7 @@
 // see cmake/AgenttyTests.cmake). Between the two there is no gap: this proves
 // the pane reaches the config, that proves the config reaches the child.
 
+#include <maya/core/target.hpp>
 #include <doctest/doctest.h>
 
 #include "agentty/runtime/app/update.hpp"
@@ -112,13 +113,13 @@ void install(const sandbox_cfg::Config& cfg) {
 // Whether this host has a sandbox backend for these cases. Linux and macOS;
 // Windows previews through claybin too, but these cases pin POSIX paths, so
 // it has its own case below.
-#if defined(__linux__) || defined(__APPLE__)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE
 #define AGENTTY_TEST_SANDBOX_BACKEND 1
 #else
 #define AGENTTY_TEST_SANDBOX_BACKEND 0
 #endif
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 TEST_CASE("sandbox pane: windows previews through claybin") {
     // It used to fall through to "no sandbox backend on this platform" while
     // commands really were confined. The preview has to report the walls the
@@ -967,7 +968,7 @@ TEST_CASE("sandbox pane: the posture row scores the walls") {
 #else
     (void)origin;   // no backend: annotate_sandbox_form scores nothing
 #endif
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (preview.compiled) {
         // "N/M strong" -- the number is what makes two postures comparable at a
         // glance, where four safe-sounding names are not.
@@ -994,7 +995,7 @@ TEST_CASE("sandbox pane: a cap nobody asked for is not reported as a gap") {
     cfg.max_procs = 0;
 
     const auto preview = pn::preview_sandbox(cfg);
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (preview.compiled) {
         for (const auto& w : preview.walls) {
             if (w.name == "resource.memory" || w.name == "resource.cpu" ||
@@ -1008,7 +1009,7 @@ TEST_CASE("sandbox pane: a cap nobody asked for is not reported as a gap") {
     // capability, so a cap that was asked for and failed is still a gap.
     cfg.memory_mb = 4096;
     const auto asked = pn::preview_sandbox(cfg);
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (asked.compiled) {
         for (const auto& w : asked.walls)
             if (w.name == "resource.memory") CHECK_FALSE(w.not_requested);
@@ -1029,7 +1030,7 @@ TEST_CASE("sandbox pane: an unset cap row says so instead of showing none") {
     const int mem = row_of(form, pn::kSbMemoryMb);
     REQUIRE(mem >= 0);
     const auto& origin = form.fields[static_cast<std::size_t>(mem)].origin;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (preview.compiled) {
         // "none (none)" is accurate and useless -- it reads as a failure. The
         // row has to say the cap is unset, which is a choice.
@@ -2603,7 +2604,7 @@ TEST_CASE("sandbox pane: forecast walls are marked per row, not just in the head
     pn::annotate_sandbox_form(form, preview, cfg,
                               pn::engine_status(cfg, facts));
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (preview.compiled) {
         const int sys = row_of(form, pn::kSbSyscalls);
         REQUIRE(sys >= 0);
@@ -2633,7 +2634,7 @@ TEST_CASE("sandbox pane: a row carries the wall that enforces it") {
     const auto preview = pn::preview_sandbox(cfg);
     pn::annotate_sandbox_form(form, preview, cfg, pn::EngineStatus::InForce);
 
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     if (preview.compiled) {
         // The mechanism, not just the strength. "strong" alone is the same
         // unfalsifiable claim as "sandbox: active"; "strong via landlock abi

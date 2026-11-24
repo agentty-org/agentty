@@ -14,6 +14,7 @@
 // The second half matters as much as the first: a cache that never walks is
 // trivially "fast" and wrong.
 
+#include <maya/core/target.hpp>
 #include <doctest/doctest.h>
 
 #include "agentty/domain/sandbox_config.hpp"
@@ -26,7 +27,7 @@
 #include <string>
 #include <thread>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <unistd.h>
 #endif
 
@@ -54,7 +55,7 @@ void age_tree(const fs::path& root) {
 }
 
 fs::path make_ws() {
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     const auto id = std::to_string(::getpid());
 #else
     const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -103,7 +104,7 @@ TEST_CASE("spawn budget: the secret mask is not re-swept when nothing changed") 
     (void)sandbox_cfg::mask_paths(cfg, ws.string(), "");   // warm (arms the watch)
     const auto before = sandbox_cfg::mask_tree_walks_for_test();
     for (int i = 0; i < 5; ++i) (void)sandbox_cfg::mask_paths(cfg, ws.string(), "");
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     // The inotify watch answers "unchanged" with no walk at all.
     CHECK(sandbox_cfg::mask_tree_walks_for_test() == before);
 #endif

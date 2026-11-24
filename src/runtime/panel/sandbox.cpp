@@ -7,6 +7,7 @@
 // hiding them makes the limitation invisible, which is how "sandbox: active"
 // came to mean nothing in issue #21.
 
+#include <maya/core/target.hpp>
 #include "agentty/runtime/panel/sandbox.hpp"
 #include "agentty/runtime/panel/mention.hpp"   // file_source/file_filter, shared with @
 #include "agentty/i18n/i18n.hpp"              // t() — row labels and help
@@ -26,12 +27,12 @@
 // Linux meant that on a mac the pane silently dropped every one of them: the
 // policy still compiled and was still enforced, but the user had no row to
 // see or change it with.
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 #include "claybin/policy/policy.hpp"
 #include "claybin/policy/profiles.hpp"
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
 #include "claybin/macos/backend.hpp"
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
 #include "claybin/windows/backend.hpp"
 #else
 #include "claybin/plan/compile.hpp"
@@ -232,7 +233,7 @@ std::string describe_running(const HostFacts& facts) {
         return "sandboxing is OFF (--sandbox off) \xc2\xb7 nothing below is enforced";
     if (!facts.sandbox_active)
         return "no sandbox \xc2\xb7 commands run unconfined";
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // landlock/seccomp/cgroup2 are linux words; name what windows puts up.
     return "claybin \xc2\xb7 appcontainer \xc2\xb7 job limits \xc2\xb7 mitigation policies";
 #else
@@ -917,7 +918,7 @@ std::vector<std::string> read_sandbox_list(const SandboxListPane& p) {
     return uniq;
 }
 
-#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#if MAYA_OS_LINUX || MAYA_OS_APPLE || MAYA_OS_WINDOWS
 
 Preview preview_sandbox(const sandbox_cfg::Config& cfg) {
     using namespace ::clay;
@@ -929,7 +930,7 @@ Preview preview_sandbox(const sandbox_cfg::Config& cfg) {
     // Only the axes that change the WALLS need to be faithful here; the exact
     // bind list does not move a guarantee, so the preview uses the shape
     // rather than the full read set. (The spawn path builds the real thing.)
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     // Windows rejects a path with no drive, so the shape needs a native root.
     // Which root doesn't move a wall, so a fixed one keeps this pure.
     d = std::move(d).ro_bind("C:\\Windows", "C:\\Windows");
@@ -997,13 +998,13 @@ Preview preview_sandbox(const sandbox_cfg::Config& cfg) {
     // `plan_ops` is a linux concept (claybin's plan is a byte arena of
     // opcodes); the macOS backend hands the kernel a profile STRING, so there
     // is no op count and the row stays 0 rather than reporting a fiction.
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     ::clay::macos::Options mopts;
     mopts.profile_name = "agentty";
     auto compiled = ::clay::macos::compile(std::move(d).seal(),
                                            tools::util::sandbox::claybin_backend::host(),
                                            mopts);
-#elif defined(_WIN32)
+#elif MAYA_OS_WINDOWS
     // Same options as the spawn path (sandbox_claybin.cpp spawn_argv): ACL
     // stamping on, so the filesystem walls read what commands really get.
     // probe_host() caches its verdict, so this costs one probe per process.
@@ -1022,7 +1023,7 @@ Preview preview_sandbox(const sandbox_cfg::Config& cfg) {
         return out;
     }
     out.compiled = true;
-#if defined(__linux__)
+#if MAYA_OS_LINUX
     out.plan_ops = compiled->plan.op_count();
 #endif
     for (int i = 0; i < static_cast<int>(CapId::count_); ++i) {

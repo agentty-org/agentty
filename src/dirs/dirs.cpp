@@ -4,6 +4,7 @@
 // This file is the impure edge: it reads the environment, stats the disk and
 // creates directories. The Spec/Lifecycle types stay pure and testable.
 
+#include <maya/core/target.hpp>
 #include "agentty/dirs/dirs.hpp"
 
 #include <maya/runtime.hpp>
@@ -17,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -54,7 +55,7 @@ constexpr std::array<std::string_view, 4> kMarkers{
 [[nodiscard]] bool dir_is_writable(const fs::path& p) noexcept {
     std::error_code ec;
     if (!fs::is_directory(p, ec)) return false;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return true;  // no cheap W_OK; the write itself surfaces failure
 #else
     return ::access(p.c_str(), W_OK) == 0;
@@ -285,7 +286,7 @@ void warn_once(std::string_view env, const fs::path& bad,
         out.origin = Origin::OverrideFellBack;
     }
 
-#ifndef _WIN32
+#if !MAYA_OS_WINDOWS
     // The default inherits 0700 from the root; an override can point
     // anywhere, including a 0755 directory the user already created. This
     // is the one place the bit has to be set explicitly rather than assumed.

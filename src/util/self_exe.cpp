@@ -1,13 +1,14 @@
 // util/self_exe.cpp — see the header.
 
+#include <maya/core/target.hpp>
 #include "agentty/util/self_exe.hpp"
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
 #  include <mach-o/dyld.h>
 #  include <cstdint>
 #  include <vector>
@@ -18,12 +19,12 @@
 namespace agentty::util {
 
 std::filesystem::path self_exe_path() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     wchar_t buf[32768];
     const DWORD n = ::GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(std::size(buf)));
     if (n == 0 || n >= std::size(buf)) return {};
     return std::filesystem::path{std::wstring{buf, n}};
-#elif defined(__APPLE__)
+#elif MAYA_OS_APPLE
     std::uint32_t size = 0;
     (void)::_NSGetExecutablePath(nullptr, &size);
     std::vector<char> buf(size + 1, '\0');

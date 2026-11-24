@@ -4,13 +4,14 @@
 // (resolve_passphrase is call_once) runs in its own forked child, so a single
 // test binary can exercise the no-passphrase (v1) and passphrase (v2) states
 // independently. On non-fork platforms the passphrase cases are skipped.
+#include <maya/core/target.hpp>
 #include "agentty/auth/cred_crypt.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <sys/wait.h>
 #  include <unistd.h>
 #  define HAVE_FORK 1

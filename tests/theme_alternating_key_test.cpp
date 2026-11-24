@@ -22,6 +22,7 @@
 // new palette and appears to work. Same keystroke count, opposite outcome —
 // which is exactly what a content-keyed cache with no theme in the key does.
 
+#include <maya/core/target.hpp>
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -149,7 +150,7 @@ int main() {
     // fine. MAYA_COLOR is checked above every other signal (detect_tier
     // step 0), so this makes the harness ask the question it means to ask:
     // given a palette the terminal CAN paint, does a keystroke repaint?
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     _putenv_s("MAYA_COLOR", "truecolor");
 #else
     ::setenv("MAYA_COLOR", "truecolor", 1);

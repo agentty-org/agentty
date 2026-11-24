@@ -92,7 +92,7 @@ check_ipo_supported(RESULT AGENTTY_HAS_IPO OUTPUT AGENTTY_IPO_ERR)
 # are unaffected. macOS's real ceiling is AppleClang+ThinLTO, which can't
 # build this tree yet (no cxx_std_26 advertised), so -O3 is the macOS max.
 set(AGENTTY_IPO_OK ${AGENTTY_HAS_IPO})
-if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(MAYA_TARGET_APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(AGENTTY_IPO_OK FALSE)
     message(STATUS "agentty: LTO disabled on macOS+GCC "
                    "(Apple ld can't consume GCC LTO IR — would only bloat the binary)")
@@ -109,7 +109,7 @@ endif()
 # Per-TU -O3 code is what links here anyway (MinGW gains little from cross-TU
 # LTO), so dropping IPO for this combo makes the gate pass with byte-identical
 # optimization and zero risk to any shipped artifact.
-if(MINGW OR (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+if(MAYA_TARGET_MINGW OR (MAYA_TARGET_WINDOWS AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
     set(AGENTTY_IPO_OK FALSE)
     message(STATUS "agentty: LTO disabled on MinGW/MSYS2 GCC "
                    "(GCC 16 lto1 ICE 'cannot read LTO_section_decls' on the "
@@ -199,7 +199,7 @@ endif()
 # way and are excluded too. Belt-and-suspenders: also set the CMake property so
 # targets defined without agentty's helpers (imported/fetched deps that we
 # link) inherit PIC on this path.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+if(MAYA_TARGET_LINUX
         AND NOT (AGENTTY_FULLY_STATIC AND NOT AGENTTY_STATIC_PIE))
     message(STATUS "agentty: compiling -fPIC for the Linux dynamic (PIE) build "
                    "so OBJECT-lib objects link into the PIE exe + tests under "
@@ -232,7 +232,7 @@ endif()
 # so all of them, including future submodules, inherit it from one place
 # instead of each re-discovering the breakage. AppleClang doesn't need it
 # (and can't build this tree — it doesn't advertise cxx_std_26).
-if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(MAYA_TARGET_APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_definitions(_Static_assert=static_assert)
 endif()
 
@@ -260,7 +260,7 @@ endif()
 # (the CRT objects carry the API level too). Directory-wide + before every
 # add_subdirectory so maya / acp-cpp / mcp-cpp and the agentty/test targets
 # all inherit it. No-op on every non-Android platform.
-if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android"
+if(MAYA_TARGET_ANDROID
            OR DEFINED ENV{TERMUX_VERSION}
            OR EXISTS "/data/data/com.termux/files/usr")
     # Ask the compiler for its default target triple (e.g.

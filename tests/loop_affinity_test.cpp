@@ -27,6 +27,7 @@
 // Standalone, not consolidated: case 3 asserts an ABORT, so it has to run in
 // a child process and doctest can't host that.
 
+#include <maya/core/target.hpp>
 #include <maya/runtime.hpp>
 
 #include <cstdio>
@@ -36,7 +37,7 @@
 #include <type_traits>
 #include <variant>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <sys/wait.h>
 #  include <unistd.h>
 #  define HAVE_FORK 1

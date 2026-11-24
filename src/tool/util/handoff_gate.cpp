@@ -1,6 +1,7 @@
 // The trust-handoff gate. See the header for why this sits on the tool call
 // rather than inside the sandbox.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/util/handoff_gate.hpp"
 
 #include <maya/runtime.hpp>
@@ -20,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #include <sys/stat.h>   // stat_entry: one lstat per watched path
 #endif
 
@@ -477,7 +478,7 @@ constexpr auto kRacyWindow = std::chrono::seconds{2};
     return sandbox_cfg::is_host_trusted(p + "/probe", &k);
 }
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 // What record() and review() measure about one watched path, in one or two
 // syscalls: exists (the link itself counts), and the size + mtime of what it
 // resolves to, which is what fs::file_size / last_write_time reported.
@@ -494,7 +495,7 @@ struct EntryStat {
     if (S_ISLNK(st.st_mode) && ::stat(p.c_str(), &st) != 0) return s;   // dangling
     s.regular = S_ISREG(st.st_mode);
     s.size = s.regular ? static_cast<std::uintmax_t>(st.st_size) : 0;
-#if defined(__APPLE__)
+#if MAYA_OS_APPLE
     const auto& ts = st.st_mtimespec;
 #else
     const auto& ts = st.st_mtim;
@@ -986,7 +987,7 @@ TrustedSnapshot snapshot_trusted(std::string_view root) {
         // existed=false is a watched-but-absent path (a git include that
         // does not exist yet): review() reports it if it appears and the
         // sandbox does not try to bind it.
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         std::error_code xec;
         entry.existed = fs::exists(fs::symlink_status(p, xec));
         if (!entry.existed) { snap.entries.push_back(std::move(entry)); return; }
@@ -1252,7 +1253,7 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
         }
     }
     for (const auto& e : before.entries) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         const auto now = stat_entry(e.path);
         const bool exists = now.exists && now.regular;
 #else
@@ -1267,7 +1268,7 @@ std::size_t review_trusted(const TrustedSnapshot& before, std::string_view tool)
         } else if (!exists) {
             what = "deleted";
         } else {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
             // Size OR mtime: a same-length rewrite is the case a size check
             // alone misses, and flipping one character in a hook script is
             // exactly that.

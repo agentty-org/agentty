@@ -10,6 +10,7 @@
 //      aborts a delay_for there, which is what took CI down.
 //
 // Fork, not threads: a second thread is the lane's job, not the file lock's.
+#include <maya/core/target.hpp>
 #include "agentty/io/shared_file.hpp"
 #include "agentty/util/lock_levels.hpp"
 #include "agtest_cap.hpp"
@@ -19,7 +20,7 @@
 #include <filesystem>
 #include <thread>
 
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
 #  include <csignal>
 #  include <sys/wait.h>
 #  include <unistd.h>

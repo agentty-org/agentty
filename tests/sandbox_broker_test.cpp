@@ -11,6 +11,7 @@
 // is sandbox_live_check's job (cases 9-11), and the two together are what make
 // brokering safe to ship.
 
+#include <maya/core/target.hpp>
 #include <doctest/doctest.h>
 
 // Linux-only, because the thing under test is. Brokering is built on seccomp
@@ -24,7 +25,7 @@
 // Guarded rather than ported, because there is no macOS broker to test -- the
 // seatbelt backend reports `syscall.filter: none` precisely because the
 // mechanism does not exist on this platform.
-#if defined(__linux__)
+#if MAYA_OS_LINUX
 
 #include "agentty/tool/util/sandbox_broker.hpp"
 

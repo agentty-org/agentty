@@ -1,3 +1,4 @@
+#include <maya/core/target.hpp>
 #include "agentty/io/http.hpp"
 
 #include "agentty/util/logx.hpp"
@@ -49,7 +50,7 @@
 // MSVC doesn't provide ssize_t (POSIX-only). nghttp2.h uses it for the legacy
 // read callback typedef guarded by NGHTTP2_NO_SSIZE_T. Define it from BaseTsd
 // before the include so nghttp2.h compiles cleanly without skipping the typedef.
-#if defined(_MSC_VER) && !defined(__clang__)
+#if MAYA_CC_MSVC
 #  include <BaseTsd.h>
    using ssize_t = SSIZE_T;
 #endif
@@ -62,7 +63,7 @@
 // `int` that supports read/write/poll/close; BSD + Winsock agree on the
 // surface, they differ on the headers and a couple of lifecycle calls.
 // ---------------------------------------------------------------------------
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
@@ -72,7 +73,7 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
-#  ifdef _MSC_VER
+#  if MAYA_CC_MSVC_ABI
 #    pragma comment(lib, "ws2_32.lib")
 #  endif
 using socket_t = SOCKET;
@@ -199,7 +200,7 @@ namespace {
 // kills in-flight requests in ways that are hard to diagnose.
 // -----------------------------------------------------------------------
 void ensure_net_init() {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     static std::once_flag once;
     maya::once(once, []{
         WSADATA data;
@@ -633,7 +634,7 @@ socks5_send_all(socket_t fd, const unsigned char* data, size_t len,
     while (len > 0) {
         if (cancel && cancel->is_cancelled())
             return std::unexpected(HttpError::cancelled("socks5 send"));
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int n = ::send(fd, reinterpret_cast<const char*>(data),
                        static_cast<int>(len), 0);
 #else
@@ -665,7 +666,7 @@ socks5_recv_exact(socket_t fd, unsigned char* out, size_t want,
     while (want > 0) {
         if (cancel && cancel->is_cancelled())
             return std::unexpected(HttpError::cancelled("socks5 recv"));
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int n = ::recv(fd, reinterpret_cast<char*>(out),
                        static_cast<int>(want), 0);
 #else
@@ -905,13 +906,13 @@ dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
         }
         socket_t fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (fd == kBadSocket) { last_err = "socket() failed"; continue; }
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         // Lower Nagle + keep stream responsive.  Anthropic's SSE frames are
         // small and bursty; we want them flushed to user space immediately.
         int one = 1;
         ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
-#  if defined(__linux__) && defined(TCP_QUICKACK)
+#  if MAYA_OS_LINUX && defined(TCP_QUICKACK)
         // Disable delayed ACKs. Linux only — kernel coalesces ACKs by
         // default to amortize wakeups, which adds 40 ms to every SSE
         // frame round-trip when the receiver isn't sending data back.
@@ -978,7 +979,7 @@ dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
                 break;
             }
             int soerr = 0;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
             int sl = sizeof(soerr);
             ::getsockopt(fd, SOL_SOCKET, SO_ERROR,
                          reinterpret_cast<char*>(&soerr), &sl);
@@ -1605,7 +1606,7 @@ plain_send_all(socket_t fd, const char* data, size_t len,
     while (off < len) {
         if (cancel && cancel->is_cancelled())
             return std::unexpected(HttpError::cancelled("h1 plain write"));
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int n = ::send(fd, data + off, static_cast<int>(len - off), 0);
 #else
         ssize_t n = ::send(fd, data + off, len - off, MSG_NOSIGNAL);
@@ -1882,7 +1883,7 @@ plain_stream(const Endpoint& ep, const Request& req, StreamHandler& handler,
             return std::unexpected(HttpError::timeout(
                 "h1 plain stream operation deadline exceeded"));
         }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int r = ::recv(fd, buf, sizeof(buf), 0);
 #else
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
@@ -2051,7 +2052,7 @@ plain_unary_send(const Endpoint& ep, const Request& req, Timeouts tos,
             return std::unexpected(HttpError::body(
                 "h1 plain response exceeds max_body_bytes"));
         }
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int r = ::recv(fd, buf, sizeof(buf), 0);
 #else
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
@@ -2624,7 +2625,7 @@ constexpr std::size_t kMaxPoolEntriesPerEndpoint = 16;
     if (pfd.revents & POLLIN) {
         // Peek 1 byte. EOF (0) → peer closed; data → fine; EAGAIN → fine.
         char b;
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
         int n = ::recv(fd, &b, 1, MSG_PEEK);
 #else
         ssize_t n = ::recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
@@ -3210,7 +3211,7 @@ void Client::prewarm(std::string host, uint16_t port,
     impl_->prewarm_pool.post_isolated(
         [](std::stop_token st, PoolRef pool, CancelTokenPtr cancel,
            std::string host, uint16_t port, std::string dial_host, uint16_t dial_port) {
-#if !defined(_WIN32)
+#if !MAYA_OS_WINDOWS
         // Block every signal so SIGWINCH / SIGINT / SIGTERM route to the
         // main thread's handlers instead of being delivered here mid
         // SSL_connect. On glibc this is belt-and-suspenders; on musl-

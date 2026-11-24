@@ -35,6 +35,7 @@
 // skill will run programs and reach the network", and no install path
 // that treated every source the same.
 
+#include <maya/core/target.hpp>
 #include "agentty/tool/skills.hpp"
 
 #include "agentty/scope/scope.hpp"
@@ -63,7 +64,7 @@ static_assert(agentty::tools::skills::kApprovalsLeaf
 #include <string_view>
 #include <vector>
 
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
 #  include <io.h>
 #else
 #  include <unistd.h>
@@ -79,7 +80,7 @@ namespace {
 // Is stdin a terminal? agentty ships on Windows too, so this can't just be
 // isatty() from <unistd.h>.
 [[nodiscard]] bool stdin_is_tty() noexcept {
-#if defined(_WIN32)
+#if MAYA_OS_WINDOWS
     return ::_isatty(::_fileno(stdin)) != 0;
 #else
     return ::isatty(STDIN_FILENO) != 0;
