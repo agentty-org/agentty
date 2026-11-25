@@ -373,6 +373,8 @@ int main() {
             for (int l = 0; l < 600; ++l) f << "line " << l << " of file " << i << " lorem ipsum dolor sit amet\n";
         }
         auto results = std::make_shared<std::atomic<int>>(0);
+        // Each settled child's own duration, from the last published list.
+        auto children_ms = std::make_shared<std::vector<double>>();
         auto timeit = [&](int n_calls) {
             install_scripted_stream([n_calls, results](int turn, const provider::Request& req,
                                                        const provider::EventSink& sink) {
@@ -391,17 +393,36 @@ int main() {
                 emit_text(sink, "done");
                 emit_finish(sink, StopReason::EndTurn);
             });
+            auto lists = std::make_shared<std::vector<std::vector<ToolUse::Child>>>();
+            tools::CallContext ctx;
+            ctx.progress = [](std::string_view) {};
+            ctx.children = [lists](std::vector<ToolUse::Child> k) { lists->push_back(std::move(k)); };
             const auto t0 = std::chrono::steady_clock::now();
-            (void)run_task("grep");
+            (void)run_task("grep", ctx);
+            children_ms->clear();
+            if (!lists->empty())
+                for (const auto& c : lists->back()) children_ms->push_back(double(c.ms));
             return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         };
         // Each call is a regex grep (no -F literal fast path), so its cost
         // is the scan, not the fixed overhead.
         const double one = timeit(1);
         const double four = timeit(4);
-        std::printf("     W: 1 grep %.0f ms, 4 greps in one turn %.0f ms\n", one, four);
+        double busy = 0;
+        for (double ms : *children_ms) busy += ms;
+        std::printf("     W: 1 grep %.0f ms, 4 greps in one turn %.0f ms (calls' own time %.0f ms)\n",
+                    one, four, busy);
         check(results->load() == 4, "W: all four results reach the model");
-        check(four < one * 2.2, "W: four read-only calls in one turn overlap (not 4x serial)");
+        // Overlap, judged structurally. Wall time alone can't tell: grep
+        // fans one scan out across every core, so on a machine with few
+        // cores four greps side by side take about as long as four in a row
+        // (pure CPU contention, measured 3.4x here). What serial execution
+        // CAN'T do is spend more time inside calls than the turn lasted:
+        // serially the calls' own durations sum to <= the turn; side by side
+        // each call's clock runs while the others run, so they sum to well
+        // past it.
+        check(children_ms->size() == 4 && busy > four * 1.6,
+              "W: four read-only calls in one turn overlap (calls' time exceeds the turn's)");
         fs::remove_all("w_tree");
     }
 
@@ -707,6 +728,14 @@ int main() {
                 emit_tool_call(sink, "l2", "read",
                                json{{"recipient_name", "functions.read"},
                                     {"parameters", {{"path", "h2_probe.txt"}}}});
+                // The pseudo tool itself: fans out into two real reads.
+                emit_tool_call(sink, "l3", "multi_tool_use.parallel",
+                    json{{"tool_uses", json::array({
+                        {{"recipient_name", "functions.read"},
+                         {"parameters", {{"path", "h2_probe.txt"}}}},
+                        {{"recipient_name", "functions.read"},
+                         {"parameters", {{"path", "h2_probe.txt"}, {"offset", 1}}}},
+                    })}});
                 emit_finish(sink, StopReason::ToolUse);
                 return;
             }
@@ -729,6 +758,9 @@ int main() {
               "H2: unparsable wrapper text fails as bad args with the hint");
         check(has(l2, "|D|") && has(l2, "H2_PROBE_BYTES"),
               "H2: a single wrapped read is unwrapped and runs");
+        check(has(find("l3__0"), "|D|") && has(find("l3__0"), "H2_PROBE_BYTES")
+                  && has(find("l3__1"), "|D|") && find("l3").empty(),
+              "H2: multi_tool_use.parallel runs as the reads it holds");
         std::error_code ec;
         std::filesystem::remove("h2_probe.txt", ec);
     }

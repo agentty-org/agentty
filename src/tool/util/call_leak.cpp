@@ -1,5 +1,7 @@
 #include "agentty/tool/util/call_leak.hpp"
 
+#include "agentty/util/logx.hpp"
+
 #include <array>
 #include <cctype>
 
@@ -160,11 +162,25 @@ bool unwrap_call_wrapper(std::string_view tool_name, json& args) {
     if (!ieq(strip_namespace(to), strip_namespace(tool_name))) return false;
     auto params = parameters_of(*item);
     if (!params) return false;
+    AGT_LOG(Tool, Info, "tool_args.wrapper_unwrapped", "tool={} args={}",
+            tool_name, ::agentty::logx::body(args.dump()));
     args = std::move(*params);
     return true;
 }
 
+std::optional<std::string> detail_call_wrapper_leak(std::string_view tool_name,
+                                                    const json& args);
+
 std::optional<std::string> call_wrapper_leak(std::string_view tool_name, const json& args) {
+    auto leak = detail_call_wrapper_leak(tool_name, args);
+    if (leak)
+        AGT_LOG(Tool, Warn, "tool_args.wrapper_leak", "tool={} args={}",
+                tool_name, ::agentty::logx::body(args.dump()));
+    return leak;
+}
+
+std::optional<std::string> detail_call_wrapper_leak(std::string_view tool_name,
+                                                    const json& args) {
     if (!args.is_object()) return std::nullopt;
     const std::string tool{tool_name};
 

@@ -37,6 +37,7 @@
 #include "agentty/provider/anthropic/transport.hpp"
 #include "agentty/provider/error_class.hpp"
 #include "agentty/provider/openai/transport.hpp"
+#include "agentty/provider/parallel_fanout.hpp"
 #include "agentty/provider/prompt_policy.hpp"
 #include "agentty/provider/provider.hpp"
 #include "agentty/provider/selection.hpp"
@@ -799,9 +800,17 @@ void parse_user_agent(const std::string& raw, const std::string& slug,
 std::shared_ptr<const UserAgentStore> user_agents() {
     namespace fs = std::filesystem;
     std::string sig;
+    // The signature names each root and file with its mtime AND size. Mtimes
+    // alone collided: a scan that caught an agent file just created (size 0,
+    // skipped) recorded the same signature the finished write had a tick
+    // later, so the store stayed without that agent for the whole process
+    // (toolset_e2e's "untrusted project agent" checks flaked on exactly
+    // that). Paths are absolute so a cwd change can't reuse another
+    // project's generation.
     auto scan_root = [&](const fs::path& root) {
         std::error_code ec;
         if (!fs::is_directory(root, ec) || ec) return;
+        sig += fs::absolute(root, ec).string() + "|";
         auto mt = fs::last_write_time(root, ec);
         if (!ec)
             sig += std::to_string(static_cast<long long>(
@@ -812,11 +821,14 @@ std::shared_ptr<const UserAgentStore> user_agents() {
             if (it->path().extension() == ".md") files.push_back(it->path());
         std::sort(files.begin(), files.end());
         for (const auto& p : files) {
-            std::error_code fec;
+            std::error_code fec, sec;
             auto fmt = fs::last_write_time(p, fec);
+            const auto sz = fs::file_size(p, sec);
+            sig += p.filename().string() + "@";
             if (!fec)
                 sig += std::to_string(static_cast<long long>(
-                           fmt.time_since_epoch().count())) + ";";
+                           fmt.time_since_epoch().count()));
+            sig += "/" + (sec ? std::string{"?"} : std::to_string(sz)) + ";";
         }
     };
     auto home = agentty::util::home_dir_or_empty();
@@ -1734,17 +1746,23 @@ provider::StreamResult run_one_completion(Thread& thread,
         stop_cbs.push_back(std::make_unique<StopCb>(t, trip));
     if (ctx.cancelled()
         || (run_reg && run_reg->cancelled())) cancel->cancel();
+    // Same adapter dispatch_stream applies, so a seam that bypasses dispatch
+    // (the Anthropic fallback, a test seam) still gets leaked parallel calls
+    // split. A second pass over already-split calls changes nothing.
+    provider::ParallelFanout fan{sink};
+    const auto fan_sink = fan.sink();
     if (!route_provider.empty() && cfg.stream_to) {
         // A role pinned on another endpoint. stream_to resolves that
         // provider's own credential before dispatching — see the auth block
         // above for why this path skips the active-provider lookup.
-        result = cfg.stream_to(ctx.capability(), route_provider, std::move(req), sink);
+        result = cfg.stream_to(ctx.capability(), route_provider, std::move(req), fan_sink);
     } else if (cfg.stream) {
-        result = cfg.stream(ctx.capability(), std::move(req), sink);
+        result = cfg.stream(ctx.capability(), std::move(req), fan_sink);
     } else {
         provider::anthropic::AnthropicProvider p;
-        result = p.stream(ctx.capability(), std::move(req), sink);
+        result = p.stream(ctx.capability(), std::move(req), fan_sink);
     }
+    fan.finish();
     // Deregister before anything else runs: the callbacks capture `cancel`,
     // and a late stop must not trip it once the stream has already settled.
     // stop_callback's destructor blocks until a callback already in flight on

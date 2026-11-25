@@ -11,6 +11,7 @@
 
 #include "agentty/provider/ollama/provider.hpp"
 #include "agentty/provider/openai/provider.hpp"
+#include "agentty/provider/parallel_fanout.hpp"
 #include "agentty/provider/selection.hpp"
 #include "agentty/util/logx.hpp"
 
@@ -60,7 +61,8 @@ LongLived long_lived_slot(const Selection& sel) {
     return sel.row ? sel.row->route : RouteSlot::None;
 }
 
-StreamResult dispatch_stream(const maya::unlocked& cap, const ProviderRouter& router,
+namespace {
+StreamResult dispatch_routed(const maya::unlocked& cap, const ProviderRouter& router,
                              const Selection& sel, Request req, EventSink sink) {
     // THE turn fingerprint. One Debug line naming every heterogeneity
     // decision that shaped this request BEFORE any bytes hit the wire:
@@ -123,6 +125,23 @@ StreamResult dispatch_stream(const maya::unlocked& cap, const ProviderRouter& ro
     }
     openai::OpenAIProvider p{ep};
     return p.stream(cap, std::move(req), std::move(sink));
+}
+} // namespace
+
+StreamResult dispatch_stream(const maya::unlocked& cap, const ProviderRouter& router,
+                             const Selection& sel, Request req, EventSink sink) {
+    // Every provider's tool calls pass through ONE adapter that turns a
+    // leaked `multi_tool_use.parallel` call into the calls it holds
+    // (parallel_fanout.hpp), so neither agent loop sees the pseudo tool.
+    // Not for an external ACP agent: it runs its own tools and settles them
+    // by its own ids, so there is nothing to split and holding its calls
+    // would orphan the results it reports.
+    if (sel.kind == Kind::ExternalAcp)
+        return dispatch_routed(cap, router, sel, std::move(req), std::move(sink));
+    ParallelFanout fan{std::move(sink)};
+    auto r = dispatch_routed(cap, router, sel, std::move(req), fan.sink());
+    fan.finish();
+    return r;
 }
 
 StreamResult dispatch_stream(const maya::unlocked& cap, const ProviderRouter& router,

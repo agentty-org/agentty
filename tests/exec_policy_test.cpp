@@ -34,6 +34,7 @@
 #include <nlohmann/json.hpp>
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -285,7 +286,12 @@ TEST_CASE("exec: the request's env reaches a sandboxed child") {
     CHECK_MESSAGE(r.output.find("from-request") != std::string::npos,
                   "child saw: " << r.output);
 #else
+    // cwd pinned: this probe is about env. Run from whatever directory an
+    // earlier test left the process in, a sandbox that can't stat that
+    // directory makes sh print "shell-init: error retrieving current
+    // directory" first, and the exact-match below failed on that noise.
     auto r = e->run(mt::Call{}, {.program = {"/bin/sh", {"-c", "printf '%s|%s' \"$AGT_PROBE\" \"${PATH:+path}\""}},
+                                 .cwd = std::filesystem::temp_directory_path().string(),
                                  .env = {{"AGT_PROBE", "from-request"}},
                                  .budgets = {.idle = 10s, .wall = 20s}});
     CHECK(r.ok());

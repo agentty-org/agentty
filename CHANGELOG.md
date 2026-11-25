@@ -19,6 +19,17 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   covers the main agent, subagents, ACP and `mcp-serve` alike. Subagent
   arguments that don't parse at all now fail as bad arguments (with the
   same hint when they are a wrapper) instead of running with `{}`.
+- **A leaked `multi_tool_use.parallel` call runs as the calls it holds.**
+  When that pseudo tool (or a `tool_uses` list under a real tool's name)
+  reaches agentty, it is split at the stream into one real call per entry,
+  for the main agent and subagents alike, instead of failing as "unknown
+  tool". Ordinary calls are held only until their first argument key
+  arrives. `tool_args.wrapper_leak` / `tool_calls.parallel_fanout` lines in
+  agentty.log say when and with which arguments it happened.
+- **Project agents created mid-session are always seen.** The agent
+  discovery cache keyed on file mtimes only, so an agent file caught while
+  still empty could be skipped for the whole process. It now keys on name,
+  size and mtime.
 
 ### Changed
 - **Built on the latest jaal, with the platform decided in one place.**

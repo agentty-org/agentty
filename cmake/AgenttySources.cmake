@@ -103,6 +103,7 @@ set(AGENTTY_PROVIDER_SOURCES
     # and lives in the provider objlib every test links. main.cpp binds the
     # long-lived + external routes; dispatch just routes on the Selection.
     src/provider/dispatch.cpp
+    src/provider/parallel_fanout.cpp
     # ACP agent launch registry (config loader). Pure nlohmann/json, no acp-cpp
     # dep, and referenced by selection.cpp (is_acp_agent_id) — so it lives in
     # the provider objlib every test links, NOT in agentty_acp_obj.
