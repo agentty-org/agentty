@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.63] - 2026-11-25
+
 ### Fixed
 - **Subagent reads no longer fail as `not found` on paths like
   `main.go}},{`.** OpenAI-family models asked to batch reads sometimes
