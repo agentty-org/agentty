@@ -1063,7 +1063,7 @@ std::string subagent_system_prompt(Io io, const AgentType& type, int max_turns,
     // it has 200 and is cut off mid-investigation.
     base += "\n\nBUDGET: at most " + std::to_string(max_turns) + " turns and "
           + std::to_string(wall.count() / 60) + " minutes. Batch independent "
-            "reads and searches into ONE turn (several tool calls in one "
+            "reads and searches into ONE turn (several separate tool calls in one "
             "message run together). Prefer grep / find_definition / `read` "
             "with a symbol or line range over reading whole files.";
     if (type.read_only)
@@ -1645,11 +1645,20 @@ provider::StreamResult run_one_completion(Thread& thread,
                                 } catch (...) {
                                     ::agentty::util::dbglog("subagent.tool_args.parse",
                                                  partial);
+                                    tc->args = nullptr;
+                                    tc->args_streaming = partial;
                                 }
                             } else {
                                 ::agentty::util::dbglog("subagent.tool_args.mid_string",
                                              partial);
+                                tc->args = nullptr;
+                                tc->args_streaming = partial;
                             }
+                            // Unparsable args must not run as the `{}` seeded
+                            // at Start: that reached the tool as "path is
+                            // required", hiding what the model actually sent.
+                            // Null routes it to the bad-arguments branch below,
+                            // which reads the raw text kept in args_streaming.
                         }
                         // `cmd` → `command` etc. for the subagent's dispatcher
                         // too — it funnels through the same ArgReader, but the
@@ -2341,9 +2350,13 @@ public:
                     if (tc.is_terminal()) continue;
                     if (tc.args.is_null()) {
                         if (stats) { ++stats->tool_calls; ++stats->tool_errors; }
-                        tc.status = ToolUse::Failed{now, now,
-                            "tool args failed to parse \xe2\x80\x94 re-emit the call "
-                            "with complete, valid JSON arguments"};
+                        std::string why = "tool args failed to parse \xe2\x80\x94 re-emit the call "
+                                          "with complete, valid JSON arguments";
+                        if (auto hint = util::raw_call_wrapper_hint(tc.args_streaming);
+                            !hint.empty())
+                            why += ". " + hint;
+                        std::string{}.swap(tc.args_streaming);
+                        tc.status = ToolUse::Failed{now, now, std::move(why)};
                         settle_feed_line(log, tc, "\xe2\x9c\x97", "\xe2\x80\x94 bad arguments");
                         settle_child(&children, tc, false, "bad arguments", 0);
                         live.emit(log);

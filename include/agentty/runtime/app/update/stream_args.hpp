@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include "agentty/tool/spec.hpp"
+#include "agentty/tool/util/call_leak.hpp"
 #include "agentty/tool/util/partial_json.hpp"
 
 namespace agentty::app::detail {
@@ -132,13 +133,18 @@ sniff_any(const std::string& raw,
 // card, the permission prompt and the guard read the canonical key, so the
 // rename still matters here.
 //
-// Returns true when anything was renamed.
+// It also unwraps a leaked single-call `recipient_name`/`parameters` wrapper
+// addressed to this tool (tool/util/call_leak.hpp), so the card, the guard
+// and the executor all see the call the model meant.
+//
+// Returns true when anything was renamed or unwrapped.
 [[nodiscard]] inline bool canonify_tool_args(std::string_view tool_name,
                                              nlohmann::json& args) {
+    const bool unwrapped = agentty::tools::util::unwrap_call_wrapper(tool_name, args);
     if (tool_name == "shell" || tool_name == "diagnostics"
         || tool_name == "test" || tool_name == "process_start")
-        return canonify_alias_keys(args, "command", kCommandAliases);
-    return false;
+        return canonify_alias_keys(args, "command", kCommandAliases) || unwrapped;
+    return unwrapped;
 }
 
 // Attempt to parse the streaming buffer via the partial-JSON closer. Returns

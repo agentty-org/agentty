@@ -189,6 +189,7 @@ set(AGENTTY_TOOL_SOURCES
     src/tool/util/handoff_gate.cpp
     src/tool/util/arg_reader.cpp
     src/tool/util/partial_json.cpp
+    src/tool/util/call_leak.cpp
     src/tool/subagent.cpp
     src/tool/skills.cpp
     src/tool/skills_screen.cpp

@@ -686,6 +686,53 @@ int main() {
               "H: interleaved tool deltas are assembled by call id");
     }
 
+    // ── H2. Leaked parallel-call wrappers (the subagent screenshots). ──────
+    // An OpenAI-family model wrote its {"recipient_name","parameters"} wrapper
+    // into read's arguments. Schema-shaped debris must come back as invalid
+    // args naming the mistake (not a "not found" read of `main.go}},{`);
+    // unparsable wrapper text must not run as `{}`; one wrapped read runs.
+    {
+        auto outs = std::make_shared<std::vector<std::string>>();
+        std::ofstream("h2_probe.txt") << "H2_PROBE_BYTES\n";
+        install_scripted_stream([outs](int turn, const provider::Request& req,
+                                       const provider::EventSink& sink) {
+            if (turn == 0) {
+                emit_tool_call(sink, "l0", "read",
+                               json{{"path", "cmd/server/main.go}},{"},
+                                    {"symbol", "recipient_name"}, {"offset", 1}});
+                sink(Msg{msg::StreamMsg{StreamToolUseStart{ToolCallId{"l1"}, ToolName{"read"}}}});
+                sink(Msg{msg::StreamMsg{StreamToolUseDelta{ToolCallId{"l1"},
+                    R"({"path":"a.go"}},{"recipient_name":"functions.read","parameters":{"path":"b.go"}}]})"}}});
+                sink(Msg{msg::StreamMsg{StreamToolUseEnd{ToolCallId{"l1"}}}});
+                emit_tool_call(sink, "l2", "read",
+                               json{{"recipient_name", "functions.read"},
+                                    {"parameters", {{"path", "h2_probe.txt"}}}});
+                emit_finish(sink, StopReason::ToolUse);
+                return;
+            }
+            for (const auto& m : req.messages)
+                for (const auto& tc : m.tool_calls)
+                    outs->push_back(tc.id.value + "|" + (tc.is_failed() ? "F|" : "D|")
+                                    + std::string{tc.output()});
+            emit_text(sink, "H2_DONE");
+            emit_finish(sink);
+        });
+        (void)run_task("read three files");
+        auto find = [&](std::string_view id) -> std::string {
+            for (const auto& s : *outs) if (s.starts_with(std::string{id} + "|")) return s;
+            return {};
+        };
+        const auto l0 = find("l0"), l1 = find("l1"), l2 = find("l2");
+        check(has(l0, "|F|") && has(l0, "own function call") && !has(l0, "not found"),
+              "H2: wrapper debris in read's path fails with the reason, not 'not found'");
+        check(has(l1, "|F|") && has(l1, "failed to parse") && has(l1, "recipient_name"),
+              "H2: unparsable wrapper text fails as bad args with the hint");
+        check(has(l2, "|D|") && has(l2, "H2_PROBE_BYTES"),
+              "H2: a single wrapped read is unwrapped and runs");
+        std::error_code ec;
+        std::filesystem::remove("h2_probe.txt", ec);
+    }
+
     // ── I. MaxTokens prose is partial, never a clean report. ─────────────
     {
         install_scripted_stream([](int, const provider::Request&,

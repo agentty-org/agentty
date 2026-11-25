@@ -23,6 +23,7 @@
 #include "agentty/tool/policy.hpp"
 #include "agentty/tool/registry.hpp"
 #include "agentty/tool/spec.hpp"
+#include "agentty/tool/util/call_leak.hpp"
 #include "agentty/tool/write_lanes.hpp"
 
 namespace agentty::tool {
@@ -171,9 +172,28 @@ struct DynamicDispatch {
                                                  const tools::CallContext& ctx) noexcept {
         if (!td) return std::unexpected(ToolError::not_found(tools::unknown_tool_error(name)));
         static const nlohmann::json kEmpty = nlohmann::json::object();
-        const nlohmann::json& safe_args = args.is_object() ? args : kEmpty;
+        const nlohmann::json& in_args = args.is_object() ? args : kEmpty;
         ExecResult result;
         try {
+            // LEAKED CALL WRAPPERS (tool/util/call_leak.hpp). The parse sites
+            // unwrap a single wrapped call already; this is the backstop for
+            // every path that skips them (a replayed thread, ACP, mcp-serve).
+            // Then refuse arguments carrying another call's debris: they
+            // would run a nonsense path and come back "not found", which
+            // tells the model nothing. Here because this is the one place
+            // every tool body runs. Native tools only: an MCP server's
+            // argument names mean whatever that server says they mean.
+            nlohmann::json unwrapped;
+            const nlohmann::json* use = &in_args;
+            if (in_args.contains("recipient_name") || in_args.contains("tool_uses")) {
+                unwrapped = in_args;
+                if (tools::util::unwrap_call_wrapper(td->name.value, unwrapped))
+                    use = &unwrapped;
+            }
+            const nlohmann::json& safe_args = *use;
+            if (tools::spec::lookup(td->name.value))
+                if (auto leak = tools::util::call_wrapper_leak(td->name.value, safe_args))
+                    return std::unexpected(ToolError::invalid_args(std::move(*leak)));
             // The capability rides the context across mcp-cpp's callbacks for
             // exactly this call: a per-call copy holds it, and the copy dies
             // when the call returns (CallContext::cap).

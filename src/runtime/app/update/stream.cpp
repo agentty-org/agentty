@@ -1690,6 +1690,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                             tc.status = ToolUse::Failed{
                                 tc.started_at(), now,
                                 std::string{"invalid tool arguments: "} + ex.what()
+                                    + [&] {
+                                          auto h = agentty::tools::util::raw_call_wrapper_hint(
+                                              tc.args_streaming);
+                                          return h.empty() ? h : "\n" + h;
+                                      }()
                                     + "\nraw: " + tc.args_streaming};
                             std::string{}.swap(tc.args_streaming);
                         }

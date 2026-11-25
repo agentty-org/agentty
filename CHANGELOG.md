@@ -4,6 +4,22 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Subagent reads no longer fail as `not found` on paths like
+  `main.go}},{`.** OpenAI-family models asked to batch reads sometimes
+  wrote their internal multi-call wrapper
+  (`{"recipient_name":"functions.read","parameters":{…}}`) inside one
+  call's arguments, and a host that holds output to the tool schema turned
+  it into `path: "main.go}},{"`, `symbol: "recipient_name"`. agentty ran
+  that and the model only heard "not found". Now a single wrapped call to
+  the right tool is unwrapped and runs. Anything else (several packed
+  calls, a call to another tool, wrapper debris in a path or symbol) is
+  refused as invalid arguments that tell the model to send each call
+  separately. The check is in the one place every tool body runs, so it
+  covers the main agent, subagents, ACP and `mcp-serve` alike. Subagent
+  arguments that don't parse at all now fail as bad arguments (with the
+  same hint when they are a wrapper) instead of running with `{}`.
+
 ### Changed
 - **Built on the latest jaal, with the platform decided in one place.**
   jaal now decides which OS, compiler and CPU agentty is being built for

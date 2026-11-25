@@ -237,6 +237,20 @@ int main() {
         check(has(r, "beta"), "read: returns content");
     }
     {
+        // A leaked parallel-call wrapper squeezed into read's schema (the
+        // subagent screenshots): refused as invalid args that say what to
+        // send, never run as a nonexistent path.
+        auto r = run("read", {{"path", file.string() + "}},{"},
+                              {"symbol", "recipient_name"}, {"offset", 1}});
+        check(!r && r.error().kind == tools::ErrorKind::InvalidArgs
+                  && text_of(r).find("own function call") != std::string::npos,
+              "read: wrapper debris in path is refused with the reason");
+        // One wrapped call to read is just that call.
+        auto w = run("read", {{"recipient_name", "functions.read"},
+                              {"parameters", {{"path", file.string()}}}});
+        check(has(w, "beta"), "read: a single recipient_name wrapper is unwrapped");
+    }
+    {
         // #92: an unchanged re-read used to answer ONLY "File unchanged
         // since last read ... refer to that instead" -- a pointer to bytes
         // the model may no longer have (compaction, wire read-collapse,
