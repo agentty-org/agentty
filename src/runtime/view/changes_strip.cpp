@@ -14,6 +14,7 @@ maya::ChangesStrip::Config changes_strip_config(const Model& m) {
     // Ctrl+R review, just without the always-on banner.
     if (!m.d.show_changes_strip) return cfg;
     if (m.d.pending_changes.empty()) return cfg;
+    cfg.compact = !m.d.changes_strip_full;
 
     cfg.changes.reserve(m.d.pending_changes.size());
     for (const auto& c : m.d.pending_changes) {

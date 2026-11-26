@@ -3168,6 +3168,7 @@ store::Settings load_settings_from_disk() {
                     s.entitlements[k] = true;
         }
         s.show_changes_strip = j.value("show_changes_strip", false);
+        s.changes_strip_full = j.value("changes_strip_full", false);
         s.show_reasoning     = j.value("show_reasoning", false);
         s.auto_title         = j.value("auto_title", true);
         s.auto_compact       = j.value("auto_compact", true);
@@ -3631,6 +3632,7 @@ void save_settings_locked(persistence::Held held, const store::Settings& s) {
     }
     // Only persisted when turned ON (default is off), keeping fresh configs clean.
     if (s.show_changes_strip) j["show_changes_strip"] = true;
+    if (s.changes_strip_full) j["changes_strip_full"] = true;
     if (s.show_reasoning)     j["show_reasoning"] = true;
     // Only persisted when turned OFF (default is on).
     if (!s.auto_title)        j["auto_title"] = false;

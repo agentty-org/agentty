@@ -168,12 +168,27 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
         },
 
         [&](ToggleChangesStrip) -> Cmd {
-            m.d.show_changes_strip = !m.d.show_changes_strip;
+            // Three states, one switch: hidden → compact (one line) → full
+            // (the bordered file list) → hidden. Compact comes first because
+            // it is the useful one: the banner says edits are waiting and
+            // how to act; the list is the review pane's job.
+            if (!m.d.show_changes_strip) {
+                m.d.show_changes_strip = true;
+                m.d.changes_strip_full = false;
+            } else if (!m.d.changes_strip_full) {
+                m.d.changes_strip_full = true;
+            } else {
+                m.d.show_changes_strip = false;
+                m.d.changes_strip_full = false;
+            }
             // Persist so it survives restarts.
             m.d.persisted.show_changes_strip = m.d.show_changes_strip;
+            m.d.persisted.changes_strip_full = m.d.changes_strip_full;
             auto save = save_record(m);
-            auto cmd = set_status_toast(m, m.d.show_changes_strip
-                ? "changes strip: shown" : "changes strip: hidden (Ctrl+R still reviews)");
+            auto cmd = set_status_toast(m,
+                !m.d.show_changes_strip ? "changes strip: hidden (Ctrl+R still reviews)"
+                : m.d.changes_strip_full ? "changes strip: full list"
+                                         : "changes strip: compact (one line)");
             return Cmd::batch(std::move(save), std::move(cmd));
         },
 

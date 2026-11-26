@@ -290,11 +290,23 @@ TEST_CASE("exec: the request's env reaches a sandboxed child") {
     // earlier test left the process in, a sandbox that can't stat that
     // directory makes sh print "shell-init: error retrieving current
     // directory" first, and the exact-match below failed on that noise.
+    //
+    // Literally /tmp, not temp_directory_path(): test_main points TMPDIR
+    // at the harness's own scratch dir, which the sandbox doesn't bind --
+    // its /tmp is a fresh tmpfs -- so chdir failed and the child never ran
+    // ("claybin: spawn failed: chdir (errno 2)"). /tmp exists inside it.
     auto r = e->run(mt::Call{}, {.program = {"/bin/sh", {"-c", "printf '%s|%s' \"$AGT_PROBE\" \"${PATH:+path}\""}},
-                                 .cwd = std::filesystem::temp_directory_path().string(),
+                                 .cwd = "/tmp",
                                  .env = {{"AGT_PROBE", "from-request"}},
                                  .budgets = {.idle = 10s, .wall = 20s}});
-    CHECK(r.ok());
+    // Name the outcome on failure: a bare `r.ok()` false said nothing when
+    // this broke (empty output, no reason).
+    std::string why;
+    if (const auto* sf = std::get_if<mt::StartFailed>(&r.outcome)) why = "start failed: " + sf->reason;
+    else if (const auto* ex = std::get_if<mt::Exited>(&r.outcome)) why = "exit " + std::to_string(ex->code);
+    else if (const auto* sg = std::get_if<mt::Signalled>(&r.outcome)) why = "signal " + std::to_string(sg->signal);
+    else why = "timed out / cancelled";
+    CHECK_MESSAGE(r.ok(), why);
     // Layered on the parent's env, not instead of it: PATH survives.
     CHECK_MESSAGE(r.output == "from-request|path", "child saw: " << r.output);
 #endif

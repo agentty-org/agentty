@@ -83,10 +83,10 @@ std::vector<Item> general(const Model& m) {
     {
         Item i;
         i.primary   = "Changes strip";
-        i.secondary = m.d.show_changes_strip
-            ? "shown · persistent \"N changes\" banner after edits"
-            : "hidden · ^R still reviews";
-        i.hint      = "Enter: toggle";
+        i.secondary = !m.d.show_changes_strip ? "hidden · ^R still reviews"
+                    : m.d.changes_strip_full  ? "full · every changed file listed"
+                                              : "compact · one line: files, +/−, keys";
+        i.hint      = "Enter: hidden → compact → full";
         i.action    = Action::ToggleChangesStrip;
         out.push_back(std::move(i));
     }
