@@ -10,6 +10,7 @@
 #include "agentty/runtime/login.hpp"
 #include "agentty/domain/ui_live.hpp"   // thinking pref: gates the reasoning reveal
 #include "agentty/runtime/view/helpers.hpp"  // ui::reasoning_shown
+#include "agentty/runtime/view/changes_strip.hpp"  // ui::changes_strip_window
 #include "agentty/runtime/panel/common.hpp"
 #include "agentty/runtime/panel/top.hpp"
 #include "agentty/runtime/panel/nav.hpp"
@@ -1564,6 +1565,25 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
             // Todo) so a modal always keeps its own key surface; the rest of
             // the arming condition lives in strip_chords_armed().
             if (chords_armed && active_panel == OK::None) {
+                // Scroll the full strip's file list. Alt-held so plain ↑↓
+                // stay the composer's (history), and only with nothing
+                // queued: Alt+↑ is the queue editor then, and the queue is
+                // the thing being typed into.
+                if (m.d.changes_strip_full && ev.mods.alt && !ev.mods.ctrl
+                    && m.ui.composer.queued.empty()) {
+                    if (auto* sk = std::get_if<SpecialKey>(&ev.key)) {
+                        const int page = ui::changes_strip_window(m);
+                        switch (*sk) {
+                            case SpecialKey::Up:       return Msg{ChangesStripScroll{-1}};
+                            case SpecialKey::Down:     return Msg{ChangesStripScroll{+1}};
+                            case SpecialKey::PageUp:   return Msg{ChangesStripScroll{-page}};
+                            case SpecialKey::PageDown: return Msg{ChangesStripScroll{+page}};
+                            case SpecialKey::Home:     return Msg{ChangesStripScroll{-1, true}};
+                            case SpecialKey::End:      return Msg{ChangesStripScroll{+1, true}};
+                            default: break;
+                        }
+                    }
+                }
                 if (auto* ck = std::get_if<CharKey>(&ev.key); ck && !ev.mods.alt) {
                     char32_t c = ck->codepoint;
                     // Legacy terminals deliver Ctrl+letter as the raw control

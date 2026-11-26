@@ -255,6 +255,7 @@ struct AgenttyApp {
         // (count + totals is what the compact line paints; a file's own
         // +/- moves the full list too).
         mix(m.d.show_changes_strip ? (m.d.changes_strip_full ? 2ULL : 1ULL) : 0ULL);
+        mix(static_cast<std::uint64_t>(m.d.changes_strip_scroll));
         mix(m.d.pending_changes.size());
         for (const auto& c : m.d.pending_changes) {
             mix(static_cast<std::uint64_t>(c.added));

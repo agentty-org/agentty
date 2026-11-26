@@ -83,17 +83,42 @@ TEST_CASE("changes strip: compact is one line with the count, totals and keys") 
     CHECK(narrow.find("26 files") != std::string::npos);
 }
 
-TEST_CASE("changes strip: the full list caps at 8 files and points at review") {
+TEST_CASE("changes strip: the full list is a scrollable window with a scrollbar") {
     Model m = with_edits(26);
+    m.ui.term_rows = 40;                         // window = 8 rows
     m.d.show_changes_strip = true;
     m.d.changes_strip_full = true;
-    const auto cfg = ui::changes_strip_config(m);
-    REQUIRE(!cfg.compact);
-    const std::string out = maya::render_to_string(maya::ChangesStrip{cfg}.build(), 120);
+    m.env.cwd = "internal";                      // shown relative to it
+    auto render = [&](const Model& mm) {
+        return maya::render_to_string(maya::ChangesStrip{ui::changes_strip_config(mm)}.build(), 100);
+    };
+    std::string out = render(m);
     INFO(out);
     if (std::getenv("AGT_SHOW")) std::fputs(out.c_str(), stdout);
+    CHECK(out.find("Changes (26 files)  +260") != std::string::npos);   // true totals
     CHECK(out.find("file_7.go") != std::string::npos);
     CHECK(out.find("file_8.go") == std::string::npos);
-    CHECK(out.find("18 more") != std::string::npos);
-    CHECK(rows_of(out) < 16);
+    CHECK(out.find("1\xe2\x80\x93" "8 of 26") != std::string::npos);    // where you are
+    CHECK(out.find("server/file_0.go") != std::string::npos);
+    CHECK(out.find("internal/server") == std::string::npos);            // relative
+    CHECK(out.find("Alt+") != std::string::npos);                       // how to move
+
+    // A page down, then to the end, through the real reducer.
+    auto step = [](Model mm, Msg msg) {
+        auto [next, cmd] = app::update(std::move(mm), std::move(msg));
+        (void)cmd;
+        return std::move(next);
+    };
+    m = step(std::move(m), Msg{ChangesStripScroll{+8}});
+    CHECK(m.d.changes_strip_scroll == 8);
+    out = render(m);
+    CHECK(out.find("file_8.go") != std::string::npos);
+    CHECK(out.find("9\xe2\x80\x93" "16 of 26") != std::string::npos);
+    m = step(std::move(m), Msg{ChangesStripScroll{+1, true}});
+    CHECK(m.d.changes_strip_scroll == 18);       // clamped at n - window
+    out = render(m);
+    if (std::getenv("AGT_SHOW")) std::fputs(out.c_str(), stdout);
+    CHECK(out.find("file_25.go") != std::string::npos);
+    m = step(std::move(m), Msg{ChangesStripScroll{-99}});
+    CHECK(m.d.changes_strip_scroll == 0);
 }

@@ -9,9 +9,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
   "pending changes" box one row per file, so 26 files pushed the whole
   transcript off the screen. The setting (Ctrl+K → Changes strip) now cycles
   hidden → compact → full. Compact is a single line:
-  `✎ 26 files  +1048 −966   ^R review  ^A accept  ^X reject`. Full lists
-  at most 8 files, then "… N more", with the totals for all files in its
-  header. The list of every file is still in the review pane (Ctrl+R).
+  `✎ 26 files  +1048 −966   ^R review  ^A accept  ^X reject`. Full shows
+  a window of at most 8 files with a scrollbar, and Alt+↑↓, Alt+PgUp/PgDn
+  and Alt+Home/End scroll through all of them. A footer shows where you are
+  ("↑↓ 9–16 of 26"). Paths are relative to the workspace and shortened in
+  the middle so the file name stays visible, and the +/− counts line up in
+  one column. The header always shows the totals for every file.
 
 ## [0.9.63] - 2026-11-25
 

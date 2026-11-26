@@ -221,6 +221,7 @@ Cmd submit_message(Model& m) {
         m.s.status_until = m.now
                          + std::chrono::seconds{3};
         m.d.pending_changes.clear();
+        m.d.changes_strip_scroll = 0;
         // The changes are gone either way — an armed X two-press guard from
         // the changes strip must not survive into the next turn and fire on
         // some unrelated later keypress.

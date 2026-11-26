@@ -81,6 +81,7 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             writes.push_back(persist(fc));
         }
         m.d.pending_changes.clear();
+        m.d.changes_strip_scroll = 0;
         m.d.reject_all_armed = false;   // review resolved → guard consumed
         ascend(m);   // decision committed above; Esc lands where you came from
         auto cmd = set_status_toast(m,
@@ -223,6 +224,7 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             for (auto& fc : m.d.pending_changes)
                 for (auto& h : fc.hunks) { h.status = Hunk::Status::Accepted; ++hunks; }
             m.d.pending_changes.clear();
+        m.d.changes_strip_scroll = 0;
             m.d.reject_all_armed = false;   // any resolution consumes the guard
             ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,
@@ -279,6 +281,7 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
                 ++files;
             }
             m.d.pending_changes.clear();
+        m.d.changes_strip_scroll = 0;
             m.d.reject_all_armed = false;   // executed → guard consumed
             ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,

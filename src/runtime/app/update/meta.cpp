@@ -26,6 +26,7 @@
 #include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
+#include "agentty/runtime/view/changes_strip.hpp"   // ui::changes_strip_window
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/tool/tool_plan.hpp"  // CycleToolLoading (#98)
@@ -190,6 +191,17 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
                 : m.d.changes_strip_full ? "changes strip: full list"
                                          : "changes strip: compact (one line)");
             return Cmd::batch(std::move(save), std::move(cmd));
+        },
+
+        [&](ChangesStripScroll e) -> Cmd {
+            const int n   = static_cast<int>(m.d.pending_changes.size());
+            const int win = ui::changes_strip_window(m);
+            const int max = std::max(0, n - win);
+            int y = std::clamp(m.d.changes_strip_scroll, 0, max);
+            if (e.to_end) y = e.delta < 0 ? 0 : max;
+            else          y = std::clamp(y + e.delta, 0, max);
+            m.d.changes_strip_scroll = y;
+            return Cmd::none();
         },
 
         [&](ToggleAutoTitle) -> Cmd {
