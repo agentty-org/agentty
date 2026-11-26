@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.64] - 2026-11-26
+
 ### Changed
 - **The changes strip has a compact form.** A long editing session made the
   "pending changes" box one row per file, so 26 files pushed the whole
