@@ -1021,6 +1021,17 @@ Cmd models_update(Model& m, msg::ModelsMsg pm) {
                 if (mru_ref_is_live(m, cand, settings)) { target = cand; break; }
             }
             if (target.empty()) return Cmd::none();
+            // Pressed from the open model picker: the switch is the pick, so
+            // close it the way an ordinary ModelsSelect does — outright, not
+            // ascend (the switch persists, so the live effort edit needs no
+            // separate save). Slot-assign mode doesn't offer ^Tab (its footer
+            // omits it): swapping the ACTIVE model there would be a surprise.
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
+                if (c->assign_slot) return Cmd::none();
+                m.d.fused_rows.clear();
+                m.ui.effort_dirty = false;
+                m.ui.panel.close<pn::Models>();
+            }
             return switch_to_model_ref(m, target, /*record=*/false);
         },
         [&](ModelsSelect) -> Cmd {

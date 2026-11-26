@@ -21,6 +21,7 @@
 #include "agtest_fx.hpp"
 
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/app/update/internal.hpp"  // app::detail::fused_rows_for_model
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/provider_rows.hpp"
@@ -1574,6 +1575,40 @@ TEST_CASE("^Tab skips a dead MRU entry") {
     apply_fx(c1);
     // Must skip the dead xai entry and land on claude-c.
     CHECK(m1.d.model_id.value == "claude-c");
+}
+
+// The model picker's footer advertises "^Tab prev". The picker is an
+// exclusive overlay, so the global ^Tab never reached it — the chord was
+// swallowed. Pressed in the picker it now swaps AND closes, like Enter.
+TEST_CASE("^Tab in the open model picker swaps and closes it") {
+    using namespace agentty::msg;
+    install_stub_deps();
+    g_settings = store::Settings{};
+    g_settings.provider_keys["anthropic"] = "sk-a";
+    provider::select(::agentty::IoAccess::grant(), provider::parse_selection("anthropic"));
+
+    Model m = seeded_model();
+    m.d.model_id = ModelId{"claude-a"};
+    m.d.available_models = {mi("claude-a", "anthropic"), mi("claude-b", "anthropic")};
+    m.d.recent_models = {ModelRef{"anthropic", "claude-a"},
+                         ModelRef{"anthropic", "claude-b"}};
+
+    auto [mo, co] = app::update(std::move(m), Msg{OpenModels{}});
+    apply_fx(co);
+    REQUIRE(mo.ui.panel.get<pn::Models>() != nullptr);
+
+    // The key route: ^Tab inside the picker must produce a Msg (it was
+    // swallowed before); folding that Msg must swap and close.
+    maya::KeyEvent ctrl_tab{};
+    ctrl_tab.key = maya::SpecialKey::Tab;
+    ctrl_tab.mods.ctrl = true;
+    auto routed = app::on_key(mo, ctrl_tab);
+    REQUIRE(routed.has_value());
+
+    auto [m1, c1] = app::update(std::move(mo), std::move(*routed));
+    apply_fx(c1);
+    CHECK(m1.d.model_id.value == "claude-b");
+    CHECK(m1.ui.panel.get<pn::Models>() == nullptr, "picker closed");
 }
 
 // The provider picker's ^D (Mac-reachable stand-in for forward-Delete)

@@ -4,6 +4,17 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The welcome screen fits narrow terminals.** Below about 50 columns the
+  pixel logo was clipped to "agen" and the key hints lost their labels
+  (`^K  ·  ^J  ·  ^T`), which told a new user nothing. The logo now falls
+  back to a one-line `» A G E N T T Y` when it doesn't fit the width, and
+  hints always keep their labels; if they would wrap past four lines, the
+  least important ones at the end are left out instead.
+- **Ctrl+Tab works in the model picker.** Its footer offered `^Tab prev`,
+  but the open picker swallowed the key. It now swaps to the previous model
+  and closes the picker, like Enter.
+
 ## [0.9.64] - 2026-11-26
 
 ### Changed

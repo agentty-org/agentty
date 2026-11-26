@@ -518,6 +518,10 @@ std::optional<Msg> on_fused_picker(const KeyEvent& ev) {
             // ←/→ cycle the highlighted model's reasoning-effort tier.
             if (*sk == SpecialKey::Left)  return Msg{ModelsCycleEffort{-1}};
             if (*sk == SpecialKey::Right) return Msg{ModelsCycleEffort{+1}};
+            // ^Tab — the footer advertises "prev"; without this arm the
+            // exclusive overlay swallowed the chord and it did nothing here.
+            if (*sk == SpecialKey::Tab && e.mods.ctrl)
+                return Msg{SwitchToPreviousModel{}};
             return std::nullopt;
         }
         const auto v = nav::char_view(e);
