@@ -63,7 +63,9 @@ struct RenameThread { ThreadId id; std::string title; std::int64_t renamed_at = 
 using rename_thread = maya::pure_fx<RenameThread, "rename_thread">;
 
 /// Write a file to disk. The diff-review pane's accept/reject path.
-struct WriteFile { std::string path; std::string contents; };
+/// `remove`: the change CREATED this file and all of it was undone, so undo
+/// means the file is gone again -- not left behind empty.
+struct WriteFile { std::string path; std::string contents; bool remove = false; };
 using write_file = maya::pure_fx<WriteFile, "write_file">;
 
 /// Persist the settings record.

@@ -37,6 +37,13 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
         for (const auto& hk : fc.hunks)
             if (hk.status == Hunk::Status::Rejected) { any_reject = true; break; }
         if (!any_reject) return Cmd::none();     // nothing to revert; disk is correct
+        // A file the agent CREATED (no original) with every change undone:
+        // undo means it is gone again, not an empty file left behind.
+        bool all_reject = !fc.hunks.empty();
+        for (const auto& hk : fc.hunks)
+            if (hk.status != Hunk::Status::Rejected) { all_reject = false; break; }
+        if (all_reject && fc.original_contents.empty() && !fc.new_contents.empty())
+            return Cmd(WriteFile{fc.path, {}, /*remove=*/true});
         return Cmd(WriteFile{fc.path, diff::apply_accepted(fc)});
     };
     // Advance the cursor to the next still-PENDING hunk in the current file so
@@ -287,7 +294,10 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             std::vector<Cmd> writes;
             for (auto& fc : m.d.pending_changes) {
                 for (auto& h : fc.hunks) { h.status = Hunk::Status::Rejected; ++hunks; }
-                writes.push_back(Cmd(WriteFile{fc.path, fc.original_contents}));
+                // Back to how it was: the original bytes, or -- for a file the
+                // agent created -- no file at all.
+                const bool created = fc.original_contents.empty() && !fc.new_contents.empty();
+                writes.push_back(Cmd(WriteFile{fc.path, fc.original_contents, /*remove=*/created}));
                 ++files;
             }
             m.d.pending_changes.clear();

@@ -4,6 +4,12 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Undo removes files the agent created.** ^X (undo all) and undoing every
+  change of a new file in the review pane wrote its "original" back -- which
+  for a new file is nothing -- so it stayed behind as an empty file. It is
+  now deleted, so undo really puts the tree back the way it was.
+
 ## [0.9.65] - 2026-11-27
 
 ### Changed

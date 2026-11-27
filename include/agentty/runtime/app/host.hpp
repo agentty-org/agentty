@@ -28,6 +28,7 @@
 #include "agentty/provider/chatgpt/codex_oauth.hpp"   // SaveCodexCredentials
 #include "agentty/auth/vault.hpp"
 #include "agentty/runtime/app/deps.hpp"
+#include "agentty/runtime/app/file_fx.hpp"          // WriteFile's target
 #include "agentty/runtime/app/program.hpp"
 #include "agentty/runtime/store_fx.hpp"
 #include "agentty/tool/subagent.hpp"            // PublishSubagent's target
@@ -220,13 +221,9 @@ struct Host : maya::terminal_host<P> {
     void handle(SaveSettings e) { deps(io_).save_settings(e.settings); }
 
     void handle(WriteFile e) {
-        // Best-effort, exactly as the Deps seam was: diff-review reject
-        // rewrites the file with only the accepted hunks kept. An error is
-        // surfaced by the next read (the pane shows the file unchanged), and
-        // throwing out of an effect would take the loop down for something
-        // the user can recover from.
-        (void)tools::util::write_file(std::filesystem::path{e.path},
-                                      e.contents);
+        // Diff-review keep / undo: rewrite the file with only the kept
+        // changes, or remove a created file that was undone whole.
+        apply_file_effect(e);
     }
 
 private:
