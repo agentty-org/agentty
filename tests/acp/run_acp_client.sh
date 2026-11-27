@@ -19,7 +19,11 @@ PORT=$(cat "$S/port")
 
 export AGENTTY_HOME="$S/home"
 export AGENTTY_NO_PREWARM=1
-mkdir -p "$AGENTTY_HOME"
+# A scratch HOME too: spawning a sandboxed MCP server creates its runner caches
+# (~/.npm, ~/.bun, ...). Keep python's user site so a --user jsonschema stays.
+PYTHONUSERBASE=$(python3 -m site --user-base 2>/dev/null) && export PYTHONUSERBASE
+export HOME="$S/user"
+mkdir -p "$AGENTTY_HOME" "$HOME"
 printf '{"provider":"127.0.0.1:%s","model_id":"o4-mini"}\n' "$PORT" > "$AGENTTY_HOME/settings.json"
 unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY AGENTTY_THREADS_DIR
 
