@@ -4,6 +4,8 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.65] - 2026-11-27
+
 ### Changed
 - **The changes strip is one row, shown or hidden.** Ctrl+K → Changes strip
   now toggles show / hide; the bordered file list and its scrolling are
