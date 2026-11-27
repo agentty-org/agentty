@@ -14,6 +14,7 @@
 //
 // Run: build the `custom_host_key_prompt_test` target, execute. Exit 0 = pass.
 
+#include "agentty/domain/catalog.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
@@ -466,6 +467,118 @@ TEST_CASE("an empty provider key is not a credential, Anthropic included") {
     s.provider_keys["anthropic"] = "sk-ant-real";
     CHECK(agentty::provider::auth_source(*p, s, view)
           == agentty::provider::AuthSource::Saved);
+}
+
+TEST_CASE("a replaced key stops being reported as rejected") {
+    // Reported: set up a provider, paste a WRONG key -> the provider overview
+    // says the host rejected it, which is right. Paste a GOOD key over it ->
+    // turns stream fine, but the overview still says "key rejected" and the
+    // accounts list still says "rejected by the host", forever.
+    //
+    // "The last fetch failed" is carried by exactly two fields --
+    // s.models_error for the ACTIVE provider and ProviderCatalog::error for
+    // any -- and both are rewritten ONLY by a completed fetch. Replacing the
+    // key took the !adopt path (provider_ready_without_switch), which fetches
+    // nothing, so the verdict earned by the REJECTED key outlived it.
+    fs::path tmp_xdg = fs::temp_directory_path() /
+        ("agentty-stalekey-" + std::to_string(::getpid()));
+    std::error_code ec;
+    fs::create_directories(tmp_xdg, ec);
+    ::setenv("AGENTTY_HOME", tmp_xdg.c_str(), 1);
+    agentty::provider::set_custom_auth_header(::agentty::IoAccess::grant(), "");
+
+    auto rejected = [](std::string_view id) {
+        agentty::ProviderCatalog c;
+        c.provider_id  = std::string{id};
+        c.label        = std::string{id};
+        c.state        = agentty::ProviderCatalog::State::Failed;
+        c.error        = "HTTP 401: invalid api key";
+        c.loaded_at_ms = 12345;
+        return c;
+    };
+
+    // ── Replacing the ACTIVE provider's rejected key ──
+    {
+        agentty::store::Settings s;
+        s.provider_keys["anthropic"] = "sk-ant-existing";  // so: not first run
+        s.provider_keys["groq"]      = "gsk_wrong";
+        install_stub_deps(s);
+
+        agentty::Model m;
+        m.d.persisted = s;
+        m.d.auth.loaded = true;
+        m.d.selection = agentty::provider::parse_selection("groq");
+        m.d.model_id  = agentty::ModelId{"llama-3.3-70b"};
+        m.d.provider_catalogs.push_back(rejected("groq"));
+        m.d.provider_catalogs.push_back(rejected("anthropic"));
+        m.s.models_error = "HTTP 401: invalid api key";
+
+        login::ApiKeyInput api;
+        api.provider       = "groq";
+        api.provider_label = "Groq";
+        api.key_input      = "gsk_good";
+        m.ui.login = std::move(api);
+
+        auto [m2, cmd] = ::agentty::app::detail::step(
+            ::agentty::app::detail::login_update, std::move(m),
+            msg::LoginMsg{agentty::LoginSubmit{}});
+
+        check(m2.d.persisted.provider_keys["groq"] == "gsk_good",
+              "the new key is on disk");
+        check(m2.s.models_error.empty(),
+              "the active provider's rejected-key verdict is dropped");
+        check(m2.d.provider_catalogs[0].error.empty(),
+              "and so is the catalog error the picker paints from");
+        check(m2.d.provider_catalogs[0].state
+                  == agentty::ProviderCatalog::State::Idle,
+              "the catalog no longer reads as failed");
+        check(m2.d.provider_catalogs[0].loaded_at_ms == 0,
+              "the failed fetch's freshness stamp goes too, so ^/ refetches");
+        check(m2.d.provider_catalogs[1].error == "HTTP 401: invalid api key",
+              "a DIFFERENT provider's verdict is not touched");
+        check(m2.s.models_loading,
+              "a refetch is in flight: the verdict is re-earned, not guessed");
+        (void)cmd;
+    }
+
+    // ── Replacing a NON-active provider's rejected key ──
+    {
+        agentty::store::Settings s;
+        s.provider_keys["anthropic"] = "sk-ant-existing";
+        s.provider_keys["groq"]      = "gsk_wrong";
+        install_stub_deps(s);
+
+        agentty::Model m;
+        m.d.persisted = s;
+        m.d.auth.loaded = true;
+        m.d.selection = agentty::provider::parse_selection("anthropic");
+        m.d.model_id  = agentty::ModelId{"claude-opus-4-5"};
+        m.d.provider_catalogs.push_back(rejected("groq"));
+        m.d.provider_catalogs.push_back(rejected("anthropic"));
+        // Anthropic's own verdict, NOT Groq's — must survive a Groq re-key.
+        m.s.models_error = "HTTP 500: upstream is down";
+
+        login::ApiKeyInput api;
+        api.provider       = "groq";
+        api.provider_label = "Groq";
+        api.key_input      = "gsk_good";
+        m.ui.login = std::move(api);
+
+        auto [m2, cmd] = ::agentty::app::detail::step(
+            ::agentty::app::detail::login_update, std::move(m),
+            msg::LoginMsg{agentty::LoginSubmit{}});
+
+        check(m2.d.provider_catalogs[0].error.empty(),
+              "Groq's stale verdict is dropped even while another provider is active");
+        check(m2.s.models_error == "HTTP 500: upstream is down",
+              "but the ACTIVE provider's own error is none of our business");
+        check(!m2.s.models_loading,
+              "and the active provider is not marked as refetching");
+        (void)cmd;
+    }
+
+    std::error_code rm_ec;
+    fs::remove_all(tmp_xdg, rm_ec);
 }
 
 TEST_CASE("custom host key prompt transitions") {

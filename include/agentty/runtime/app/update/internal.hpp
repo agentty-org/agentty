@@ -254,6 +254,22 @@ commit_provider_switch(Model& m, std::string_view spec,
 provider_ready_without_switch(Model& m, std::string_view label,
                               std::string_view detail = {});
 
+// A NEW CREDENTIAL INVALIDATES THE VERDICT THE PREVIOUS ONE EARNED.
+//
+// "The last model fetch failed" is carried by exactly two fields —
+// Model::s.models_error (the ACTIVE provider) and ProviderCatalog::error (any
+// provider) — and both are rewritten ONLY by a fresh ModelsLoaded /
+// FusedCatalogLoaded. Nothing on the credential path touched them, so pasting a
+// working key over a rejected one left "key rejected · Enter to fix" in the
+// provider picker and "rejected by the host" in the accounts list standing next
+// to a credential that already works; the next turn streams fine and the badge
+// never moves, because no fetch ever runs to correct it.
+//
+// Drop the stale verdict here — do NOT invent a fresh one. The caller batches in
+// the refetch that re-earns it (see account_select for the same pattern), so a
+// key that is STILL wrong keeps showing an error, freshly measured.
+void invalidate_auth_verdict(Model& m, std::string_view provider);
+
 // True when NOTHING is configured yet — no credential for any provider, in
 // settings or env. On that path a sign-in SHOULD switch: there is no active
 // backend to preserve, and leaving a first-run user unconfigured after they

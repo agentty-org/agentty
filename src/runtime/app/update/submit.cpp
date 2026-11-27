@@ -1082,6 +1082,22 @@ Cmd provider_ready_without_switch(Model& m, std::string_view label,
     return set_status_toast(m, std::move(text), std::chrono::seconds{6});
 }
 
+void invalidate_auth_verdict(Model& m, std::string_view provider) {
+    // See internal.hpp. The two carriers of "the last fetch failed" are only
+    // ever written by a completed fetch, so a credential swap that does not
+    // fetch leaves the old verdict standing forever. Clearing here + refetching
+    // in the caller is the same pair account_select uses for an account swap.
+    for (auto& c : m.d.provider_catalogs) {
+        if (c.provider_id != provider) continue;
+        c.error.clear();
+        c.state = ProviderCatalog::State::Idle;
+        // Also stale for the on-open freshness check, so ^/ can't serve the
+        // failed fetch's answer under the new key either.
+        c.loaded_at_ms = 0;
+    }
+    if (provider == active_provider_id(m)) m.s.models_error.clear();
+}
+
 Cmd set_status_toast(Model& m, std::string text,
                                 std::chrono::seconds ttl) {
     m.s.status = std::move(text);

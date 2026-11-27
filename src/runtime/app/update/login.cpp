@@ -1106,10 +1106,26 @@ Cmd login_submit(Model& m) {
             // it, the model -- a switch has to pick one for the new
             // provider. Only adopt when nothing was configured yet, where
             // there is no session to protect.
-            if (!adopt)
+            if (!adopt) {
+                // The credential just changed, so the picker's verdict about
+                // the PREVIOUS one is no longer a fact. Without this pair the
+                // row kept saying "key rejected · Enter to fix" (and the
+                // accounts list "rejected by the host") while the next turn
+                // streamed happily on the new key — the error is only ever
+                // rewritten by a completed fetch, and this path never ran one.
+                invalidate_auth_verdict(m, provider);
+                // Same split as account_select: only the ACTIVE provider's
+                // fetch fills d.available_models (what the composer reads);
+                // any other goes through the fused per-provider path.
+                const bool is_active = provider == active_provider_id(m);
+                Cmd refetch = is_active ? cmd::fetch_models(m)
+                                        : cmd::fetch_models_for(provider);
+                if (is_active) m.s.models_loading = true;
                 return Cmd::batch(
                     std::move(add), save_record(m),
-                    provider_ready_without_switch(m, provider_label));
+                    provider_ready_without_switch(m, provider_label),
+                    std::move(refetch));
+            }
             m.d.persisted.provider = provider;
             return Cmd::batch(
                 std::move(add), save_record(m),
