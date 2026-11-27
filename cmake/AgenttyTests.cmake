@@ -708,14 +708,15 @@ add_executable(persistence_race_test_narrow EXCLUDE_FROM_ALL
     src/domain/web_search_config.cpp src/domain/sandbox_provenance.cpp)
 target_include_directories(persistence_race_test_narrow PRIVATE include)
 # The runtime's headers: user_root.cpp uses maya::guarded for its warn-once set
-# (the concurrency banlist forbids a raw std::mutex). Header-only here, so the
-# usage requirements of maya::app are enough and nothing is linked: this target
-# exists to keep the TSan lane at ~11 TUs instead of 375.
+# (the concurrency banlist forbids a raw std::mutex).
 target_include_directories(persistence_race_test_narrow PRIVATE
     $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 # maya::runtime for SharedFile's cross-process lock (platform file_lock).
+# maya::maya for exec::parallel_for (thread_log.cpp), defined in libmaya; the
+# race lane builds libmaya already for sandbox_config_race_test.
 target_link_libraries(persistence_race_test_narrow PRIVATE
-    nlohmann_json::nlohmann_json simdjson::simdjson Threads::Threads maya::runtime claybin)
+    nlohmann_json::nlohmann_json simdjson::simdjson Threads::Threads
+    maya::maya maya::runtime claybin)
 target_compile_definitions(persistence_race_test_narrow PRIVATE
     AGENTTY_MCP=0)
 add_test(NAME persistence_race_test_narrow COMMAND persistence_race_test_narrow)
@@ -956,6 +957,9 @@ agentty_test(host_escape_test MODE raw)
 add_executable(host_escape_test EXCLUDE_FROM_ALL
     tests/host_escape_test.cpp src/runtime/view/host_escape.cpp)
 target_include_directories(host_escape_test PRIVATE include)
+# maya/core/target.hpp (MAYA_OS_*) and the jaal header it reads: headers only.
+target_include_directories(host_escape_test PRIVATE
+    $<TARGET_PROPERTY:maya::app,INTERFACE_INCLUDE_DIRECTORIES>)
 add_test(NAME host_escape_test COMMAND host_escape_test)
 set_tests_properties(host_escape_test PROPERTIES TIMEOUT 30)
 
