@@ -367,13 +367,15 @@ Element diff_review(const Model& m) {
 
     std::vector<Element> rows;
 
-    // Room for the focused change: the terminal less this pane's chrome
-    // (border+padding 4, summary 2, tabs 2, path 2, a row per change, blank +
-    // progress + keys 4). Never under 6, so a short terminal still shows code.
-    // The render context carries the size; outside a frame, assume 40 rows.
+    // Room for the focused change: Settings → Appearance → Panel height,
+    // the ceiling every panel uses, and never more than the terminal less
+    // this pane's chrome (border+padding 4, summary 2, tabs 2, path 2, a row
+    // per change, blank + progress + keys 4). Never under 6, so a short
+    // terminal still shows code. Outside a frame, assume 40 rows.
     const int term_rows = maya::have_render_context() ? maya::available_height() : 40;
     const int chrome = 4 + 2 + 2 + 2 + static_cast<int>(fc.hunks.size()) + 4 + 2;
-    const int body_rows = std::clamp(term_rows - chrome, 6, 60);
+    const int body_rows = std::max(6, std::min(term_rows - chrome,
+                                               ui_prefs::viewport_rows(m.d.ui().density)));
 
     // ── What this is, in one line, and the size of it ──
     {

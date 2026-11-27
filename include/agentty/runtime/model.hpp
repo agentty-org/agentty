@@ -408,11 +408,6 @@ struct Model {
         // default — edits still queue in pending_changes (Ctrl+R opens the
         // pane), just without the always-on banner.
         bool                             show_changes_strip = false;
-        // Shown strip in full (bordered file list) vs one compact line.
-        bool                             changes_strip_full = false;
-        // First row of the full strip's file window (Alt+↑↓ / Alt+PgUp/PgDn).
-        // Clamped by the view; reset when the changeset is cleared.
-        int                              changes_strip_scroll = 0;
         // Show the model's reasoning/thinking block in the transcript AND ask
         // Anthropic for visible thinking (interleaved-thinking beta). Loaded
         // from Settings at startup; toggled live via the palette (Ctrl+K →

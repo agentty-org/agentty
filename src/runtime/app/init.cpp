@@ -309,7 +309,6 @@ std::pair<Model, Cmd> init(const LaunchFlags& flags) {
     tools::subagent::set_model(io, m.d.model_id.value);
     // Review UI: whether the persistent changes strip renders after edits.
     m.d.show_changes_strip = settings.show_changes_strip;
-    m.d.changes_strip_full = settings.changes_strip_full;
     m.d.show_reasoning     = settings.show_reasoning;
     // Rehydrate persisted "always allow" tool grants (Zed's always_allow
     // rules). PermissionApproveAlways appends to this list; loading it here

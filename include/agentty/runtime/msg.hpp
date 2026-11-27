@@ -1397,9 +1397,6 @@ struct CycleProfile {};
 // Settings owns it now, and a setting reachable from one place only is a
 // setting that moves when that place does.
 struct ToggleChangesStrip {};
-// Scroll the full changes strip's file list: rows (±1) or pages
-// (±max_rows) with Alt+↑↓ / Alt+PgUp/PgDn, Alt+Home/End to the ends.
-struct ChangesStripScroll { int delta = 0; bool to_end = false; };
 // Name new chats with the utility model after their first reply.
 struct ToggleAutoTitle {};
 // Compact the context on its own when it nears the window.
@@ -1701,7 +1698,7 @@ using SandboxMsg = std::variant<
     SandboxEditList, SandboxListKey, SandboxListPaste, SandboxListClose>;
 
 using MetaMsg = std::variant<
-    CompactContext, CycleProfile, ToggleChangesStrip, ChangesStripScroll, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, ToggleKeepRetrying, ToggleQuestions, CycleToolLoading,
+    CompactContext, CycleProfile, ToggleChangesStrip, ToggleAutoTitle, ToggleAutoCompact, ToggleCommitAttribution, ToggleKeepRetrying, ToggleQuestions, CycleToolLoading,
     RestoreCheckpoint, CheckpointRestored,
     ToggleRetrievedExpanded,
     TerminalFocus,

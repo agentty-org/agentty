@@ -309,10 +309,6 @@ struct Settings {
     // quietly; turn it on (Ctrl+K → "Changes strip") for the always-on review
     // banner. Ctrl+R / "Review changes" opens the review pane either way.
     bool                 show_changes_strip = false;
-    // With the strip shown: the bordered list of every file (true) or one
-    // line "✎ N files +A −R  ^R ^A ^X" (false, the default). The list is
-    // the review pane's job; the banner only has to say edits are waiting.
-    bool                 changes_strip_full = false;
     // Show the model's reasoning/thinking. When on: the transcript renders a
     // reasoning block (live thought stream, then a one-line "Thought for N
     // tokens" summary), AND Anthropic requests VISIBLE thinking (the

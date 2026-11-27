@@ -26,7 +26,6 @@
 #include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
-#include "agentty/runtime/view/changes_strip.hpp"   // ui::changes_strip_window
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/tool/tool_plan.hpp"  // CycleToolLoading (#98)
@@ -169,39 +168,15 @@ Cmd meta_update(Model& m, msg::MetaMsg mm) {
         },
 
         [&](ToggleChangesStrip) -> Cmd {
-            // Three states, one switch: hidden → compact (one line) → full
-            // (the bordered file list) → hidden. Compact comes first because
-            // it is the useful one: the banner says edits are waiting and
-            // how to act; the list is the review pane's job.
-            if (!m.d.show_changes_strip) {
-                m.d.show_changes_strip = true;
-                m.d.changes_strip_full = false;
-            } else if (!m.d.changes_strip_full) {
-                m.d.changes_strip_full = true;
-            } else {
-                m.d.show_changes_strip = false;
-                m.d.changes_strip_full = false;
-            }
+            // Shown or hidden. Shown is one row; the list is ^R's job.
+            m.d.show_changes_strip = !m.d.show_changes_strip;
             // Persist so it survives restarts.
             m.d.persisted.show_changes_strip = m.d.show_changes_strip;
-            m.d.persisted.changes_strip_full = m.d.changes_strip_full;
             auto save = save_record(m);
             auto cmd = set_status_toast(m,
-                !m.d.show_changes_strip ? "changes strip: hidden (Ctrl+R still reviews)"
-                : m.d.changes_strip_full ? "changes strip: full list"
-                                         : "changes strip: compact (one line)");
+                m.d.show_changes_strip ? "changes strip: shown"
+                                       : "changes strip: hidden (Ctrl+R still reviews)");
             return Cmd::batch(std::move(save), std::move(cmd));
-        },
-
-        [&](ChangesStripScroll e) -> Cmd {
-            const int n   = static_cast<int>(m.d.pending_changes.size());
-            const int win = ui::changes_strip_window(m);
-            const int max = std::max(0, n - win);
-            int y = std::clamp(m.d.changes_strip_scroll, 0, max);
-            if (e.to_end) y = e.delta < 0 ? 0 : max;
-            else          y = std::clamp(y + e.delta, 0, max);
-            m.d.changes_strip_scroll = y;
-            return Cmd::none();
         },
 
         [&](ToggleAutoTitle) -> Cmd {

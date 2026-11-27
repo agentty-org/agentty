@@ -251,11 +251,8 @@ struct AgenttyApp {
         mix(static_cast<std::uint64_t>(m.d.effort));
         mix_str(m.d.model_id.value);
         mix(m.d.pending_permission ? 1ULL : 0ULL);
-        // The changes strip: its mode, and the pending edits it summarises
-        // (count + totals is what the compact line paints; a file's own
-        // +/- moves the full list too).
-        mix(m.d.show_changes_strip ? (m.d.changes_strip_full ? 2ULL : 1ULL) : 0ULL);
-        mix(static_cast<std::uint64_t>(m.d.changes_strip_scroll));
+        // The changes strip: shown or not, and the count + totals it paints.
+        mix(m.d.show_changes_strip ? 1ULL : 0ULL);
         mix(m.d.pending_changes.size());
         for (const auto& c : m.d.pending_changes) {
             mix(static_cast<std::uint64_t>(c.added));

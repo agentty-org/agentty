@@ -81,7 +81,6 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             writes.push_back(persist(fc));
         }
         m.d.pending_changes.clear();
-        m.d.changes_strip_scroll = 0;
         m.d.reject_all_armed = false;   // review resolved → guard consumed
         ascend(m);   // decision committed above; Esc lands where you came from
         auto cmd = set_status_toast(m,
@@ -224,7 +223,6 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             for (auto& fc : m.d.pending_changes)
                 for (auto& h : fc.hunks) { h.status = Hunk::Status::Accepted; ++hunks; }
             m.d.pending_changes.clear();
-        m.d.changes_strip_scroll = 0;
             m.d.reject_all_armed = false;   // any resolution consumes the guard
             ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,
@@ -235,6 +233,15 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
         [&](RejectAllChanges rm) -> Cmd {
             if (m.d.pending_changes.empty()) {
                 auto cmd = set_status_toast(m, "no pending changes to reject");
+                return cmd;
+            }
+            // Mid-turn the agent is still editing these files: reverting them
+            // under it would fight the next write. Say so instead of arming
+            // (a silent no-op is what read as "the key got eaten"). ^A stays
+            // live: keeping what is already written is harmless.
+            if (m.s.active()) {
+                auto cmd = set_status_toast(m,
+                    "the agent is still editing \xc2\xb7 ^X works when the turn ends (Esc stops it)");
                 return cmd;
             }
             // TWO-PRESS guard for the key chords. Inside the pane (^X) the
@@ -281,7 +288,6 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
                 ++files;
             }
             m.d.pending_changes.clear();
-        m.d.changes_strip_scroll = 0;
             m.d.reject_all_armed = false;   // executed → guard consumed
             ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,

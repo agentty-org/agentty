@@ -4,7 +4,27 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The changes strip is one row, shown or hidden.** Ctrl+K → Changes strip
+  now toggles show / hide; the bordered file list and its scrolling are
+  gone, since the review pane (Ctrl+R) is where you read the files. The row
+  uses the same style as the composer's hints, and its keys use the review
+  pane's words: `✎ 12 files changed · +65 −73 · ^R review · ^A keep all ·
+  ^X undo all`. The review pane's height now follows Settings → Appearance
+  → Panel height instead of filling the screen.
+
 ### Fixed
+- **^A / ^X from the changes strip work during a turn.** The strip showed
+  them, but while the agent was working they fell through to the composer,
+  so they seemed to do nothing. ^A now keeps the changes at any time; ^X
+  mid-turn says it will work once the turn ends instead of reverting files
+  the agent is still writing. They also work with the todo panel open.
+- **"Waiting for the first token" no longer shows while a model reasons.**
+  Only answer text ended the wait, so thinking models (shown or hidden
+  reasoning, on Anthropic, OpenAI-compatible, Responses, Ollama and ACP)
+  sat on "Streaming · waiting for the first token" through their whole
+  reasoning pass. Any reasoning now ends it, and the chip says Thinking
+  until the answer starts.
 - **The welcome screen fits narrow terminals.** Below about 50 columns the
   pixel logo was clipped to "agen" and the key hints lost their labels
   (`^K  ·  ^J  ·  ^T`), which told a new user nothing. The logo now falls

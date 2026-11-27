@@ -22,6 +22,7 @@
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/subscribe.hpp"
 #include "agentty/runtime/panel/appearance.hpp"
+#include "agentty/runtime/panel/top.hpp"
 #include "agentty/runtime/panel/settings/categories.hpp"
 #include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/app/deps.hpp"
@@ -167,6 +168,58 @@ TEST_CASE("routing: the changes-strip chords follow the live model") {
     m.d.show_changes_strip = false;
     CHECK_MESSAGE(!is_reject(route(m, ctrl_x)),
                   "hiding the strip disarms ^X on the very next key");
+}
+
+// The strip shows ^A/^X whenever it is up, so the keys must never fall
+// through to the composer (where ^A is line-start and ^X nothing): the
+// "something eats them" report was a turn running in the background.
+TEST_CASE("routing: advertised strip chords are never eaten") {
+    install_stub_deps();
+    Model m;
+    m.d.show_changes_strip = true;
+    FileChange fc;
+    fc.path = "src/main.cpp";
+    m.d.pending_changes.push_back(fc);
+    auto key = [](char32_t c, bool ctrl) {
+        maya::KeyEvent k{};
+        k.key = maya::CharKey{c};
+        k.mods.ctrl = ctrl;
+        return k;
+    };
+    auto is = [](const std::optional<Msg>& msg, auto tag) {
+        const auto* dr = msg ? std::get_if<msg::DiffReviewMsg>(&*msg) : nullptr;
+        return dr && std::holds_alternative<decltype(tag)>(*dr);
+    };
+    auto check_all = [&](const char* where) {
+        CAPTURE(where);
+        CHECK(is(route(m, key(U'a', true)), AcceptAllChanges{}));
+        CHECK(is(route(m, key(U'x', true)), RejectAllChanges{}));
+        CHECK(is(route(m, key(0x01, false)), AcceptAllChanges{}));   // legacy ^A byte
+        CHECK(is(route(m, key(0x18, false)), RejectAllChanges{}));   // legacy ^X byte
+        CHECK(is(route(m, key(U'r', true)), OpenDiffReview{}));
+    };
+
+    check_all("idle");
+    m.ui.composer.text = "I think the";
+    check_all("with a draft in the composer");
+
+    m.s.phase = phase::Streaming{};
+    check_all("mid-turn");
+
+    // Mid-turn ^X explains instead of silently arming or reverting files the
+    // agent is still writing; ^A keeps them.
+    {
+        auto [after, cmd] = app::update(std::move(m), Msg{msg::DiffReviewMsg{RejectAllChanges{}}});
+        (void)cmd;
+        CHECK(!after.d.reject_all_armed);
+        CHECK(after.d.pending_changes.size() == 1);
+        m = std::move(after);
+    }
+
+    m.s.phase = phase::Idle{};
+    m = app::update(std::move(m), Msg{OpenTodoModal{}}).first;
+    REQUIRE(ui::panel::top(m) == ui::panel::Kind::Todo);
+    check_all("with the ambient Todo panel open");
 }
 
 // ^/ is the byte 0x1F, the same as ^_. Plain terminals send the raw byte;
