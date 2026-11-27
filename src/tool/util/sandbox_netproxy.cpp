@@ -428,15 +428,13 @@ namespace {
 // socket opts out itself (SO_NOSIGPIPE). The flags are applied right after
 // creation; the fork-without-exec window that leaves is closed by claybin's
 // close_inherited_fds in every guest anyway.
-void sock_prep(int fd) {
 #if MAYA_OS_APPLE
+void sock_prep(int fd) {
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     int one = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#else
-    (void)fd;
-#endif
 }
+#endif
 int sock_stream(int family) {
 #if MAYA_OS_APPLE
     const int s = ::socket(family, SOCK_STREAM, 0);
