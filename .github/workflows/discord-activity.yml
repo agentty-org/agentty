@@ -9,10 +9,10 @@ name: discord-activity
 #
 # Channels (each a repo secret holding the Discord webhook URL, WITHOUT the
 # trailing /github — the workflow appends it):
-#   DISCORD_WH_COMMITS   -> #commits        (push)
-#   DISCORD_WH_ACTIVITY  -> #activity       (issues, PRs, reviews, discussions)
-#   DISCORD_WH_RELEASES  -> #releases-feed  (release, create/delete tags)
-#   DISCORD_WH_STARS     -> #stars          (star, fork)
+#   DISCORD_WH_COMMITS   -> #github    (push)
+#   DISCORD_WH_ACTIVITY  -> #github    (issues, PRs, reviews, discussions)
+#   DISCORD_WH_RELEASES  -> #releases  (release, create/delete tags)
+#   DISCORD_WH_STARS     -> #github    (star, fork)
 #
 # Any secret left unset -> that event is skipped silently. The prettier release
 # embed in #announcements is handled separately by discord-release.yml.
@@ -23,11 +23,18 @@ on:
     types: [opened, edited, closed, reopened, labeled, assigned]
   issue_comment:
     types: [created]
-  pull_request:
+  # pull_request_target (not pull_request) so PRs from forks are forwarded too:
+  # it runs in the base repo's context with secrets, and this job never checks
+  # out or executes PR code — it only relays the event payload to Discord.
+  pull_request_target:
     types: [opened, closed, reopened, ready_for_review, converted_to_draft]
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
+    types: [created]
+  discussion:
+    types: [created, answered, closed, reopened]
+  discussion_comment:
     types: [created]
   release:
     types: [published, released]
@@ -74,19 +81,13 @@ jobs:
             echo "Refusing: payload repo '$PAYLOAD_REPO' != '$ALLOWED_REPO'."; exit 0
           fi
 
-          # PRs opened from a fork are the only untrusted-actor path on a public
-          # repo. GitHub already withholds secrets from fork-PR runs, but be
-          # explicit: if the PR's head repo isn't ours, don't forward anything.
-          HEAD_REPO=$(printf '%s' "$PAYLOAD" | jq -r '.pull_request.head.repo.full_name // empty')
-          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$ALLOWED_REPO" ]; then
-            echo "Skipping PR from fork '$HEAD_REPO'."; exit 0
-          fi
-
           # Map the event type to a destination webhook.
+          # Fork PRs arrive via pull_request_target; Discord's adapter knows the
+          # payload as a plain pull_request event.
           case "$EVENT" in
             push)
               WH="$WH_COMMITS" ;;
-            issues|issue_comment|pull_request|pull_request_review|pull_request_review_comment)
+            issues|issue_comment|pull_request|pull_request_target|pull_request_review|pull_request_review_comment|discussion|discussion_comment)
               WH="$WH_ACTIVITY" ;;
             release|create|delete)
               WH="$WH_RELEASES" ;;
@@ -115,6 +116,7 @@ jobs:
           # adapter expects the webhook event name `star` — translate it.
           GH_EVENT="$EVENT"
           [ "$EVENT" = "watch" ] && GH_EVENT="star"
+          [ "$EVENT" = "pull_request_target" ] && GH_EVENT="pull_request"
           code=$(printf '%s' "$PAYLOAD" | curl -s -o /tmp/resp -w '%{http_code}' \
             -X POST "$WH/github" \
             -H "Content-Type: application/json" \
