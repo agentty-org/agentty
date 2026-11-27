@@ -5,7 +5,7 @@ Bug reports, fixes and well-scoped features are welcome.
 - **Bugs:** open an issue with `agentty --version`, your OS, and for screen
   bugs your terminal and `$TERM`.
 - **Questions:** use [Discussions](https://github.com/agentty-org/agentty/discussions)
-  or the [Discord](https://discord.gg/qhb9AZ8f3c).
+  or the [Discord](https://discord.gg/ZEM3CTAJH7).
 - **Code:** clone, then build with `scripts/build.sh` (debug preset, tests on,
   `-j12`, configure fetches the submodules). It locks `build/`, so parallel
   builds of one tree wait their turn instead of corrupting it. Plain CMake

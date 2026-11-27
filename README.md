@@ -8,7 +8,7 @@ One small native binary. Use the Claude, ChatGPT or Copilot plan you already pay
   <a href="https://github.com/agentty-org/agentty/stargazers"><img src="https://img.shields.io/github/stars/agentty-org/agentty?style=flat-square&color=f1c40f&labelColor=555555" alt="Stars" /></a>
   <a href="https://github.com/agentty-org/agentty/releases"><img src="https://img.shields.io/github/downloads/agentty-org/agentty/total?style=flat-square&color=brightgreen" alt="Downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
-  <a href="https://discord.gg/qhb9AZ8f3c"><img src="https://img.shields.io/badge/Discord-join%20chat-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/ZEM3CTAJH7"><img src="https://img.shields.io/badge/Discord-join%20chat-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://web.libera.chat/#agentty"><img src="https://img.shields.io/badge/IRC-%23agentty-0b2b8a?style=flat-square" alt="IRC" /></a>
 </p>
 
@@ -271,7 +271,7 @@ Editing the code? `cmake --preset debug` rebuilds in about 1.7 s after a one-lin
 
 ## Community
 
-[**Discord**](https://discord.gg/qhb9AZ8f3c) (with a helper bot that answers using agentty itself),
+[**Discord**](https://discord.gg/ZEM3CTAJH7) (with a helper bot that answers using agentty itself),
 or [**#agentty on Libera.Chat**](https://web.libera.chat/#agentty) / `#agentty:libera.chat` on Matrix.
 
 ## License

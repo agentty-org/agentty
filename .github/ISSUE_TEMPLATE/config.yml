@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/agentty-org/agentty/discussions
     about: Ask in Discussions instead of opening an issue.
   - name: Discord
-    url: https://discord.gg/qhb9AZ8f3c
+    url: https://discord.gg/ZEM3CTAJH7
     about: Chat, and an AI helper bot that answers agentty questions.
   - name: Security issue
     url: https://github.com/agentty-org/agentty/security/advisories/new
