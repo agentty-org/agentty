@@ -11,11 +11,13 @@ name: discord-activity
 # trailing /github — the workflow appends it):
 #   DISCORD_WH_COMMITS   -> #github    (push)
 #   DISCORD_WH_ACTIVITY  -> #github    (issues, PRs, reviews, discussions)
-#   DISCORD_WH_RELEASES  -> #releases  (release, create/delete tags)
+#   DISCORD_WH_RELEASES  -> #github    (release, create/delete tags & branches)
 #   DISCORD_WH_STARS     -> #github    (star, fork)
 #
-# Any secret left unset -> that event is skipped silently. The prettier release
-# embed in #announcements is handled separately by discord-release.yml.
+# #releases itself only gets one clean card per release, posted by the
+# community bot (it polls GitHub), so a release reads as "it dropped".
+#
+# Any secret left unset -> that event is skipped silently.
 
 on:
   push:
