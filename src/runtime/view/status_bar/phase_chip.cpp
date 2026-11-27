@@ -166,7 +166,12 @@ maya::PhaseChip::Config phase_chip_config(const Model& m) {
         if (const auto* a = active_ctx(m.s.phase);
             a && a->first_delta_at.time_since_epoch().count() == 0) {
             const auto& sel = m.d.selection;
-            if (a->gateway_buffered)
+            if (a->first_reasoning_at.time_since_epoch().count() != 0)
+                // Reasoning is arriving (shown or hidden), no answer yet.
+                // Same for every provider: they all route reasoning through
+                // StreamThinkingDelta / StreamReasoning.
+                verb = "Thinking";
+            else if (a->gateway_buffered)
                 // A proxy is holding the output; it will land in one burst.
                 // Lives HERE, not in the toast band, so the context gauge and
                 // the rest of the row stay visible while it waits.

@@ -1373,6 +1373,7 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // after every tool call.
                 a->live_delta_bytes       = 0;
                 a->first_delta_at         = {};
+                a->first_reasoning_at     = {};
                 a->rate_last_sample_at    = {};
                 a->rate_last_sample_bytes = 0;
                 a->gateway_buffered       = false;
@@ -1901,6 +1902,13 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
                 // connect→think→stall sequence gets a fresh ladder.
                 a->last_event_at = m.now;
                 a->transient_retries = 0;
+                // The model has started: it is reasoning. Every transport
+                // routes reasoning here (Anthropic, chat-completions fields and
+                // <think> tags, Responses, Ollama, ACP), shown or hidden, so
+                // the status bar stops saying "waiting for the first token".
+                if (a->first_reasoning_at.time_since_epoch().count() == 0)
+                    a->first_reasoning_at = m.now;
+                a->gateway_buffered = false;   // output is reaching us
             }
             // Captured for replay only — never rendered, and there's no
             // assistant placeholder to attach to during compaction.
@@ -1965,8 +1973,11 @@ Cmd stream_update(Model& m, msg::StreamMsg sm) {
             // encrypted_content on the in-flight assistant message so the
             // next request replays it in input[] (preserves chain-of-thought
             // across tool rounds under store:false). Wire-only, never shown.
-            if (auto* a = active_ctx(m.s.phase))
+            if (auto* a = active_ctx(m.s.phase)) {
                 a->last_event_at = m.now;
+                if (a->first_reasoning_at.time_since_epoch().count() == 0)
+                    a->first_reasoning_at = m.now;
+            }
             if (m.s.compacting) return Cmd::none();
             if (e.encrypted.empty()) return Cmd::none();
             if (!m.d.current.messages.empty()

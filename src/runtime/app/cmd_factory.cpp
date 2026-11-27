@@ -877,6 +877,7 @@ Cmd launch_stream(Model& m) {
         a->started                = now;
         a->last_event_at          = now;
         a->first_delta_at         = {};
+        a->first_reasoning_at     = {};
         a->live_delta_bytes       = 0;
         a->rate_last_sample_at    = {};
         a->rate_last_sample_bytes = 0;

@@ -174,6 +174,14 @@ struct Active {
     // a single sub-turn's deltas.
     std::size_t live_delta_bytes = 0;
     std::chrono::steady_clock::time_point first_delta_at{};
+    // When the model first showed it was REASONING this sub-turn: any
+    // thinking delta (text, signature, block start, redacted block, or the
+    // empty liveness delta a hidden-reasoning transport sends) or an opaque
+    // reasoning item. Kept apart from first_delta_at so the tok/s rate and
+    // the mid-stream retry class stay about answer bytes; the status bar
+    // reads either one as "the model has started" -- a reasoning model is
+    // not waiting for its first token while it thinks.
+    std::chrono::steady_clock::time_point first_reasoning_at{};
     std::chrono::steady_clock::time_point rate_last_sample_at{};
     std::size_t rate_last_sample_bytes = 0;
 

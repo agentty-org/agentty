@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "agtest.hpp"
 
@@ -17,6 +19,7 @@
 #include <maya/print.hpp>
 
 #include "agentty/runtime/app/update.hpp"
+#include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/view/status_bar/phase_chip.hpp"
@@ -204,6 +207,58 @@ TEST_CASE("stream note: a waiting retry says why, which try, and drains") {
     a->retry_why.clear();
     a->first_delta_at = now;
     CHECK(A::ui::stream_note_config(m).text.empty());
+}
+
+// Reasoning IS the model answering. A thinking model streamed its reasoning
+// for seconds while the bar said "Streaming · waiting for the first token",
+// because only answer text / tool JSON stamped the first-output clock. Every
+// transport's reasoning shape, shown and hidden, must end the wait:
+//   Anthropic   thinking block start, thinking_delta, signature_delta
+//   chat/Ollama reasoning text, or an EMPTY delta when reasoning is hidden
+//   Responses   an opaque reasoning item (StreamReasoning)
+//   ACP         agent thought chunks (text)
+TEST_CASE("stream note: reasoning ends 'waiting for the first token' on every provider") {
+    using namespace std::chrono_literals;
+    namespace D = agentty::app::detail;
+    const std::vector<std::pair<const char*, A::msg::StreamMsg>> shapes = {
+        {"block start",    A::msg::StreamMsg{A::StreamThinkingDelta{"", "", true}}},
+        {"reasoning text", A::msg::StreamMsg{A::StreamThinkingDelta{"Let me look", ""}}},
+        {"signature only", A::msg::StreamMsg{A::StreamThinkingDelta{"", "sig"}}},
+        {"hidden (empty)", A::msg::StreamMsg{A::StreamThinkingDelta{"", ""}}},
+        {"opaque item",    A::msg::StreamMsg{A::StreamReasoning{"enc", "openai"}}},
+    };
+    for (const auto& [name, ev] : shapes) {
+        CAPTURE(name);
+        A::Model m;
+        m.s.phase = A::phase::Streaming{};
+        A::Message asst; asst.role = A::Role::Assistant;
+        m.d.current.messages.push_back(std::move(asst));
+        auto* a = A::active_ctx(m.s.phase);
+        REQUIRE(a != nullptr);
+        a->started = maya::anim_now() - 6s;   // long enough to wonder
+
+        // Nothing yet: the wait is real and the note says so.
+        CHECK(A::ui::stream_note_config(m).text == "waiting for the first token");
+        CHECK(A::ui::phase_chip_config(m).verb == "Streaming");
+
+        m.now = agentty::app::kTestEpoch;
+        auto [next, cmd] = D::step(D::stream_update, std::move(m), A::msg::StreamMsg{ev});
+        (void)cmd;
+        CHECK(A::ui::stream_note_config(next).text.empty());
+        CHECK(A::ui::phase_chip_config(next).verb == "Thinking");
+
+        // Reasoning does not feed the answer-rate clock or the retry class.
+        const auto* na = A::active_ctx(next.s.phase);
+        REQUIRE(na != nullptr);
+        CHECK(na->first_delta_at.time_since_epoch().count() == 0);
+
+        // The answer arrives: back to Streaming.
+        auto [after, c2] = D::step(D::stream_update, std::move(next),
+                                   A::msg::StreamMsg{A::StreamTextDelta{"Done."}});
+        (void)c2;
+        CHECK(A::ui::phase_chip_config(after).verb == "Streaming");
+        CHECK(A::ui::stream_note_config(after).text.empty());
+    }
 }
 
 TEST_CASE("status bar: a toast keeps the context and cache gauges") {

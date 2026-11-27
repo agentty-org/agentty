@@ -64,7 +64,10 @@ maya::StreamNote::Config stream_note_config(const Model& m) {
         cfg.tone = warn;
         return cfg;
     }
-    if (!m.s.is_streaming() || a->first_delta_at.time_since_epoch().count() != 0)
+    // Reasoning counts as the model answering: a thinking model is not
+    // "waiting for the first token" while its reasoning streams.
+    if (!m.s.is_streaming() || a->first_delta_at.time_since_epoch().count() != 0
+        || a->first_reasoning_at.time_since_epoch().count() != 0)
         return cfg;
     if (a->gateway_buffered) {
         cfg.text = "a proxy is holding the reply \xc2\xb7 it lands in one burst";

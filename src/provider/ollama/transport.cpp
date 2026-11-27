@@ -594,12 +594,12 @@ bool rescue_json_protocol(StreamCtx& ctx) {
 }
 
 // Surface swallowed reasoning text: visible StreamThinkingDelta when the
-// user shows reasoning, otherwise a liveness-only StreamHeartbeat (no hidden
-// capture — see StreamCtx::show_reasoning).
+// user shows reasoning, otherwise an EMPTY one -- liveness that also tells
+// the status bar the model is reasoning (a bare StreamHeartbeat reads as a
+// ping, and the bar would keep saying "waiting for the first token").
 void emit_reasoning(StreamCtx& ctx, const std::string& text) {
     if (text.empty()) return;
-    if (ctx.show_reasoning) ctx.sink(StreamThinkingDelta{text, {}});
-    else                    ctx.sink(StreamHeartbeat{});
+    ctx.sink(StreamThinkingDelta{ctx.show_reasoning ? text : std::string{}, {}});
 }
 
 // Final safety net — NEVER let an assistant turn render blank (Aider's

@@ -988,15 +988,9 @@ void handle_delta(StreamCtx& ctx, const json& delta) {
                 // with reasoning hidden (show_reasoning=false) and no visible
                 // prose yet, dropping these silently starves the stall
                 // watchdog. Emit the reasoning when shown; otherwise ALWAYS
-                // pulse a heartbeat for the part, empty text or not.
-                if (ctx.show_reasoning) {
-                    if (!chunk.empty())
-                        ctx.sink(StreamThinkingDelta{chunk, {}});
-                    else
-                        ctx.sink(StreamHeartbeat{});
-                } else {
-                    ctx.sink(StreamHeartbeat{});
-                }
+                // pulse an EMPTY thinking delta for the part -- liveness that
+                // also tells the status bar the model is reasoning.
+                ctx.sink(StreamThinkingDelta{ctx.show_reasoning ? chunk : std::string{}, {}});
             } else if (type == "text") {
                 const std::string t = part.value("text", "");
                 if (!t.empty()) {
