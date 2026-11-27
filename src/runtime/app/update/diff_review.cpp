@@ -240,6 +240,9 @@ Cmd diff_review_update(Model& m, msg::DiffReviewMsg dm) {
             // (a silent no-op is what read as "the key got eaten"). ^A stays
             // live: keeping what is already written is harmless.
             if (m.s.active()) {
+                // And drop any arm from before the turn: one ^X after it
+                // ends must ask again, never revert on a stale first press.
+                m.d.reject_all_armed = false;
                 auto cmd = set_status_toast(m,
                     "the agent is still editing \xc2\xb7 ^X works when the turn ends (Esc stops it)");
                 return cmd;

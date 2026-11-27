@@ -7,18 +7,29 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 ### Changed
 - **The changes strip is one row, shown or hidden.** Ctrl+K → Changes strip
   now toggles show / hide; the bordered file list and its scrolling are
-  gone, since the review pane (Ctrl+R) is where you read the files. The row
-  uses the same style as the composer's hints, and its keys use the review
-  pane's words: `✎ 12 files changed · +65 −73 · ^R review · ^A keep all ·
-  ^X undo all`. The review pane's height now follows Settings → Appearance
-  → Panel height instead of filling the screen.
+  gone, since the review pane (Ctrl+R) is where you read the files. It is a
+  one-row box above the composer: what changed on the left, the keys flush
+  right in the review pane's words — `✎ 12 files changed · +65 −73` …
+  `^R review   ^A keep all   ^X undo all`. On a narrow terminal the keys
+  drop off from the right and the row never wraps.
+- **The review pane never outgrows the screen.** Its code follows Settings →
+  Appearance → Panel height, and the list of changes in a file is a window
+  too (a third of that setting), so a file with 40 separate edits no longer
+  makes a 40-row list. On a short terminal the list shrinks first, then the
+  code; the keys stay on screen.
 
 ### Fixed
-- **^A / ^X from the changes strip work during a turn.** The strip showed
-  them, but while the agent was working they fell through to the composer,
-  so they seemed to do nothing. ^A now keeps the changes at any time; ^X
-  mid-turn says it will work once the turn ends instead of reverting files
-  the agent is still writing. They also work with the todo panel open.
+- **^R / ^A / ^X from the changes strip always land.** They were decided late,
+  after any open prompt, so a permission request or question above the strip
+  swallowed them, and ^R was handled in a different place again. All three
+  are now decided first, by one decoder that understands every way a
+  terminal sends them (raw control bytes, kitty, xterm modifyOtherKeys, Esc
+  just before). ^A keeps the changes at any time; ^X mid-turn says it will
+  work once the turn ends instead of reverting files the agent is still
+  writing, and a ^X armed before a turn never fires after it.
+- **^A under a permission prompt no longer grants "always allow".** On
+  kitty-protocol terminals Ctrl+A arrives as `a` + Ctrl, and the prompt only
+  looked at the letter. Prompts now answer to plain letters only.
 - **"Waiting for the first token" no longer shows while a model reasons.**
   Only answer text ended the wait, so thinking models (shown or hidden
   reasoning, on Anthropic, OpenAI-compatible, Responses, Ollama and ACP)

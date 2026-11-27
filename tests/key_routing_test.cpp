@@ -196,7 +196,15 @@ TEST_CASE("routing: advertised strip chords are never eaten") {
         CHECK(is(route(m, key(U'x', true)), RejectAllChanges{}));
         CHECK(is(route(m, key(0x01, false)), AcceptAllChanges{}));   // legacy ^A byte
         CHECK(is(route(m, key(0x18, false)), RejectAllChanges{}));   // legacy ^X byte
+        CHECK(is(route(m, key(0x12, false)), OpenDiffReview{}));     // legacy ^R byte
+        CHECK(is(route(m, key(U'A', true)), AcceptAllChanges{}));    // kitty ctrl+shift
         CHECK(is(route(m, key(U'r', true)), OpenDiffReview{}));
+        auto esc_x = key(U'x', true);                                // Esc folded in
+        esc_x.mods.alt = true;
+        CHECK(is(route(m, esc_x), RejectAllChanges{}));
+        auto super_x = key(U'x', true);                              // the WM's
+        super_x.mods.super_ = true;
+        CHECK(!is(route(m, super_x), RejectAllChanges{}));
     };
 
     check_all("idle");
@@ -220,6 +228,43 @@ TEST_CASE("routing: advertised strip chords are never eaten") {
     m = app::update(std::move(m), Msg{OpenTodoModal{}}).first;
     REQUIRE(ui::panel::top(m) == ui::panel::Kind::Todo);
     check_all("with the ambient Todo panel open");
+}
+
+// A permission prompt sits above the strip mid-turn. Its letters are plain
+// y / n / a; kitty's Ctrl+A ('a' + ctrl) used to match 'a' and grant
+// "always allow" instead of keeping the changes.
+TEST_CASE("routing: ^A under a permission prompt keeps changes, never grants") {
+    install_stub_deps();
+    Model m;
+    m.d.show_changes_strip = true;
+    FileChange fc;
+    fc.path = "src/main.cpp";
+    m.d.pending_changes.push_back(fc);
+    m.s.phase = phase::AwaitingPermission{};
+    m.d.pending_permission = PendingPermission{};
+    REQUIRE(ui::panel::top(m) == ui::panel::Kind::Permission);
+
+    maya::KeyEvent ctrl_a{};
+    ctrl_a.key = maya::CharKey{U'a'};
+    ctrl_a.mods.ctrl = true;
+    const auto msg = route(m, ctrl_a);
+    REQUIRE(msg.has_value());
+    const auto* dr = std::get_if<msg::DiffReviewMsg>(&*msg);
+    CHECK((dr && std::holds_alternative<AcceptAllChanges>(*dr)));
+
+    // With the strip hidden, ^A still must not grant anything.
+    m.d.show_changes_strip = false;
+    const auto hidden = route(m, ctrl_a);
+    const auto* tm = hidden ? std::get_if<msg::ToolMsg>(&*hidden) : nullptr;
+    CHECK(!(tm && std::holds_alternative<PermissionApproveAlways>(*tm)));
+
+    // The plain letter still answers.
+    maya::KeyEvent a{};
+    a.key = maya::CharKey{U'a'};
+    const auto plain = route(m, a);
+    REQUIRE(plain.has_value());
+    const auto* ptm = std::get_if<msg::ToolMsg>(&*plain);
+    CHECK((ptm && std::holds_alternative<PermissionApproveAlways>(*ptm)));
 }
 
 // ^/ is the byte 0x1F, the same as ^_. Plain terminals send the raw byte;

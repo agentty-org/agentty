@@ -372,10 +372,33 @@ Element diff_review(const Model& m) {
     // this pane's chrome (border+padding 4, summary 2, tabs 2, path 2, a row
     // per change, blank + progress + keys 4). Never under 6, so a short
     // terminal still shows code. Outside a frame, assume 40 rows.
+    // The list of changes in this file is a WINDOW too: one row per change
+    // made a 40-change file a 60-row pane no matter the Panel height. A
+    // third of the setting (compact 3 · normal 4 · roomy 6 · tall 9) rows of
+    // changes, kept around the focused one, with "↑/↓ N more" markers.
+    //
+    // Row budget, counted from the rendered pane: 17 fixed rows (border and
+    // padding 4, summary + gap 2, tabs + gap 2, path + rule 2, the code's
+    // blank-before / ↑ / ↓ / blank-after 4, progress + gap + keys 3), then
+    // the change list, then the code. On a short terminal the list gives way
+    // first (down to the focused change alone), then the code (down to 3).
+    const int density_rows = ui_prefs::viewport_rows(m.d.ui().density);
+    const int nhunks = static_cast<int>(fc.hunks.size());
     const int term_rows = maya::have_render_context() ? maya::available_height() : 40;
-    const int chrome = 4 + 2 + 2 + 2 + static_cast<int>(fc.hunks.size()) + 4 + 2;
-    const int body_rows = std::max(6, std::min(term_rows - chrome,
-                                               ui_prefs::viewport_rows(m.d.ui().density)));
+    constexpr int kFixed = 17;
+    const int avail = term_rows - kFixed;
+    auto top_of = [&](int win) {
+        return std::clamp(cursor->hunk_index - win / 2, 0, std::max(0, nhunks - win));
+    };
+    auto marks_of = [&](int win) {
+        const int t = top_of(win);
+        return (t > 0 ? 1 : 0) + (t + win < nhunks ? 1 : 0);
+    };
+    int hunk_win = std::min(nhunks, std::max(3, density_rows / 3));
+    while (hunk_win > 1 && avail - hunk_win - marks_of(hunk_win) < 6) --hunk_win;
+    const int hunk_top = top_of(hunk_win);
+    const int body_rows = std::max(3, std::min(density_rows,
+                                               avail - hunk_win - marks_of(hunk_win)));
 
     // ── What this is, in one line, and the size of it ──
     {
@@ -469,7 +492,10 @@ Element diff_review(const Model& m) {
     const int new_n = line_count(fc.new_contents);
     bool focused_overflows = false;
 
-    for (int hi = 0; hi < static_cast<int>(fc.hunks.size()); ++hi) {
+    if (hunk_top > 0)
+        rows.push_back(text(std::format("  \xe2\x86\x91 {} more {} above", hunk_top,
+                                        hunk_top == 1 ? "change" : "changes"), fg_dim(muted)));
+    for (int hi = hunk_top; hi < hunk_top + hunk_win; ++hi) {
         const auto& hk = fc.hunks[static_cast<std::size_t>(hi)];
         const bool sel = hi == cursor->hunk_index;
         auto lines = parse_hunk(hk.patch, old_n, new_n, hk.old_start, hk.new_start);
@@ -549,6 +575,9 @@ Element diff_review(const Model& m) {
                                 fg_dim(muted)));
         rows.push_back(text(""));
     }
+    if (const int below = nhunks - hunk_top - hunk_win; below > 0)
+        rows.push_back(text(std::format("  \xe2\x86\x93 {} more {} below", below,
+                                        below == 1 ? "change" : "changes"), fg_dim(muted)));
 
     // ── Progress: a bar that takes what the counts leave, and plain counts ──
     rows.push_back(component([kept, undone, decided, total](int w, int) -> Element {

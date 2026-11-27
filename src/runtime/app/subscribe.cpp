@@ -128,6 +128,27 @@ bool strip_chords_armed(const Model& m) noexcept {
         && !m.d.pending_changes.empty();
 }
 
+// The strip's chords in ONE decoder, so every encoding a terminal can send
+// means the same thing and no handler sees a half-decoded key:
+//   * legacy byte        0x01 ^A, 0x12 ^R, 0x18 ^X (no ctrl flag)
+//   * kitty CSI u        'a' + ctrl, or 'A' + ctrl+shift
+//   * modifyOtherKeys    CSI 27;5;97~ -> 'a' + ctrl
+//   * an ESC just before the chord (Esc to stop the turn, then ^X inside
+//     the 50 ms escape window) folds into Alt+Ctrl+X: still ^X. Nothing
+//     binds Ctrl+Alt+A/R/X, so tolerating Alt can only recover keys.
+// Super-held keys are the window manager's, never ours.
+std::optional<char32_t> strip_chord(const KeyEvent& ev) noexcept {
+    const auto* ck = std::get_if<CharKey>(&ev.key);
+    if (!ck || ev.mods.super_) return std::nullopt;
+    char32_t c = ck->codepoint;
+    bool ctrl = ev.mods.ctrl;
+    if (c == 0x01 || c == 0x12 || c == 0x18) { c = U'a' + (c - 1); ctrl = true; }
+    if (!ctrl) return std::nullopt;
+    if (c >= U'A' && c <= U'Z') c = c - U'A' + U'a';
+    if (c == U'a' || c == U'r' || c == U'x') return c;
+    return std::nullopt;
+}
+
 bool animation_demand(const Model& m) noexcept {
     return m.s.active()
         // `models_loading` keeps the fused picker's "loading …" spinner
@@ -159,6 +180,12 @@ std::optional<Msg> on_permission(const KeyEvent& ev) {
         // until the prompt is answered. Legacy terminals send raw 0x03.
         if (c == 0x03 || (ev.mods.ctrl && (c == U'c' || c == U'C')))
             return Quit{};
+        // Only a PLAIN letter answers. Kitty sends Ctrl+A as 'a' + ctrl, so
+        // matching the letter alone turned ^A (the changes strip's "keep
+        // all", on screen right under this prompt) into "always allow" --
+        // a grant nobody asked for. Ctrl/Alt chords never answer a prompt.
+        if (ev.mods.ctrl || ev.mods.alt || ev.mods.super_ || c < 0x20)
+            return std::nullopt;
         switch (c) {
             case 'y': case 'Y': return PermissionApprove{};
             case 'n': case 'N': return PermissionReject{};
@@ -1416,6 +1443,32 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
                 if (c == 0x03 || (ev.mods.ctrl && (c == U'c' || c == U'C')))
                     return Quit{};
             }
+            // ── Changes-strip chords: ^R review, ^A keep all, ^X undo all ──
+            // Decided HERE, before any overlay or the composer, from the live
+            // model (jaal routes each key against the model as it is now, so
+            // there is no snapshot to go stale and nothing shared to race on).
+            // Whenever the strip is on screen and not covered, the keys it
+            // advertises do what it says -- in every key encoding
+            // (strip_chord), with a draft in the composer, mid-turn, under the
+            // ambient Todo panel, and under the two prompts that sit ABOVE a
+            // visible strip during a turn: a permission request and a
+            // question. Those answer to plain letters, digits and arrows,
+            // never to Ctrl chords, so nothing of theirs is taken. A
+            // full-screen picker covers the strip and keeps its own keys.
+            // The reducer owns the rest: ^X mid-turn explains instead of
+            // reverting files the agent is still writing, and outside the
+            // pane the first ^X arms, the second reverts.
+            if (chords_armed
+                && (active_panel == ui::panel::Kind::None
+                    || active_panel == ui::panel::Kind::Todo
+                    || active_panel == ui::panel::Kind::Permission
+                    || active_panel == ui::panel::Kind::Question)) {
+                if (const auto c = strip_chord(ev)) {
+                    if (*c == U'a') return Msg{AcceptAllChanges{}};
+                    if (*c == U'x') return Msg{RejectAllChanges{}};
+                    return Msg{OpenDiffReview{}};
+                }
+            }
             // Login modal owns the whole keyboard — auth is the gating
             // step, no other UI is reachable until the user finishes
             // (or Escs out, which is allowed but leaves agentty unauth'd).
@@ -1555,39 +1608,8 @@ std::optional<Msg> on_key(const Model& m, const KeyEvent& ev) {
                 }
             }
             if (auto msg = on_global(ev)) return msg;
-
-            // Changes-strip bulk chords: ^A (accept all, non-destructive —
-            // the tools already wrote these bytes) and ^X (reject all, which
-            // reverts files on disk, so the reducer holds a two-press guard).
-            //
-            // CTRL-HELD, matching the in-pane policy in on_diff_review: bulk
-            // decisions are destructive enough that they must not sit on a
-            // bare letter, and the same action keeping the same chord inside
-            // and outside the pane is the whole point. A bare `x` here would
-            // also be a footgun the moment focus assumptions shift.
-            //
-            // Gated on the main screen: no exclusive overlay (those returned
-            // above). The ambient Todo panel counts as the main screen -- its
-            // unclaimed keys fall through here, and the strip is still on
-            // screen beside it. The rest of the arming condition lives in
-            // strip_chords_armed().
-            if (chords_armed && (active_panel == OK::None || active_panel == OK::Todo)) {
-                if (auto* ck = std::get_if<CharKey>(&ev.key); ck && !ev.mods.alt) {
-                    char32_t c = ck->codepoint;
-                    // Legacy terminals deliver Ctrl+letter as the raw control
-                    // byte with no modifier reported — same normalisation the
-                    // global and in-pane routers do, so the chords work
-                    // without keyboard-protocol support.
-                    const bool raw_ctrl = (c >= 0x01 && c <= 0x1A);
-                    if (raw_ctrl) c = U'a' + (c - 1);
-                    if (ev.mods.ctrl || raw_ctrl) {
-                        if (c == U'a' || c == U'A')
-                            return Msg{AcceptAllChanges{}};
-                        if (c == U'x' || c == U'X')
-                            return Msg{RejectAllChanges{}};
-                    }
-                }
-            }
+            // (The changes-strip chords were decided at the top of on_key,
+            // before any overlay -- one decoder, one place.)
 
             return on_composer(composer_state, ev);
 }

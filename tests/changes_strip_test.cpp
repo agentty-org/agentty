@@ -17,6 +17,9 @@
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
 #include "agentty/runtime/view/changes_strip.hpp"
+#include "agentty/runtime/view/diff_review.hpp"
+#include "agentty/diff/diff.hpp"
+#include "agentty/runtime/panel/top.hpp"
 #include "agentty/runtime/view/view.hpp"
 
 using namespace agentty;
@@ -63,13 +66,15 @@ TEST_CASE("changes strip: the setting is show / hide") {
     CHECK(ui::changes_strip_config(m).changes.empty());   // nothing drawn
 }
 
-TEST_CASE("changes strip: one row with the count, totals and keys") {
+TEST_CASE("changes strip: one row in a box with the count, totals and keys") {
     Model m = with_edits(26);
     m.d.show_changes_strip = true;
     const auto cfg = ui::changes_strip_config(m);
     const std::string out = maya::render_to_string(maya::ChangesStrip{cfg}.build(), 120);
     INFO(out);
-    CHECK(rows_of(out) == 1);
+    CHECK(rows_of(out) == 3);                               // ╭, one row, ╰
+    CHECK(out.find("\xe2\x95\xad") != std::string::npos);   // ╭
+    CHECK(out.find("\xe2\x95\xb0") != std::string::npos);   // ╰
     CHECK(out.find("26 files changed") != std::string::npos);
     CHECK(out.find("+260 \xe2\x88\x92" "104") != std::string::npos);
     CHECK(out.find("^R review") != std::string::npos);
@@ -77,11 +82,17 @@ TEST_CASE("changes strip: one row with the count, totals and keys") {
     CHECK(out.find("^X undo all") != std::string::npos);
     CHECK(out.find("\xe2\x96\x8e") == std::string::npos);  // no ▎ stub on the border
     CHECK(out.find("file_3.go") == std::string::npos);     // no per-file rows
+    {   // keys flush right: "undo all" ends right before the padding + │
+        const auto l1 = out.find('\n');
+        const std::string row = out.substr(l1 + 1, out.find('\n', l1 + 1) - l1 - 1);
+        CHECK(row.find("undo all \xe2\x94\x82") != std::string::npos);
+        CHECK(row.find("104   ") != std::string::npos);   // a gap between the halves
+    }
 
     // Narrow: undo, then keep, then "changed" give way; never wraps.
     const std::string narrow = maya::render_to_string(maya::ChangesStrip{cfg}.build(), 44);
     INFO(narrow);
-    CHECK(rows_of(narrow) == 1);
+    CHECK(rows_of(narrow) == 3);
     CHECK(narrow.find("26 files") != std::string::npos);
     CHECK(narrow.find("+260") != std::string::npos);
     CHECK(narrow.find("^R review") != std::string::npos);
@@ -89,11 +100,11 @@ TEST_CASE("changes strip: one row with the count, totals and keys") {
 
     const std::string tiny = maya::render_to_string(maya::ChangesStrip{cfg}.build(), 20);
     INFO(tiny);
-    CHECK(rows_of(tiny) == 1);
+    CHECK(rows_of(tiny) == 3);
     CHECK(tiny.find("26 files") != std::string::npos);
 }
 
-TEST_CASE("changes strip: sits as one row between the thread and the composer") {
+TEST_CASE("changes strip: a one-row box between the thread and the composer") {
     Model m = with_edits(12);
     m.d.show_changes_strip = true;
     constexpr int W = 100, H = 24;
@@ -104,9 +115,48 @@ TEST_CASE("changes strip: sits as one row between the thread and the composer") 
     if (std::getenv("AGT_SHOW")) std::fputs(frame.c_str(), stdout);
     const auto at = frame.find("12 files changed");
     REQUIRE(at != std::string::npos);
-    // The very next row is the composer's top border (╭).
+    // Below it: the strip's own bottom edge (╰), then the composer (╭).
     const auto eol = frame.find('\n', at);
     REQUIRE(eol != std::string::npos);
-    const auto next_eol = frame.find('\n', eol + 1);
-    CHECK(frame.substr(eol + 1, next_eol - eol - 1).find("\xe2\x95\xad") != std::string::npos);
+    const auto eol2 = frame.find('\n', eol + 1);
+    const auto eol3 = frame.find('\n', eol2 + 1);
+    CHECK(frame.substr(eol + 1, eol2 - eol - 1).find("\xe2\x95\xb0") != std::string::npos);
+    CHECK(frame.substr(eol2 + 1, eol3 - eol2 - 1).find("\xe2\x95\xad") != std::string::npos);
+}
+
+// The review pane (^R) is bounded by Settings → Appearance → Panel height,
+// however big the change: a file with 40 separate changes listed one row
+// each, and a 300-line change, used to make a pane taller than the screen.
+TEST_CASE("review pane: height follows Panel height, never the size of the diff") {
+    std::string before, many, huge;
+    for (int i = 0; i < 400; ++i) {
+        before += "line " + std::to_string(i) + "\n";
+        many   += (i % 10 == 5 ? "CHANGED " : "line ") + std::to_string(i) + "\n";
+    }
+    huge = before;
+    for (int i = 0; i < 300; ++i) huge.insert(0, "added " + std::to_string(i) + "\n");
+
+    auto height = [&](const std::string& after, ui_prefs::Density d, int term_h) {
+        Model m;
+        m.d.ui().density = d;
+        m.d.pending_changes.push_back(diff::compute("src/big.go", before, after));
+        m.ui.panel.descend(ui::panel::DiffReview{{0, 0}});
+        maya::RenderContext ctx{100, term_h, maya::render_generation(), /*auto_height=*/true};
+        maya::RenderContextGuard guard(ctx);
+        const std::string out = maya::render_to_string(ui::diff_review(m), 100);
+        if (std::getenv("AGT_SHOW")) std::fputs(out.c_str(), stdout);
+        return rows_of(out);
+    };
+    using D = ui_prefs::Density;
+    for (const auto* after : {&many, &huge}) {
+        const int compact = height(*after, D::Compact, 200);
+        const int normal  = height(*after, D::Normal,  200);
+        const int tall    = height(*after, D::Tall,    200);
+        INFO("compact=" << compact << " normal=" << normal << " tall=" << tall);
+        CHECK(compact < normal);                // the setting decides
+        CHECK(normal  < tall);
+        CHECK(tall    <= 28 + 9 + 22);          // body + change list + chrome
+        CHECK(height(*after, D::Tall, 30) <= 30);   // and the terminal caps it
+        CHECK(height(*after, D::Normal, 26) <= 26);
+    }
 }
